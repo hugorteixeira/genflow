@@ -80,7 +80,7 @@ image_result <- gen_img(
   service = "hf",  # Hugging Face
   model = "black-forest-labs/FLUX.1-schnell",
   h = 1024,
-  w = 1024
+  y = 1024
 )
 
 # View your generated masterpiece
@@ -91,14 +91,14 @@ gen_view(image_result)
 
 ```r
 # Define your agent configurations
-creator_a <- list(
+creator_1 <- list(
   Service = "openai",
   Model = "gpt-4o",
   Temp = 0.8,
   Type = "Chat"
 )
 
-creator_b <- list(
+creator_2 <- list(
   Service = "openai",
   Model = "gpt-4o-mini",
   Temp = 0.2,
@@ -106,14 +106,14 @@ creator_b <- list(
 )
 
 # Deploy them in your environment
-assign("creator_a", creator_a, envir = .GlobalEnv)
-assign("creator_b", creator_b, envir = .GlobalEnv)
+assign("creator_1", creator_1, envir = .GlobalEnv)
+assign("creator_2", creator_2, envir = .GlobalEnv)
 
 # Launch multi-agent generation campaigns
 results <- gen_batch(
-  qty = 4,
+  qty = 2,
   instructions = "Write a creative story about the future of AI in data science",
-  agent_prefix = "creator",
+  agent_prefix = "creator_",
   directory = "generated_content"
 )
 
