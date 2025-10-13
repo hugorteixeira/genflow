@@ -1,0 +1,27 @@
+Package: genflow
+Type: Package
+Title: Generate texts, images and more with multiple AI API providers 
+Version: 0.0.1
+Authors@R: person(
+    given = "Hugo",
+    family = "Rzepian Teixeira",
+    email = "hugorteixeira@senhormercado.com.br",
+    role = c("aut", "cre"))
+Description: R library for easy text and images generation from OpenAI, OpenRouter and HuggingFace APIs. 
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.2
+License: GPL (>= 3)
+Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
+Imports: 
+    jsonlite,
+    dplyr,
+    htmltools,
+    httr,
+    magick,
+    purrr,
+    rstudioapi,
+    tibble,
+    magrittr
+Suggests: 
+    base64enc
