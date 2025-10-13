@@ -2,9 +2,8 @@
 
 [![Project Status: Active – The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![Lifecycle: Experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
-[![R-CMD-check](https://github.com/hugorteixeira/genflow/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/hugorteixeira/genflow/actions/workflows/R-CMD-check.yaml)
-
-<!-- badges: start -->
+[![R](https://img.shields.io/badge/R-%E2%89%A54.5-blue)](https://www.r-project.org/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 <!-- badges: end -->
 
 > **Flow into the Future of AI**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
@@ -144,8 +143,6 @@ gen_show_models(provider = "openai", type = "chat")
 | `gen_stats_rm()` | Clean and manage statistics data |
 | `gen_update_models()` | Refresh available models from all providers |
 | `gen_show_models()` | Browse and filter available models |
-| `gen_batch()` | Execute batch generation tasks |
-| `gen_view()` | Interactive result visualization |
 
 ## 📊 Workflow Integration
 
