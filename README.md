@@ -166,19 +166,19 @@ gen_show_models(provider = "openai", type = "chat")
 ## 🧭 Example Workflow (Mermaid)
 
 ```mermaid
-graph TD
+flowchart LR
   A[Define Setup] --> B[Create Content]
   B --> C[set_agent()]
   C -->|Pipe| D[gen_txt()]
   C -->|Pipe| E[gen_img()]
   C -->|Pipe| F[gen_batch_agent()]
-  F --> G[gen_view()]
-  D --> G
+  D --> G[gen_view()]
   E --> G
+  F --> G
   G --> H[Publish Report / Dashboard]
 ```
 
-> _If the diagram does not render in your viewer, paste the Mermaid code into [mermaid.live](https://mermaid.live/) or use a GitHub-compatible preview._
+> _GitHub renders this Mermaid diagram automatically once committed. For local previews without Mermaid support, paste the snippet into [mermaid.live](https://mermaid.live/)._
 
 ## 🔧 Complete Function Reference
 
