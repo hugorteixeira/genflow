@@ -166,13 +166,13 @@ gen_show_models(provider = "openai", type = "chat")
 ## 🧭 Example Workflow (Mermaid)
 
 ```mermaid
-flowchart LR
+graph TD
   A[Define Setup] --> B[Create Content]
-  B --> C[set_agent()]
-  C -->|Pipe| D[gen_txt()]
-  C -->|Pipe| E[gen_img()]
-  C -->|Pipe| F[gen_batch_agent()]
-  D --> G[gen_view()]
+  B --> C[set_agent]
+  C -->|Pipe| D[gen_txt]
+  C -->|Pipe| E[gen_img]
+  C -->|Pipe| F[gen_batch_agent]
+  D --> G[gen_view]
   E --> G
   F --> G
   G --> H[Publish Report / Dashboard]
