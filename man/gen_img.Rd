@@ -2,9 +2,13 @@
 % Please edit documentation in R/image_functions.R
 \name{gen_img}
 \alias{gen_img}
+\alias{gen_img.default}
+\alias{gen_img.genflow_agent}
 \title{Generate an image via a selected provider}
 \usage{
-gen_img(
+gen_img(prompt, ...)
+
+\method{gen_img}{default}(
   prompt,
   add = NULL,
   directory = NULL,
@@ -16,9 +20,13 @@ gen_img(
   h = 1072,
   y = 1920
 )
+
+\method{gen_img}{genflow_agent}(prompt, ...)
 }
 \arguments{
 \item{prompt}{Character. Main text prompt describing the desired image.}
+
+\item{...}{Additional arguments forwarded to method-specific implementations.}
 
 \item{add}{Optional character or object(s) to append to the prompt. If provided and
 character, it will be concatenated to \code{prompt}.}

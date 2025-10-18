@@ -2,9 +2,13 @@
 % Please edit documentation in R/text_functions.R
 \name{gen_txt}
 \alias{gen_txt}
+\alias{gen_txt.default}
+\alias{gen_txt.genflow_agent}
 \title{Generate text via multiple providers}
 \usage{
-gen_txt(
+gen_txt(context, ...)
+
+\method{gen_txt}{default}(
   context,
   res_context = TRUE,
   add = NULL,
@@ -19,10 +23,14 @@ gen_txt(
   timeout_api = 240,
   null_repeat = TRUE
 )
+
+\method{gen_txt}{genflow_agent}(context, ...)
 }
 \arguments{
 \item{context}{Character or object; main prompt or context. Non-character values
 are stringified.}
+
+\item{...}{Additional arguments passed to method-specific implementations.}
 
 \item{res_context}{Logical; whether to persist the original \code{context} alongside
 the response when saving.}

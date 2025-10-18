@@ -11,7 +11,7 @@ get_agent(name, assign = FALSE, envir = .GlobalEnv)
 
 \item{assign}{Assign to environment when TRUE.}
 
-\item{envir}{Target environment for assignment.}
+\item{envir}{Environment used for assignment.}
 }
 \value{
 Agent list.

@@ -5,12 +5,12 @@
 \alias{get_model}
 \title{Retrieve a saved setup}
 \usage{
-get_setup(name, assign = FALSE, envir = .GlobalEnv)
+get_setup(sname, assign = FALSE, envir = .GlobalEnv)
 
-get_model(name, assign = FALSE, envir = .GlobalEnv)
+get_model(sname, assign = FALSE, envir = .GlobalEnv)
 }
 \arguments{
-\item{name}{Setup identifier.}
+\item{sname}{Setup identifier.}
 
 \item{assign}{Assign to environment when TRUE.}
 

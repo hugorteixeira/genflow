@@ -4,10 +4,10 @@
 \alias{rm_content}
 \title{Delete cached content}
 \usage{
-rm_content(name)
+rm_content(cname)
 }
 \arguments{
-\item{name}{Content identifier.}
+\item{cname}{Content identifier.}
 }
 \value{
 Invisible TRUE when removed.

@@ -2,12 +2,13 @@
 % Please edit documentation in R/agent_management.R
 \name{set_agent}
 \alias{set_agent}
-\title{Create or update an agent}
+\title{Create or update an agent definition}
 \usage{
 set_agent(
   name,
   setup,
   content = NULL,
+  ...,
   save = TRUE,
   assign = TRUE,
   envir = .GlobalEnv,
@@ -17,21 +18,23 @@ set_agent(
 \arguments{
 \item{name}{Agent identifier.}
 
-\item{setup}{Setup list or setup name.}
+\item{setup}{Setup list or setup name (\code{sname}).}
 
-\item{content}{Optional content list or content name(s).}
+\item{content}{Optional content list or content name (\code{cname}).}
 
-\item{save}{Persist to disk when TRUE.}
+\item{...}{Additional manual fields to include in the agent.}
 
-\item{assign}{Assign to environment when TRUE.}
+\item{save}{Persist agent when TRUE.}
 
-\item{envir}{Target environment for assignment.}
+\item{assign}{Assign agent to \code{envir} when TRUE.}
+
+\item{envir}{Environment used for assignment.}
 
 \item{overwrite}{Overwrite existing agent when TRUE.}
 }
 \value{
-Agent list with lowercase fields.
+Agent list flattened for direct use with other genflow helpers.
 }
 \description{
-Create or update an agent
+Create or update an agent definition
 }

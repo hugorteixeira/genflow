@@ -10,9 +10,9 @@ mv_setup(from, to)
 mv_model(from, to)
 }
 \arguments{
-\item{from}{Current name.}
+\item{from}{Current setup name.}
 
-\item{to}{New name.}
+\item{to}{New setup name.}
 }
 \value{
 Invisible TRUE when renamed.

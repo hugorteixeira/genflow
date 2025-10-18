@@ -4,14 +4,14 @@
 \alias{get_content}
 \title{Retrieve saved content}
 \usage{
-get_content(name, assign = FALSE, envir = .GlobalEnv)
+get_content(cname, assign = FALSE, envir = .GlobalEnv)
 }
 \arguments{
-\item{name}{Content identifier.}
+\item{cname}{Content identifier.}
 
 \item{assign}{Assign to environment when TRUE.}
 
-\item{envir}{Target environment for assignment.}
+\item{envir}{Environment used for assignment.}
 }
 \value{
 Content list.

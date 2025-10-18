@@ -459,6 +459,8 @@ set_agent <- function(name,
     extra_fields
   ))
 
+  class(agent) <- unique(c("genflow_agent", class(agent)))
+
   if (isTRUE(save)) {
     path <- .genflow_agent_path(name)
     if (!overwrite && file.exists(path)) {
@@ -486,6 +488,9 @@ get_agent <- function(name, assign = FALSE, envir = .GlobalEnv) {
   name <- .genflow_validate_name(name, "agent")
   agent <- .genflow_load_object(.genflow_agent_path(name), "agent")
   agent$name <- agent$name %||% name
+  if (!inherits(agent, "genflow_agent")) {
+    class(agent) <- unique(c("genflow_agent", class(agent)))
+  }
   if (isTRUE(assign)) {
     assign(agent$name, agent, envir = envir)
   }

@@ -6,7 +6,7 @@
 \title{Create or update a reusable setup}
 \usage{
 set_setup(
-  name,
+  sname,
   service,
   model,
   temp = NULL,
@@ -19,7 +19,7 @@ set_setup(
 )
 
 set_model(
-  name,
+  sname,
   service,
   model,
   temp = NULL,
@@ -32,7 +32,7 @@ set_model(
 )
 }
 \arguments{
-\item{name}{Setup identifier.}
+\item{sname}{Setup identifier.}
 
 \item{service}{Provider name.}
 
@@ -42,18 +42,18 @@ set_model(
 
 \item{type}{Optional interaction type.}
 
-\item{...}{Extra named fields to store.}
+\item{...}{Extra named fields to store with the setup.}
 
-\item{save}{Persist to disk when TRUE.}
+\item{save}{Persist the setup when TRUE.}
 
-\item{assign}{Assign to environment when TRUE.}
+\item{assign}{Assign the setup to \code{envir} when TRUE.}
 
-\item{envir}{Target environment for assignment.}
+\item{envir}{Environment used for assignment.}
 
 \item{overwrite}{Overwrite existing setup when TRUE.}
 }
 \value{
-Setup list with lowercase fields.
+List containing setup fields (all lower case).
 }
 \description{
 Create or update a reusable setup

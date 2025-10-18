@@ -7,9 +7,9 @@
 mv_agent(from, to)
 }
 \arguments{
-\item{from}{Current name.}
+\item{from}{Current agent name.}
 
-\item{to}{New name.}
+\item{to}{New agent name.}
 }
 \value{
 Invisible TRUE when renamed.

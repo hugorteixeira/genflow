@@ -5,7 +5,7 @@
 \title{Create or update reusable content}
 \usage{
 set_content(
-  name,
+  cname,
   ...,
   save = TRUE,
   assign = TRUE,
@@ -14,20 +14,20 @@ set_content(
 )
 }
 \arguments{
-\item{name}{Content identifier.}
+\item{cname}{Content identifier.}
 
-\item{...}{Arbitrary named entries stored as a list.}
+\item{...}{Arbitrary named fields (context, add, etc.).}
 
-\item{save}{Persist to disk when TRUE.}
+\item{save}{Persist content when TRUE.}
 
-\item{assign}{Assign to environment when TRUE.}
+\item{assign}{Assign content to \code{envir} when TRUE.}
 
-\item{envir}{Target environment for assignment.}
+\item{envir}{Environment used for assignment.}
 
 \item{overwrite}{Overwrite existing content when TRUE.}
 }
 \value{
-Content list.
+Content list (without metadata).
 }
 \description{
 Create or update reusable content

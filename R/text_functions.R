@@ -403,6 +403,7 @@
 #'   call.
 #' @param null_repeat Logical; if `TRUE`, retries on empty responses with
 #'   progressive waits (10s, 60s, 600s).
+#' @param ... Additional arguments passed to method-specific implementations.
 #' @return A list with elements: `response_value`, `label`, `label_cat`,
 #'   `service`, `model`, `temp`, `duration`, `status_api`, `status_msg`,
 #'   `tokens_sent`, `tokens_received`.
@@ -417,7 +418,14 @@
 #' )
 #' }
 #' @export
-gen_txt <- function(
+gen_txt <- function(context, ...) {
+  UseMethod("gen_txt")
+}
+
+#' @rdname gen_txt
+#' @method gen_txt default
+#' @export
+gen_txt.default <- function(
     context,
     res_context = TRUE,
     add = NULL,
@@ -645,4 +653,20 @@ gen_txt <- function(
     tokens_received = tokens_received
   )
   return(result)
+}
+
+#' @rdname gen_txt
+#' @method gen_txt genflow_agent
+#' @export
+gen_txt.genflow_agent <- function(context, ...) {
+  agent <- context
+  overrides <- list(...)
+  formals_default <- formals(gen_txt.default)
+  agent_args <- .genflow_prepare_agent_args(
+    agent = agent,
+    overrides = overrides,
+    target_formals = formals_default,
+    required = "context"
+  )
+  do.call(gen_txt.default, agent_args, quote = TRUE)
 }

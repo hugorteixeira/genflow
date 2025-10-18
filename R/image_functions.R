@@ -15,6 +15,7 @@
 #' @param steps Integer inference steps (if supported by provider/model).
 #' @param h Integer output height in pixels.
 #' @param y Integer output width in pixels (named `y` here to match internal calls).
+#' @param ... Additional arguments forwarded to method-specific implementations.
 #'
 #' @return Invisibly returns a list with fields such as `response_value` (saved file path
 #'   on success or NULL on error), `status_api`, `status_msg`, `service`, `model`, `temp`,
@@ -26,7 +27,14 @@
 #' #         model = "black-forest-labs/FLUX.1-schnell", h = 1024, y = 1024)
 #'
 #' @export
-gen_img <- function(prompt, add = NULL, directory = NULL, label = NULL, service = "hf", model = "black-forest-labs/FLUX.1-schnell", temp = 5, steps = 18, h = 1072, y = 1920) { # Ensure 'y' matches internal calls (or use 'w')
+gen_img <- function(prompt, ...) {
+  UseMethod("gen_img")
+}
+
+#' @rdname gen_img
+#' @method gen_img default
+#' @export
+gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, service = "hf", model = "black-forest-labs/FLUX.1-schnell", temp = 5, steps = 18, h = 1072, y = 1920) { # Ensure 'y' matches internal calls (or use 'w')
 
   start_time <- Sys.time()
 
@@ -228,6 +236,22 @@ gen_img <- function(prompt, add = NULL, directory = NULL, label = NULL, service 
   })
 
   return(file_path)
+}
+
+#' @rdname gen_img
+#' @method gen_img genflow_agent
+#' @export
+gen_img.genflow_agent <- function(prompt, ...) {
+  agent <- prompt
+  overrides <- list(...)
+  formals_default <- formals(gen_img.default)
+  agent_args <- .genflow_prepare_agent_args(
+    agent = agent,
+    overrides = overrides,
+    target_formals = formals_default,
+    required = "prompt"
+  )
+  do.call(gen_img.default, agent_args, quote = TRUE)
 }
 #' FAL image generation (internal)
 #'

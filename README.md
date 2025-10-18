@@ -20,6 +20,7 @@ Dive into the next generation of AI-powered R programming with **genflow** — a
 - 📊 **Smart Analytics**: Built-in tracking, logging, and performance metrics
 - 🔄 **Seamless Updates**: Automatic model discovery and management
 - 👁️ **Integrated Viewer**: Built-in visualization for all generated content
+- 🧠 **Reusable Agents**: Define setups, content, and agents once, then reuse them across sessions with a single pipe
 
 ## 🚀 Getting Started
 
@@ -71,6 +72,46 @@ result <- gen_txt(
 gen_view(result)
 ```
 
+### Reusable Agents & Content (New!)
+
+```r
+# Capture a reusable setup
+set_setup(
+  sname   = "writer_openai",
+  service = "openai",
+  model   = "gpt-4o-mini",
+  temp    = 0.7,
+  type    = "Chat"
+)
+
+# Store supporting content
+set_content(
+  cname   = "launch_brief",
+  context = "We are launching an AI-first analytics tool.",
+  add     = "Audience: startup founders who use R every day.",
+  label   = "launch_announcement"
+)
+
+# Combine into an agent (automatically cached on disk)
+creative_agent <- set_agent(
+  name    = "creative_writer",
+  setup   = "writer_openai",
+  content = "launch_brief"
+)
+
+# Pipe agents directly into generators
+creative_agent |> gen_txt()
+creative_agent |> gen_img(prompt = "An astronaut surfing a wave of binary code, synthwave palette")
+
+# Inspect everything that is cached
+gen_list()
+```
+
+Agents, setups, and content are stored under `options("genflow.cache_dir")`
+(defaults to `tools::R_user_dir("genflow", "cache")`), so they survive across R
+sessions. A simple `get_agent("creative_writer")` in a future session gives you
+a ready-to-use list that pipes straight into any generator.
+
 ### Image Generation That Captures Imagination
 
 ```r
@@ -90,34 +131,24 @@ gen_view(image_result)
 ### Supercharged Batch Processing
 
 ```r
-# Define your agent configurations
-creator_1 <- list(
-  Service = "openai",
-  Model = "gpt-4o",
-  Temp = 0.8,
-  Type = "Chat"
+# Load or build an agent
+agent <- get_agent("creative_writer")
+
+# Optional per-item data
+one_item_each <- list(
+  list(topic = "Healthcare analytics", tone = "optimistic"),
+  list(topic = "Retail analytics", tone = "playful"),
+  list(topic = "Financial forecasting", tone = "analytical")
 )
 
-creator_2 <- list(
-  Service = "openai",
-  Model = "gpt-4o-mini",
-  Temp = 0.2,
-  Type = "Chat"
-)
-
-# Deploy them in your environment
-assign("creator_1", creator_1, envir = .GlobalEnv)
-assign("creator_2", creator_2, envir = .GlobalEnv)
-
-# Launch multi-agent generation campaigns
-results <- gen_batch(
-  qty = 2,
-  instructions = "Write a creative story about the future of AI in data science",
-  agent_prefix = "creator_",
+# Run a batch in parallel – temporary agents are created and cleaned up automatically
+results <- agent |> gen_batch_agent(
+  qty = 3,
+  instructions = "Write a 120-word launch announcement tailored to the topic and tone.",
+  one_item_each = one_item_each,
   directory = "generated_content"
 )
 
-# View all results at once
 gen_view(results)
 ```
 
@@ -131,6 +162,24 @@ gen_update_models()
 gen_show_models(provider = "openai", type = "chat")
 ```
 
+
+## 🧭 Example Workflow (Mermaid)
+
+```mermaid
+graph TD
+  A[Define Setup] --> B[Create Content]
+  B --> C[set_agent()]
+  C -->|Pipe| D[gen_txt()]
+  C -->|Pipe| E[gen_img()]
+  C -->|Pipe| F[gen_batch_agent()]
+  F --> G[gen_view()]
+  D --> G
+  E --> G
+  G --> H[Publish Report / Dashboard]
+```
+
+> _If the diagram does not render in your viewer, paste the Mermaid code into [mermaid.live](https://mermaid.live/) or use a GitHub-compatible preview._
+
 ## 🔧 Complete Function Reference
 
 | Function | Purpose |
@@ -143,18 +192,26 @@ gen_show_models(provider = "openai", type = "chat")
 | `gen_stats_rm()` | Clean and manage statistics data |
 | `gen_update_models()` | Refresh available models from all providers |
 | `gen_show_models()` | Browse and filter available models |
+| `set_setup()` / `get_setup()` / `list_setups()` | Persist provider configurations for reuse |
+| `set_content()` / `get_content()` / `list_content()` | Store briefs, context, and other payloads |
+| `set_agent()` / `get_agent()` / `list_agents()` | Combine setups and content into reusable agents |
+| `mv_*()` / `rm_*()` | Rename or delete cached setups, content, or agents |
+| `gen_list()` | Summarize everything saved in the cache directory |
+| `gen_batch_agent()` | Run batch workloads directly from a `genflow_agent` |
 
 ## 📊 Workflow Integration
 
 genflow is designed to seamlessly integrate into your existing R workflows:
 
 ```r
-# Use genflow results in your data analysis
-text_result <- gen_txt("Analyze the following dataset trends: {data_summary}", ...)
+# Pull an agent and pass it straight into generators & pipelines
+agent <- get_agent("creative_writer")
 
-# Incorporate generated insights into reports
-# Create visualizations from generated data
-# Build AI-powered dashboards
+# Generate both narrative and visuals for your reports
+copy <- agent |> gen_txt()
+visual <- agent |> gen_img(prompt = "A neon data stream flowing through a city skyline")
+
+# Feed generated assets into downstream analysis, dashboards, and reports
 ```
 
 ## 🛡️ Best Practices

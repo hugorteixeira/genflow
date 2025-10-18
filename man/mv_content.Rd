@@ -7,9 +7,9 @@
 mv_content(from, to)
 }
 \arguments{
-\item{from}{Current name.}
+\item{from}{Current content name.}
 
-\item{to}{New name.}
+\item{to}{New content name.}
 }
 \value{
 Invisible TRUE when renamed.

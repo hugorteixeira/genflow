@@ -5,12 +5,12 @@
 \alias{rm_model}
 \title{Delete a cached setup}
 \usage{
-rm_setup(name)
+rm_setup(sname)
 
-rm_model(name)
+rm_model(sname)
 }
 \arguments{
-\item{name}{Setup identifier.}
+\item{sname}{Setup identifier.}
 }
 \value{
 Invisible TRUE when removed.
