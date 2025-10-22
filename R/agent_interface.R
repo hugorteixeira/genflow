@@ -25,6 +25,105 @@ library(jsonlite)
   tools::R_user_dir("agent_models", which = "data")
 }
 
+.favorites_path <- function(directory = NULL) {
+  dir <- directory %||% .default_models_dir()
+  file.path(dir, "favorites.rds")
+}
+
+.empty_favorites <- function() {
+  data.frame(
+    service = character(),
+    model = character(),
+    type = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+.load_favorites <- function(directory = NULL) {
+  path <- .favorites_path(directory)
+  if (!file.exists(path)) {
+    return(.empty_favorites())
+  }
+  favs <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (!is.data.frame(favs) || !all(c("service", "model") %in% names(favs))) {
+    return(.empty_favorites())
+  }
+  if (!"type" %in% names(favs)) {
+    favs$type <- NA_character_
+  }
+  favs$service <- tolower(as.character(favs$service %||% ""))
+  favs$model <- as.character(favs$model %||% "")
+  favs$type <- as.character(favs$type %||% "")
+  favs[!nzchar(favs$service) | !nzchar(favs$model), ] <- NULL
+  if (!nrow(favs)) {
+    return(.empty_favorites())
+  }
+  unique(favs)
+}
+
+.save_favorites <- function(favorites, directory = NULL) {
+  path <- .favorites_path(directory)
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(favorites, path)
+  invisible(favorites)
+}
+
+.normalize_favorites <- function(favorites, catalog) {
+  if (!nrow(favorites) || !nrow(catalog)) {
+    return(favorites[ , c("service", "model", "type"), drop = FALSE])
+  }
+  catalog_keys <- paste(tolower(catalog$service), catalog$model, sep = "||")
+  fav_keys <- paste(tolower(favorites$service), favorites$model, sep = "||")
+  keep <- fav_keys %in% catalog_keys
+  favorites <- favorites[keep, , drop = FALSE]
+  if (!nrow(favorites)) {
+    return(.empty_favorites())
+  }
+  matched_idx <- match(paste(tolower(favorites$service), favorites$model, sep = "||"), catalog_keys)
+  catalog_types <- catalog$type[matched_idx]
+  favorites$type[!nzchar(favorites$type) | is.na(favorites$type)] <- catalog_types[!nzchar(favorites$type) | is.na(favorites$type)]
+  favorites$type[is.na(favorites$type)] <- ""
+  unique(favorites)
+}
+
+.resolve_favorite_selection <- function(service, model, type, favorites, catalog) {
+  if (!identical(tolower(service), "favorites")) {
+    return(list(service = service, model = model, type = type))
+  }
+  if (!nzchar(model)) {
+    return(structure(NULL, error = "Select a favorite model before saving."))
+  }
+  if (!nrow(favorites)) {
+    return(structure(NULL, error = "No favorites available. Add a favorite model first."))
+  }
+  candidate <- favorites[tolower(favorites$model) == tolower(model), , drop = FALSE]
+  if (!nrow(candidate)) {
+    return(structure(NULL, error = sprintf("Model '%s' is not marked as favorite.", model)))
+  }
+  if (nzchar(type)) {
+    candidate_type <- candidate[tolower(candidate$type) == tolower(type), , drop = FALSE]
+    if (nrow(candidate_type) > 0) {
+      candidate <- candidate_type
+    }
+  }
+  resolved_service <- candidate$service[1]
+  resolved_type <- candidate$type[1]
+  if (!nzchar(resolved_service)) {
+    return(structure(NULL, error = "Favorite entry is missing provider information."))
+  }
+  if (!nzchar(resolved_type)) {
+    match_idx <- which(tolower(catalog$service) == resolved_service & catalog$model == model)[1]
+    if (!is.na(match_idx)) {
+      resolved_type <- catalog$type[match_idx]
+    }
+  }
+  list(
+    service = resolved_service,
+    model = model,
+    type = if (nzchar(resolved_type)) resolved_type else type
+  )
+}
+
 .model_label <- function(service) {
   if (length(service) == 0) {
     return(character())
@@ -315,6 +414,9 @@ library(jsonlite)
   .gf-section-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
   .gf-section-header h3 { margin: 0; }
   #main_tabs .nav-link { font-weight: 600; }
+  .favorite-star { cursor: pointer; color: #cfd8f3; font-size: 1.1rem; transition: color 0.15s ease-in-out; }
+  .favorite-star:hover { color: #facc15; }
+  .favorite-star.is-fav { color: #facc15; }
 "
 
 .setups_tab_ui <- function() {
@@ -944,9 +1046,15 @@ server <- function(input, output, session) {
     loading = FALSE
   )
 
+  initial_models_dir <- .default_models_dir()
+  initial_catalog <- .load_models_catalog(initial_models_dir)
+  initial_favorites <- .normalize_favorites(.load_favorites(initial_models_dir), initial_catalog)
+
   models_state <- reactiveValues(
-    directory = .default_models_dir(),
-    catalog = .load_models_catalog(),
+    directory = initial_models_dir,
+    catalog = initial_catalog,
+    favorites = initial_favorites,
+    favorites_present = nrow(initial_favorites) > 0,
     status = ""
   )
 
@@ -955,6 +1063,10 @@ server <- function(input, output, session) {
     current <- isolate(input$setup_service) %||% ""
     desired <- setup_state$desired_service
     choices <- .model_service_choices(catalog, include = c(current, desired))
+    choices <- choices[choices != "favorites"]
+    if (nrow(models_state$favorites) > 0) {
+      choices <- c(setNames("favorites", "Favorites"), choices)
+    }
     if (!length(choices)) {
       updateSelectizeInput(session, "setup_service", choices = character(), selected = desired %||% current %||% "", server = TRUE)
       setup_state$desired_service <- NULL
@@ -974,6 +1086,40 @@ server <- function(input, output, session) {
     current <- isolate(input$setup_model) %||% ""
     desired <- setup_state$desired_model
     include_values <- c(current, desired)
+    if (identical(tolower(service), "favorites")) {
+      favs <- models_state$favorites
+      base_choices <- if (nrow(favs)) favs$model else character()
+      choices <- c(base_choices, include_values)
+      choices <- choices[nzchar(choices)]
+      choices <- unique(choices)
+      if (!length(choices)) {
+        updateSelectizeInput(session, "setup_model", choices = character(), selected = "", server = TRUE)
+        setup_state$desired_model <- NULL
+        return()
+      }
+      labels <- vapply(choices, function(m) {
+        fav_row <- favs[favs$model == m, , drop = FALSE]
+        if (!nrow(fav_row)) {
+          return(m)
+        }
+        provider_label <- .model_label(fav_row$service[1])
+        type_label <- fav_row$type[which(nzchar(fav_row$type))[1]]
+        if (!is.null(type_label) && nzchar(type_label)) {
+          sprintf("%s (%s · %s)", m, provider_label, type_label)
+        } else {
+          sprintf("%s (%s)", m, provider_label)
+        }
+      }, character(1))
+      named_choices <- stats::setNames(choices, labels)
+      selected <- desired %||% current
+      if (!nzchar(selected) || !selected %in% choices) {
+        selected <- choices[[1]]
+      }
+      updateSelectizeInput(session, "setup_model", choices = named_choices, selected = selected, server = TRUE)
+      setup_state$desired_model <- NULL
+      return()
+    }
+
     choices <- .model_model_choices(catalog, service, include = include_values)
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
@@ -1002,6 +1148,30 @@ server <- function(input, output, session) {
     current <- isolate(input$setup_type) %||% ""
     desired <- setup_state$desired_type
     include_values <- c(current, desired)
+    if (identical(tolower(service), "favorites")) {
+      favs <- models_state$favorites
+      fav_rows <- favs[favs$model == model, , drop = FALSE]
+      fav_types <- fav_rows$type[nzchar(fav_rows$type)]
+      if (!length(fav_types) && nrow(fav_rows) > 0) {
+        actual_service <- fav_rows$service[1]
+        fav_types <- .model_type_choices(catalog, actual_service, model)
+      }
+      choices <- c(fav_types, include_values)
+      choices <- choices[nzchar(choices)]
+      choices <- unique(choices)
+      selected <- desired %||% current
+      if (!length(choices)) {
+        updateSelectizeInput(session, "setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+        setup_state$desired_type <- NULL
+        return()
+      }
+      if (!nzchar(selected) || !selected %in% choices) {
+        selected <- choices[[1]]
+      }
+      updateSelectizeInput(session, "setup_type", choices = choices, selected = selected, server = TRUE)
+      setup_state$desired_type <- NULL
+      return()
+    }
     choices <- .model_type_choices(catalog, service, model, include = include_values)
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
@@ -1028,6 +1198,10 @@ server <- function(input, output, session) {
     current <- isolate(input$agent_setup_service) %||% ""
     desired <- agent_state$custom_desired_service
     choices <- .model_service_choices(catalog, include = c(current, desired))
+    choices <- choices[choices != "favorites"]
+    if (nrow(models_state$favorites) > 0) {
+      choices <- c(setNames("favorites", "Favorites"), choices)
+    }
     if (!length(choices)) {
       updateSelectizeInput(session, "agent_setup_service", choices = character(), selected = desired %||% current %||% "", server = TRUE)
       agent_state$custom_desired_service <- NULL
@@ -1047,6 +1221,40 @@ server <- function(input, output, session) {
     current <- isolate(input$agent_setup_model) %||% ""
     desired <- agent_state$custom_desired_model
     include_values <- c(current, desired)
+    if (identical(tolower(service), "favorites")) {
+      favs <- models_state$favorites
+      base_choices <- if (nrow(favs)) favs$model else character()
+      choices <- c(base_choices, include_values)
+      choices <- choices[nzchar(choices)]
+      choices <- unique(choices)
+      if (!length(choices)) {
+        updateSelectizeInput(session, "agent_setup_model", choices = character(), selected = "", server = TRUE)
+        agent_state$custom_desired_model <- NULL
+        return()
+      }
+      labels <- vapply(choices, function(m) {
+        fav_row <- favs[favs$model == m, , drop = FALSE]
+        if (!nrow(fav_row)) {
+          return(m)
+        }
+        provider_label <- .model_label(fav_row$service[1])
+        type_label <- fav_row$type[which(nzchar(fav_row$type))[1]]
+        if (!is.null(type_label) && nzchar(type_label)) {
+          sprintf("%s (%s · %s)", m, provider_label, type_label)
+        } else {
+          sprintf("%s (%s)", m, provider_label)
+        }
+      }, character(1))
+      named_choices <- stats::setNames(choices, labels)
+      selected <- desired %||% current
+      if (!nzchar(selected) || !selected %in% choices) {
+        selected <- choices[[1]]
+      }
+      updateSelectizeInput(session, "agent_setup_model", choices = named_choices, selected = selected, server = TRUE)
+      agent_state$custom_desired_model <- NULL
+      return()
+    }
+
     choices <- .model_model_choices(catalog, service, include = include_values)
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
@@ -1075,6 +1283,30 @@ server <- function(input, output, session) {
     current <- isolate(input$agent_setup_type) %||% ""
     desired <- agent_state$custom_desired_type
     include_values <- c(current, desired)
+    if (identical(tolower(service), "favorites")) {
+      favs <- models_state$favorites
+      fav_rows <- favs[favs$model == model, , drop = FALSE]
+      fav_types <- fav_rows$type[nzchar(fav_rows$type)]
+      if (!length(fav_types) && nrow(fav_rows) > 0) {
+        actual_service <- fav_rows$service[1]
+        fav_types <- .model_type_choices(catalog, actual_service, model)
+      }
+      choices <- c(fav_types, include_values)
+      choices <- choices[nzchar(choices)]
+      choices <- unique(choices)
+      selected <- desired %||% current
+      if (!length(choices)) {
+        updateSelectizeInput(session, "agent_setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+        agent_state$custom_desired_type <- NULL
+        return()
+      }
+      if (!nzchar(selected) || !selected %in% choices) {
+        selected <- choices[[1]]
+      }
+      updateSelectizeInput(session, "agent_setup_type", choices = choices, selected = selected, server = TRUE)
+      agent_state$custom_desired_type <- NULL
+      return()
+    }
     choices <- .model_type_choices(catalog, service, model, include = include_values)
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
@@ -1139,6 +1371,176 @@ server <- function(input, output, session) {
     update_agent_type_choices()
   })
 
+  observeEvent(models_state$favorites, {
+    favs <- models_state$favorites
+    prev_has <- isolate(models_state$favorites_present)
+    has_favs <- nrow(favs) > 0
+    models_state$favorites_present <- has_favs
+    base_provider_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
+    view_choices <- if (has_favs) c(setNames("favorites", "Favorites"), base_provider_choices) else base_provider_choices
+    current_view <- input$models_view_provider
+    if (has_favs && !prev_has) {
+      current_view <- "favorites"
+    } else if (!has_favs && prev_has && identical(tolower(current_view), "favorites")) {
+      current_view <- .DEFAULT_MODEL_SERVICE
+    } else if (is.null(current_view) || !current_view %in% view_choices) {
+      current_view <- if (has_favs) "favorites" else .DEFAULT_MODEL_SERVICE
+    }
+    updateSelectInput(session, "models_view_provider", choices = view_choices, selected = current_view)
+    current_update <- input$models_update_provider
+    if (is.null(current_update) || !current_update %in% base_provider_choices) {
+      current_update <- .DEFAULT_MODEL_SERVICE
+    }
+    updateSelectInput(session, "models_update_provider", choices = base_provider_choices, selected = current_update)
+    update_setup_service_choices()
+    update_agent_service_choices()
+
+    if (has_favs && !prev_has) {
+      setup_state$loading <- TRUE
+      setup_state$desired_service <- "favorites"
+      setup_state$desired_model <- favs$model[1]
+      model_types <- favs$type[favs$model == favs$model[1]]
+      model_types <- model_types[nzchar(model_types)]
+      setup_state$desired_type <- if (length(model_types)) model_types[[1]] else ""
+      setup_state$loading <- FALSE
+      update_setup_service_choices()
+      update_setup_model_choices()
+      update_setup_type_choices()
+      if (identical(input$agent_setup_mode, "custom")) {
+        agent_state$loading <- TRUE
+        agent_state$custom_desired_service <- "favorites"
+        agent_state$custom_desired_model <- favs$model[1]
+        agent_types <- model_types
+        if (!length(agent_types)) {
+          actual_service <- favs$service[1]
+          agent_types <- .model_type_choices(models_state$catalog, actual_service, favs$model[1])
+        }
+        agent_state$custom_desired_type <- if (length(agent_types)) agent_types[[1]] else ""
+        agent_state$loading <- FALSE
+        update_agent_service_choices()
+        update_agent_model_choices()
+        update_agent_type_choices()
+      }
+    } else if (!has_favs && prev_has) {
+      if (identical(tolower(input$setup_service %||% ""), "favorites")) {
+        setup_state$loading <- TRUE
+        setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
+        setup_state$desired_model <- .DEFAULT_MODEL_NAME
+        setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+        setup_state$loading <- FALSE
+        update_setup_service_choices()
+        update_setup_model_choices()
+        update_setup_type_choices()
+      }
+      if (identical(input$agent_setup_mode, "custom") && identical(tolower(input$agent_setup_service %||% ""), "favorites")) {
+        agent_state$loading <- TRUE
+        agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+        agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+        agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+        agent_state$loading <- FALSE
+        update_agent_service_choices()
+        update_agent_model_choices()
+        update_agent_type_choices()
+      }
+    } else if (has_favs) {
+      if (identical(tolower(input$setup_service %||% ""), "favorites")) {
+        current_model <- input$setup_model %||% ""
+        if (!current_model %in% favs$model) {
+          setup_state$loading <- TRUE
+          setup_state$desired_model <- favs$model[1]
+          model_types <- favs$type[favs$model == favs$model[1]]
+          model_types <- model_types[nzchar(model_types)]
+          setup_state$desired_type <- if (length(model_types)) model_types[[1]] else ""
+          setup_state$loading <- FALSE
+          update_setup_model_choices()
+          update_setup_type_choices()
+        }
+      }
+      if (identical(input$agent_setup_mode, "custom") && identical(tolower(input$agent_setup_service %||% ""), "favorites")) {
+        current_model <- input$agent_setup_model %||% ""
+        if (!current_model %in% favs$model) {
+          agent_state$loading <- TRUE
+          agent_state$custom_desired_model <- favs$model[1]
+          model_types <- favs$type[favs$model == favs$model[1]]
+          model_types <- model_types[nzchar(model_types)]
+          agent_state$custom_desired_type <- if (length(model_types)) model_types[[1]] else ""
+          agent_state$loading <- FALSE
+          update_agent_model_choices()
+          update_agent_type_choices()
+        }
+      }
+    }
+  })
+
+  observeEvent(input$setup_service, {
+    if (isTRUE(setup_state$loading)) return()
+    svc <- input$setup_service %||% ""
+    catalog <- models_state$catalog
+    if (identical(tolower(svc), "favorites")) {
+      favs <- models_state$favorites
+      if (nrow(favs) == 0) {
+        setup_state$desired_model <- ""
+        setup_state$desired_type <- ""
+      } else {
+        new_model <- favs$model[1]
+        types_for_model <- favs$type[favs$model == new_model]
+        types_for_model <- types_for_model[nzchar(types_for_model)]
+        if (!length(types_for_model)) {
+          actual_service <- favs$service[favs$model == new_model][1]
+          type_choices <- .model_type_choices(catalog, actual_service, new_model)
+          types_for_model <- type_choices
+        }
+        new_type <- if (length(types_for_model)) types_for_model[[1]] else ""
+        setup_state$desired_model <- new_model
+        setup_state$desired_type <- new_type
+      }
+      return()
+    }
+    preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
+    model_choices <- .model_model_choices(catalog, svc)
+    new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
+    preferred_type <- if (tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
+    type_choices <- .model_type_choices(catalog, svc, new_model)
+    new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
+    setup_state$desired_model <- new_model
+    setup_state$desired_type <- new_type
+  }, priority = 5)
+
+  observeEvent(input$agent_setup_service, {
+    if (isTRUE(agent_state$loading)) return()
+    if (!identical(input$agent_setup_mode, "custom")) return()
+    svc <- input$agent_setup_service %||% ""
+    catalog <- models_state$catalog
+    if (identical(tolower(svc), "favorites")) {
+      favs <- models_state$favorites
+      if (nrow(favs) == 0) {
+        agent_state$custom_desired_model <- ""
+        agent_state$custom_desired_type <- ""
+      } else {
+        new_model <- favs$model[1]
+        types_for_model <- favs$type[favs$model == new_model]
+        types_for_model <- types_for_model[nzchar(types_for_model)]
+        if (!length(types_for_model)) {
+          actual_service <- favs$service[favs$model == new_model][1]
+          type_choices <- .model_type_choices(catalog, actual_service, new_model)
+          types_for_model <- type_choices
+        }
+        new_type <- if (length(types_for_model)) types_for_model[[1]] else ""
+        agent_state$custom_desired_model <- new_model
+        agent_state$custom_desired_type <- new_type
+      }
+      return()
+    }
+    preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
+    model_choices <- .model_model_choices(catalog, svc)
+    new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
+    preferred_type <- if (tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
+    type_choices <- .model_type_choices(catalog, svc, new_model)
+    new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
+    agent_state$custom_desired_model <- new_model
+    agent_state$custom_desired_type <- new_type
+  }, priority = 5)
+
   observeEvent(input$agent_setup_service,
     {
       if (isTRUE(agent_state$loading)) {
@@ -1170,9 +1572,21 @@ server <- function(input, output, session) {
         },
         add = TRUE
       )
-      setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
-      setup_state$desired_model <- .DEFAULT_MODEL_NAME
-      setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+      favs <- models_state$favorites
+      has_favs <- nrow(favs) > 0
+      default_service <- if (has_favs) "favorites" else .DEFAULT_MODEL_SERVICE
+      setup_state$desired_service <- default_service
+      if (has_favs) {
+        new_model <- favs$model[1]
+        model_types <- favs$type[favs$model == new_model]
+        model_types <- model_types[nzchar(model_types)]
+        new_type <- if (length(model_types)) model_types[[1]] else ""
+        setup_state$desired_model <- new_model
+        setup_state$desired_type <- if (nzchar(new_type)) new_type else .DEFAULT_MODEL_TYPE
+      } else {
+        setup_state$desired_model <- .DEFAULT_MODEL_NAME
+        setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+      }
       update_setup_service_choices()
       update_setup_model_choices()
       update_setup_type_choices()
@@ -1189,9 +1603,21 @@ server <- function(input, output, session) {
         },
         add = TRUE
       )
-      agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
-      agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
-      agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+      favs <- models_state$favorites
+      has_favs <- nrow(favs) > 0
+      default_service <- if (has_favs) "favorites" else .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_service <- default_service
+      if (has_favs) {
+        new_model <- favs$model[1]
+        model_types <- favs$type[favs$model == new_model]
+        model_types <- model_types[nzchar(model_types)]
+        new_type <- if (length(model_types)) model_types[[1]] else ""
+        agent_state$custom_desired_model <- new_model
+        agent_state$custom_desired_type <- if (nzchar(new_type)) new_type else .DEFAULT_MODEL_TYPE
+      } else {
+        agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+        agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+      }
       update_agent_service_choices()
       update_agent_model_choices()
       update_agent_type_choices()
@@ -1215,17 +1641,28 @@ server <- function(input, output, session) {
   )
 
   observeEvent(models_state$catalog, {
-    provider_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
-    current_view <- input$models_view_provider
-    if (is.null(current_view) || !current_view %in% .MODEL_PROVIDERS) {
-      current_view <- .DEFAULT_MODEL_SERVICE
+    normalized_favs <- .normalize_favorites(models_state$favorites, models_state$catalog)
+    if (!identical(normalized_favs, models_state$favorites)) {
+      models_state$favorites <- normalized_favs
+      .save_favorites(normalized_favs, models_state$directory)
     }
-    updateSelectInput(session, "models_view_provider", choices = provider_choices, selected = current_view)
+    models_state$favorites_present <- nrow(models_state$favorites) > 0
+    base_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
+    provider_choices_view <- base_choices
+    if (models_state$favorites_present) {
+      provider_choices_view <- c(setNames("favorites", "Favorites"), provider_choices_view)
+    }
+    provider_choices_update <- base_choices
+    current_view <- input$models_view_provider
+    if (is.null(current_view) || !current_view %in% provider_choices_view) {
+      current_view <- if (models_state$favorites_present) "favorites" else .DEFAULT_MODEL_SERVICE
+    }
+    updateSelectInput(session, "models_view_provider", choices = provider_choices_view, selected = current_view)
     current_update <- input$models_update_provider
-    if (is.null(current_update) || !current_update %in% .MODEL_PROVIDERS) {
-      updateSelectInput(session, "models_update_provider", choices = provider_choices, selected = .DEFAULT_MODEL_SERVICE)
+    if (is.null(current_update) || !current_update %in% provider_choices_update) {
+      updateSelectInput(session, "models_update_provider", choices = provider_choices_update, selected = .DEFAULT_MODEL_SERVICE)
     } else {
-      updateSelectInput(session, "models_update_provider", choices = provider_choices, selected = current_update)
+      updateSelectInput(session, "models_update_provider", choices = provider_choices_update, selected = current_update)
     }
   })
 
@@ -1234,14 +1671,24 @@ server <- function(input, output, session) {
     if (!nzchar(dir) || identical(dir, models_state$directory)) {
       return()
     }
+    new_catalog <- .load_models_catalog(dir)
+    new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
     models_state$directory <- dir
-    models_state$catalog <- .load_models_catalog(dir)
+    models_state$catalog <- new_catalog
+    models_state$favorites <- new_favorites
+    models_state$favorites_present <- nrow(new_favorites) > 0
+    .save_favorites(new_favorites, dir)
     models_state$status <- paste0("Loaded models from ", dir)
   })
 
   observeEvent(input$models_refresh, {
     dir <- models_state$directory
-    models_state$catalog <- .load_models_catalog(dir)
+    new_catalog <- .load_models_catalog(dir)
+    new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+    models_state$catalog <- new_catalog
+    models_state$favorites <- new_favorites
+    models_state$favorites_present <- nrow(new_favorites) > 0
+    .save_favorites(new_favorites, dir)
     models_state$status <- paste0("Reloaded models from ", dir)
     showNotification("Models reloaded from disk.", type = "message")
   })
@@ -1257,8 +1704,13 @@ server <- function(input, output, session) {
         {
           gen_update_models(provider = NULL, directory = dir, verbose = TRUE)
           incProgress(1)
+          new_catalog <- .load_models_catalog(dir)
+          new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
           models_state$directory <- dir
-          models_state$catalog <- .load_models_catalog(dir)
+          models_state$catalog <- new_catalog
+          models_state$favorites <- new_favorites
+          models_state$favorites_present <- nrow(new_favorites) > 0
+          .save_favorites(new_favorites, dir)
           models_state$status <- paste0("Updated all providers at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
           updateTextInput(session, "models_directory", value = dir)
           showNotification("All model providers updated.", type = "message")
@@ -1287,8 +1739,13 @@ server <- function(input, output, session) {
         {
           gen_update_models(provider = provider, directory = dir, verbose = TRUE)
           incProgress(1)
+          new_catalog <- .load_models_catalog(dir)
+          new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
           models_state$directory <- dir
-          models_state$catalog <- .load_models_catalog(dir)
+          models_state$catalog <- new_catalog
+          models_state$favorites <- new_favorites
+          models_state$favorites_present <- nrow(new_favorites) > 0
+          .save_favorites(new_favorites, dir)
           models_state$status <- paste0("Updated ", .model_label(provider), " at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
           updateTextInput(session, "models_directory", value = dir)
           showNotification(paste(.model_label(provider), "models updated."), type = "message")
@@ -1311,6 +1768,16 @@ server <- function(input, output, session) {
       return("No models cached yet. Use the controls on the left to fetch provider model lists.")
     }
     provider <- input$models_view_provider %||% .DEFAULT_MODEL_SERVICE
+    if (identical(tolower(provider), "favorites")) {
+      favs <- models_state$favorites
+      fav_count <- nrow(favs)
+      if (!fav_count) {
+        return("No favorite models selected yet. Use the stars beside each model to add favorites.")
+      }
+      services_count <- sort(table(.model_label(favs$service)), decreasing = TRUE)
+      top_service <- names(services_count)[1]
+      return(sprintf("Favorites saved: %d model(s). Top provider: %s.", fav_count, top_service))
+    }
     model_values <- catalog$model
     model_values[is.na(model_values)] <- ""
     total <- sum(nzchar(model_values))
@@ -1328,32 +1795,126 @@ server <- function(input, output, session) {
 
   output$models_table <- renderDT({
     provider <- input$models_view_provider %||% .DEFAULT_MODEL_SERVICE
-    catalog <- models_state$catalog
-    if (nrow(catalog) > 0) {
-      mask <- tolower(catalog$service) == tolower(provider)
-      catalog <- catalog[mask, , drop = FALSE]
+    catalog_all <- models_state$catalog
+    favorites <- models_state$favorites
+    provider_lower <- tolower(provider)
+    if (identical(provider_lower, "favorites")) {
+      if (nrow(favorites) == 0) {
+        return(datatable(
+          data.frame(Message = "No favorite models selected yet."),
+          rownames = FALSE,
+          options = list(dom = "t", ordering = FALSE)
+        ))
+      }
+      merged <- merge(favorites, catalog_all, by = c("service", "model"), all.x = TRUE, suffixes = c("", ".catalog"))
+      if (!"type" %in% names(merged)) merged$type <- ""
+      merged$type <- ifelse(nzchar(merged$type), merged$type, merged$type.catalog %||% "")
+      if (!"pricing" %in% names(merged)) merged$pricing <- ""
+      merged$pricing <- if ("pricing.catalog" %in% names(merged)) ifelse(nzchar(merged$pricing), merged$pricing, merged$pricing.catalog %||% "") else merged$pricing %||% ""
+      if (!"description" %in% names(merged)) merged$description <- ""
+      merged$description <- if ("description.catalog" %in% names(merged)) ifelse(nzchar(merged$description), merged$description, merged$description.catalog %||% "") else merged$description %||% ""
+      catalog <- merged[, c("service", "model", "type", "pricing", "description"), drop = FALSE]
+    } else {
+      catalog <- catalog_all[tolower(catalog_all$service) == provider_lower, , drop = FALSE]
     }
     if (nrow(catalog) == 0) {
-      datatable(
+      return(datatable(
         data.frame(Message = "No models found for this provider yet."),
         rownames = FALSE,
         options = list(dom = "t", ordering = FALSE)
+      ))
+    }
+
+    fav_keys <- paste(favorites$service, favorites$model, sep = "||")
+    row_service <- ifelse(is.na(catalog$service), "", tolower(catalog$service))
+    row_keys <- paste(row_service, catalog$model, sep = "||")
+    is_fav <- row_keys %in% fav_keys
+    row_model <- ifelse(is.na(catalog$model), "", catalog$model)
+    row_type <- if ("type" %in% names(catalog)) ifelse(is.na(catalog$type), "", catalog$type) else rep("", nrow(catalog))
+    star_html <- sprintf(
+      "<span class='favorite-star %s' data-service='%s' data-model='%s' data-type='%s' title='%s'>&#9733;</span>",
+      ifelse(is_fav, "is-fav", ""),
+      htmltools::htmlEscape(row_service),
+      htmltools::htmlEscape(row_model),
+      htmltools::htmlEscape(row_type),
+      ifelse(is_fav, "Remove from favorites", "Add to favorites")
+    )
+
+    display <- data.frame(
+      Favorite = star_html,
+      Provider = .model_label(row_service),
+      Model = row_model,
+      Type = row_type,
+      Pricing = if ("pricing" %in% names(catalog)) ifelse(is.na(catalog$pricing), "", catalog$pricing) else "",
+      Description = if ("description" %in% names(catalog)) ifelse(is.na(catalog$description), "", catalog$description) else "",
+      stringsAsFactors = FALSE
+    )
+
+    datatable(
+      display,
+      escape = FALSE,
+      selection = "none",
+      rownames = FALSE,
+      options = list(
+        pageLength = 10,
+        autoWidth = TRUE,
+        order = list(list(2, "asc")),
+        columnDefs = list(list(orderable = FALSE, targets = 0))
+      ),
+      callback = JS(
+        "table.on('click', 'span.favorite-star', function() {",
+        "  var el = $(this);",
+        "  var service = el.data('service');",
+        "  var model = el.data('model');",
+        "  var type = el.data('type');",
+        "  Shiny.setInputValue('models_toggle_favorite', {service: service, model: model, type: type, nonce: Math.random()}, {priority: 'event'});",
+        "});"
       )
+    )
+  })
+
+  observeEvent(input$models_toggle_favorite, {
+    info <- input$models_toggle_favorite
+    svc <- tolower(info$service %||% "")
+    model <- info$model %||% ""
+    type <- info$type %||% ""
+    if (!nzchar(svc) || !nzchar(model)) {
+      return()
+    }
+    current_favs <- models_state$favorites
+    key <- paste(svc, model, sep = "||")
+    fav_keys <- paste(current_favs$service, current_favs$model, sep = "||")
+    catalog <- models_state$catalog
+    if (key %in% fav_keys) {
+      current_favs <- current_favs[fav_keys != key, , drop = FALSE]
+      action <- "removed"
     } else {
-      display <- data.frame(
-        Provider = .model_label(catalog$service),
-        Model = ifelse(is.na(catalog$model), "", catalog$model),
-        Type = if ("type" %in% names(catalog)) ifelse(is.na(catalog$type), "", catalog$type) else "",
-        Pricing = if ("pricing" %in% names(catalog)) ifelse(is.na(catalog$pricing), "", catalog$pricing) else "",
-        Description = if ("description" %in% names(catalog)) ifelse(is.na(catalog$description), "", catalog$description) else "",
+      if (!nzchar(type)) {
+        match_idx <- which(tolower(catalog$service) == svc & catalog$model == model)[1]
+        if (!is.na(match_idx)) {
+          type <- catalog$type[match_idx]
+        }
+      }
+      type <- type %||% ""
+      new_entry <- data.frame(
+        service = svc,
+        model = model,
+        type = type,
         stringsAsFactors = FALSE
       )
-      datatable(
-        display,
-        rownames = FALSE,
-        options = list(pageLength = 10, autoWidth = TRUE, order = list(list(1, "asc")))
-      )
+      current_favs <- unique(rbind(current_favs, new_entry))
+      action <- "added"
     }
+    current_favs <- .normalize_favorites(current_favs, catalog)
+    models_state$favorites <- current_favs
+    models_state$favorites_present <- nrow(current_favs) > 0
+    .save_favorites(current_favs, models_state$directory)
+    status_msg <- if (identical(action, "added")) {
+      sprintf("Added %s / %s to favorites.", .model_label(svc), model)
+    } else {
+      sprintf("Removed %s / %s from favorites.", .model_label(svc), model)
+    }
+    models_state$status <- status_msg
   })
 
   refresh_setup_list <- function(selected = NULL) {
@@ -1504,9 +2065,18 @@ server <- function(input, output, session) {
       add = TRUE
     )
     updateTextInput(session, "setup_name", value = "")
-    setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
-    setup_state$desired_model <- .DEFAULT_MODEL_NAME
-    setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+    if (models_state$favorites_present && nrow(models_state$favorites) > 0) {
+      favs <- models_state$favorites
+      setup_state$desired_service <- "favorites"
+      setup_state$desired_model <- favs$model[1]
+      fav_types <- favs$type[favs$model == favs$model[1]]
+      fav_types <- fav_types[nzchar(fav_types)]
+      setup_state$desired_type <- if (length(fav_types)) fav_types[[1]] else .DEFAULT_MODEL_TYPE
+    } else {
+      setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
+      setup_state$desired_model <- .DEFAULT_MODEL_NAME
+      setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+    }
     update_setup_service_choices()
     update_setup_model_choices()
     update_setup_type_choices()
@@ -1682,7 +2252,16 @@ server <- function(input, output, session) {
     }
     temp <- input$setup_temp
     if (is.na(temp)) temp <- NULL
-    type <- trimws(input$setup_type %||% "")
+    type_input <- trimws(input$setup_type %||% "")
+    resolved <- .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog)
+    if (is.null(resolved)) {
+      msg <- attr(resolved, "error") %||% "Unable to resolve favorite selection."
+      showNotification(msg, type = "error")
+      return()
+    }
+    service <- resolved$service
+    model <- resolved$model
+    type <- resolved$type
     if (!nzchar(type)) type <- NULL
 
     extras <- list()
@@ -2258,9 +2837,18 @@ server <- function(input, output, session) {
     updateSelectInput(session, "agent_setup_select", selected = "")
     updateRadioButtons(session, "agent_content_mode", selected = "none")
     updateSelectInput(session, "agent_content_select", selected = "")
-    agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
-    agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
-    agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+    if (models_state$favorites_present && nrow(models_state$favorites) > 0) {
+      favs <- models_state$favorites
+      agent_state$custom_desired_service <- "favorites"
+      agent_state$custom_desired_model <- favs$model[1]
+      fav_types <- favs$type[favs$model == favs$model[1]]
+      fav_types <- fav_types[nzchar(fav_types)]
+      agent_state$custom_desired_type <- if (length(fav_types)) fav_types[[1]] else .DEFAULT_MODEL_TYPE
+    } else {
+      agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+      agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+    }
     update_agent_service_choices()
     update_agent_model_choices()
     update_agent_type_choices()
@@ -2625,15 +3213,22 @@ server <- function(input, output, session) {
         showNotification("Custom setup requires service and model.", type = "error")
         return()
       }
+      type_input <- trimws(input$agent_setup_type %||% "")
+      resolved <- .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog)
+      if (is.null(resolved)) {
+        msg <- attr(resolved, "error") %||% "Unable to resolve favorite selection."
+        showNotification(msg, type = "error")
+        return()
+      }
+      service <- resolved$service
+      model <- resolved$model
+      resolved_type <- resolved$type %||% ""
       custom_setup <- list(
         sname = NULL,
         service = service,
         model = model,
         temp = if (is.na(input$agent_setup_temp)) NULL else input$agent_setup_temp,
-        type = {
-          x <- trimws(input$agent_setup_type %||% "")
-          if (!nzchar(x)) NULL else x
-        }
+        type = if (!nzchar(resolved_type)) NULL else resolved_type
       )
       if (length(agent_state$setup_extras)) {
         for (field in agent_state$setup_extras) {
