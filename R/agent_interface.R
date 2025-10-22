@@ -1,9 +1,176 @@
 library(shiny)
 library(bslib)
+library(DT)
 library(readr)
 library(jsonlite)
 
 `%||%` <- function(x, y) if (!is.null(x)) x else y
+
+.MODEL_PROVIDER_LABELS <- c(
+  openai = "OpenAI",
+  openrouter = "OpenRouter",
+  gemini = "Gemini",
+  fal = "FAL",
+  replicate = "Replicate"
+)
+
+.MODEL_PROVIDERS <- names(.MODEL_PROVIDER_LABELS)
+.DEFAULT_MODEL_SERVICE <- "openai"
+.DEFAULT_MODEL_NAME <- "gpt-5"
+.DEFAULT_MODEL_TYPE <- "Chat"
+.DEFAULT_THINKING_LEVEL <- "medium"
+.THINKING_LEVEL_CHOICES <- c("minimal", "low", "medium", "high")
+
+.default_models_dir <- function() {
+  tools::R_user_dir("agent_models", which = "data")
+}
+
+.model_label <- function(service) {
+  if (length(service) == 0) {
+    return(character())
+  }
+  svc <- tolower(service)
+  labels <- .MODEL_PROVIDER_LABELS[svc]
+  defaults <- tools::toTitleCase(service)
+  labels[is.na(labels)] <- defaults[is.na(labels)]
+  unname(labels)
+}
+
+.load_models_catalog <- function(directory = NULL) {
+  dir <- directory %||% .default_models_dir()
+  if (!dir.exists(dir)) {
+    return(data.frame())
+  }
+  files <- list.files(dir, pattern = "\\.csv$", full.names = TRUE)
+  if (!length(files)) {
+    return(data.frame())
+  }
+
+  catalogs <- lapply(files, function(path) {
+    df <- tryCatch(
+      read.csv(path, stringsAsFactors = FALSE, check.names = FALSE),
+      error = function(e) NULL
+    )
+    if (is.null(df) || nrow(df) == 0) {
+      return(NULL)
+    }
+    names(df) <- tolower(names(df))
+    if (!"service" %in% names(df)) {
+      df$service <- tools::file_path_sans_ext(basename(path))
+    }
+    df$service <- tolower(as.character(df$service))
+    df$service[df$service == ""] <- tools::file_path_sans_ext(basename(path))
+
+    if (!"model" %in% names(df)) {
+      if ("id" %in% names(df)) {
+        df$model <- df$id
+      } else {
+        df$model <- ""
+      }
+    }
+    df$model <- as.character(df$model)
+
+    if (!"type" %in% names(df)) {
+      df$type <- NA_character_
+    }
+    df$type <- as.character(df$type)
+
+    if (!"pricing" %in% names(df)) {
+      df$pricing <- NA_character_
+    } else {
+      df$pricing <- as.character(df$pricing)
+    }
+
+    if (!"description" %in% names(df)) {
+      df$description <- NA_character_
+    } else {
+      df$description <- as.character(df$description)
+    }
+
+    df$source_file <- basename(path)
+    df
+  })
+
+  catalogs <- Filter(Negate(is.null), catalogs)
+  if (!length(catalogs)) {
+    return(data.frame())
+  }
+
+  out <- do.call(rbind, catalogs)
+  rownames(out) <- NULL
+  out
+}
+
+.model_service_choices <- function(catalog, include = character()) {
+  services <- character()
+  if (nrow(catalog) > 0) {
+    services <- unique(catalog$service)
+  }
+  services <- c(services, include)
+  services <- services[nzchar(services)]
+  if (!length(services)) {
+    return(character())
+  }
+  services <- unique(services)
+  services <- services[order(services)]
+  labels <- vapply(services, .model_label, character(1))
+  stats::setNames(services, labels)
+}
+
+.model_model_choices <- function(catalog, service = NULL, include = character()) {
+  rows <- catalog
+  if (!is.null(service) && nzchar(service) && nrow(catalog) > 0) {
+    rows <- rows[tolower(rows$service) == tolower(service), , drop = FALSE]
+  }
+  models <- character()
+  if (nrow(rows) > 0 && "model" %in% names(rows)) {
+    models <- rows$model
+  }
+  models <- c(models, include)
+  models <- models[nzchar(models)]
+  if (!length(models)) {
+    return(character())
+  }
+  models <- unique(models)
+  models[order(tolower(models))]
+}
+
+.model_type_choices <- function(catalog, service = NULL, model = NULL, include = character()) {
+  rows <- catalog
+  if (!is.null(service) && nzchar(service) && nrow(rows) > 0) {
+    rows <- rows[tolower(rows$service) == tolower(service), , drop = FALSE]
+  }
+  if (!is.null(model) && nzchar(model) && nrow(rows) > 0) {
+    rows_model <- rows[tolower(rows$model) == tolower(model), , drop = FALSE]
+    if (nrow(rows_model) > 0) {
+      rows <- rows_model
+    }
+  }
+  types <- character()
+  if (nrow(rows) > 0 && "type" %in% names(rows)) {
+    types <- rows$type
+  }
+  types <- c(types, include)
+  types <- types[!is.na(types) & nzchar(types)]
+  if (!length(types)) {
+    return(character())
+  }
+  types <- unique(types)
+  types[order(tolower(types))]
+}
+
+.pick_preferred_choice <- function(options, preferred = NULL) {
+  if (!length(options)) {
+    return("")
+  }
+  if (!is.null(preferred) && nzchar(preferred)) {
+    match_idx <- match(tolower(preferred), tolower(options))
+    if (!is.na(match_idx)) {
+      return(options[[match_idx]])
+    }
+  }
+  options[[1]]
+}
 
 .rand_id <- function(prefix = "id") {
   paste0(prefix, "-", paste(sample(c(letters, LETTERS, 0:9), 8, replace = TRUE), collapse = ""))
@@ -81,8 +248,12 @@ library(jsonlite)
   }
   if (mode == "logical") {
     val <- tolower(trimws(value_str))
-    if (val %in% c("true", "t", "1", "yes")) return(TRUE)
-    if (val %in% c("false", "f", "0", "no")) return(FALSE)
+    if (val %in% c("true", "t", "1", "yes")) {
+      return(TRUE)
+    }
+    if (val %in% c("false", "f", "0", "no")) {
+      return(FALSE)
+    }
     stop("Value must be TRUE or FALSE.", call. = FALSE)
   }
   if (mode == "json") {
@@ -182,16 +353,30 @@ library(jsonlite)
             div(
               class = "gf-form-grid",
               textInput("setup_name", "Setup name"),
-              textInput("setup_service", "Service"),
-              textInput("setup_model", "Model"),
-              textInput("setup_type", "Type"),
-              numericInput("setup_temp", "Temperature", value = NA, min = 0, max = 5, step = 0.1)
+              selectizeInput("setup_service", "Service", choices = NULL, options = list(create = TRUE)),
+              selectizeInput("setup_model", "Model", choices = NULL, options = list(create = TRUE)),
+              selectizeInput("setup_type", "Type", choices = NULL, options = list(create = TRUE)),
+              numericInput("setup_temp", "Temperature", value = 1, min = 0, max = 5, step = 0.1)
             ),
             tags$hr(),
             div(
               class = "gf-section-header",
               h3("Additional fields"),
               actionButton("setup_add_field", "Add field", icon = icon("plus"))
+            ),
+            div(
+              class = "gf-field-card",
+              h4("Reasoning / thinking"),
+              checkboxInput("setup_thinking_enabled", "Enable thinking / reasoning features", value = FALSE),
+              conditionalPanel(
+                condition = "input.setup_thinking_enabled",
+                selectInput(
+                  "setup_thinking_level",
+                  "Thinking level",
+                  choices = setNames(.THINKING_LEVEL_CHOICES, tools::toTitleCase(.THINKING_LEVEL_CHOICES)),
+                  selected = .DEFAULT_THINKING_LEVEL
+                )
+              )
             ),
             uiOutput("setup_extra_fields"),
             tags$hr(),
@@ -317,10 +502,10 @@ library(jsonlite)
               condition = "input.agent_setup_mode === 'custom'",
               div(
                 class = "gf-form-grid",
-                textInput("agent_setup_service", "Service"),
-                textInput("agent_setup_model", "Model"),
-                textInput("agent_setup_type", "Type"),
-                numericInput("agent_setup_temp", "Temperature", value = NA, min = 0, max = 5, step = 0.1)
+                selectizeInput("agent_setup_service", "Service", choices = NULL, options = list(create = TRUE)),
+                selectizeInput("agent_setup_model", "Model", choices = NULL, options = list(create = TRUE)),
+                selectizeInput("agent_setup_type", "Type", choices = NULL, options = list(create = TRUE)),
+                numericInput("agent_setup_temp", "Temperature", value = 1, min = 0, max = 5, step = 0.1)
               ),
               tags$hr(),
               div(
@@ -372,6 +557,57 @@ library(jsonlite)
   )
 }
 
+.models_tab_ui <- function() {
+  tabPanel(
+    "Models",
+    div(
+      class = "gf-tab-body",
+      fluidRow(
+        column(
+          width = 4,
+          div(
+            class = "gf-panel",
+            div(class = "gf-section-header", h3("Model sources")),
+            textInput("models_directory", "Models directory", value = ""),
+            div(
+              class = "gf-btn-row",
+              actionButton("models_refresh", "Reload", icon = icon("rotate")),
+              actionButton("models_update_all", "Update all", icon = icon("cloud-arrow-down"))
+            ),
+            selectInput(
+              "models_update_provider",
+              "Update single provider",
+              choices = setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS)),
+              selected = .DEFAULT_MODEL_SERVICE
+            ),
+            actionButton("models_update_selected", "Update selected provider", icon = icon("download")),
+            tags$hr(),
+            verbatimTextOutput("models_status", placeholder = TRUE)
+          )
+        ),
+        column(
+          width = 8,
+          div(
+            class = "gf-panel",
+            div(
+              class = "gf-section-header",
+              h3("Available models"),
+              selectInput(
+                "models_view_provider",
+                NULL,
+                choices = setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS)),
+                selected = .DEFAULT_MODEL_SERVICE
+              )
+            ),
+            textOutput("models_summary"),
+            DTOutput("models_table")
+          )
+        )
+      )
+    )
+  )
+}
+
 .app_ui <- function() {
   fluidPage(
     theme = bs_theme(
@@ -399,7 +635,8 @@ library(jsonlite)
       id = "main_tabs",
       .setups_tab_ui(),
       .content_tab_ui(),
-      .agents_tab_ui()
+      .agents_tab_ui(),
+      .models_tab_ui()
     )
   )
 }
@@ -628,8 +865,11 @@ library(jsonlite)
 
 .build_setup_extras <- function(setup_list = list()) {
   base_fields <- c("sname", "service", "model", "temp", "type")
-  extras <- setdiff(names(setup_list), base_fields)
-  if (!length(extras)) return(list())
+  special_fields <- c("thinking", "thinking_budget", "thinking_level", "reasoning", "reasoning_effort")
+  extras <- setdiff(names(setup_list), c(base_fields, special_fields))
+  if (!length(extras)) {
+    return(list())
+  }
   lapply(extras, function(nm) {
     value <- setup_list[[nm]]
     mode <- "text"
@@ -649,7 +889,9 @@ library(jsonlite)
   base_fields <- c("name", "sname", "cname")
   inherited <- c(names(setup_fields), names(content_fields))
   extras <- setdiff(names(agent_list), c(base_fields, inherited))
-  if (!length(extras)) return(list())
+  if (!length(extras)) {
+    return(list())
+  }
   lapply(extras, function(nm) {
     value <- agent_list[[nm]]
     mode <- "text"
@@ -668,12 +910,17 @@ library(jsonlite)
 ui <- .app_ui()
 
 server <- function(input, output, session) {
-
   setup_state <- reactiveValues(
     list = character(),
     selected = NULL,
     original = NULL,
-    extras = list()
+    extras = list(),
+    desired_service = NULL,
+    desired_model = NULL,
+    desired_type = NULL,
+    thinking_enabled = FALSE,
+    thinking_level = .DEFAULT_THINKING_LEVEL,
+    loading = FALSE
   )
 
   content_state <- reactiveValues(
@@ -690,8 +937,424 @@ server <- function(input, output, session) {
     setup_extras = list(),
     custom_content_fields = .build_content_fields(list()),
     overrides = list(),
-    content_modal_field = NULL
+    content_modal_field = NULL,
+    custom_desired_service = NULL,
+    custom_desired_model = NULL,
+    custom_desired_type = NULL,
+    loading = FALSE
   )
+
+  models_state <- reactiveValues(
+    directory = .default_models_dir(),
+    catalog = .load_models_catalog(),
+    status = ""
+  )
+
+  update_setup_service_choices <- function() {
+    catalog <- models_state$catalog
+    current <- isolate(input$setup_service) %||% ""
+    desired <- setup_state$desired_service
+    choices <- .model_service_choices(catalog, include = c(current, desired))
+    if (!length(choices)) {
+      updateSelectizeInput(session, "setup_service", choices = character(), selected = desired %||% current %||% "", server = TRUE)
+      setup_state$desired_service <- NULL
+      return()
+    }
+    selected <- desired %||% current
+    if (!nzchar(selected) || !selected %in% choices) {
+      selected <- .pick_preferred_choice(choices, .DEFAULT_MODEL_SERVICE)
+    }
+    updateSelectizeInput(session, "setup_service", choices = choices, selected = selected, server = TRUE)
+    setup_state$desired_service <- NULL
+  }
+
+  update_setup_model_choices <- function() {
+    catalog <- models_state$catalog
+    service <- input$setup_service %||% ""
+    current <- isolate(input$setup_model) %||% ""
+    desired <- setup_state$desired_model
+    include_values <- c(current, desired)
+    choices <- .model_model_choices(catalog, service, include = include_values)
+    if (!length(choices) && nzchar(desired)) {
+      choices <- desired
+    }
+    if (!length(choices) && nzchar(current)) {
+      choices <- current
+    }
+    selected <- desired %||% current
+    if (!length(choices)) {
+      updateSelectizeInput(session, "setup_model", choices = choices, selected = selected %||% "", server = TRUE)
+      setup_state$desired_model <- NULL
+      return()
+    }
+    if (!nzchar(selected) || !selected %in% choices) {
+      preferred <- if (tolower(service) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
+      selected <- .pick_preferred_choice(choices, preferred)
+    }
+    updateSelectizeInput(session, "setup_model", choices = choices, selected = selected, server = TRUE)
+    setup_state$desired_model <- NULL
+  }
+
+  update_setup_type_choices <- function() {
+    catalog <- models_state$catalog
+    service <- input$setup_service %||% ""
+    model <- input$setup_model %||% ""
+    current <- isolate(input$setup_type) %||% ""
+    desired <- setup_state$desired_type
+    include_values <- c(current, desired)
+    choices <- .model_type_choices(catalog, service, model, include = include_values)
+    if (!length(choices) && nzchar(desired)) {
+      choices <- desired
+    }
+    if (!length(choices) && nzchar(current)) {
+      choices <- current
+    }
+    selected <- desired %||% current
+    if (!length(choices)) {
+      updateSelectizeInput(session, "setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+      setup_state$desired_type <- NULL
+      return()
+    }
+    if (!nzchar(selected) || !selected %in% choices) {
+      preferred <- if (tolower(model) == .DEFAULT_MODEL_NAME) .DEFAULT_MODEL_TYPE else NULL
+      selected <- .pick_preferred_choice(choices, preferred)
+    }
+    updateSelectizeInput(session, "setup_type", choices = choices, selected = selected, server = TRUE)
+    setup_state$desired_type <- NULL
+  }
+
+  update_agent_service_choices <- function() {
+    catalog <- models_state$catalog
+    current <- isolate(input$agent_setup_service) %||% ""
+    desired <- agent_state$custom_desired_service
+    choices <- .model_service_choices(catalog, include = c(current, desired))
+    if (!length(choices)) {
+      updateSelectizeInput(session, "agent_setup_service", choices = character(), selected = desired %||% current %||% "", server = TRUE)
+      agent_state$custom_desired_service <- NULL
+      return()
+    }
+    selected <- desired %||% current
+    if (!nzchar(selected) || !selected %in% choices) {
+      selected <- .pick_preferred_choice(choices, .DEFAULT_MODEL_SERVICE)
+    }
+    updateSelectizeInput(session, "agent_setup_service", choices = choices, selected = selected, server = TRUE)
+    agent_state$custom_desired_service <- NULL
+  }
+
+  update_agent_model_choices <- function() {
+    catalog <- models_state$catalog
+    service <- input$agent_setup_service %||% ""
+    current <- isolate(input$agent_setup_model) %||% ""
+    desired <- agent_state$custom_desired_model
+    include_values <- c(current, desired)
+    choices <- .model_model_choices(catalog, service, include = include_values)
+    if (!length(choices) && nzchar(desired)) {
+      choices <- desired
+    }
+    if (!length(choices) && nzchar(current)) {
+      choices <- current
+    }
+    selected <- desired %||% current
+    if (!length(choices)) {
+      updateSelectizeInput(session, "agent_setup_model", choices = character(), selected = selected %||% "", server = TRUE)
+      agent_state$custom_desired_model <- NULL
+      return()
+    }
+    if (!nzchar(selected) || !selected %in% choices) {
+      preferred <- if (tolower(service) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
+      selected <- .pick_preferred_choice(choices, preferred)
+    }
+    updateSelectizeInput(session, "agent_setup_model", choices = choices, selected = selected, server = TRUE)
+    agent_state$custom_desired_model <- NULL
+  }
+
+  update_agent_type_choices <- function() {
+    catalog <- models_state$catalog
+    service <- input$agent_setup_service %||% ""
+    model <- input$agent_setup_model %||% ""
+    current <- isolate(input$agent_setup_type) %||% ""
+    desired <- agent_state$custom_desired_type
+    include_values <- c(current, desired)
+    choices <- .model_type_choices(catalog, service, model, include = include_values)
+    if (!length(choices) && nzchar(desired)) {
+      choices <- desired
+    }
+    if (!length(choices) && nzchar(current)) {
+      choices <- current
+    }
+    selected <- desired %||% current
+    if (!length(choices)) {
+      updateSelectizeInput(session, "agent_setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+      agent_state$custom_desired_type <- NULL
+      return()
+    }
+    if (!nzchar(selected) || !selected %in% choices) {
+      preferred <- if (tolower(model) == .DEFAULT_MODEL_NAME) .DEFAULT_MODEL_TYPE else NULL
+      selected <- .pick_preferred_choice(choices, preferred)
+    }
+    updateSelectizeInput(session, "agent_setup_type", choices = choices, selected = selected, server = TRUE)
+    agent_state$custom_desired_type <- NULL
+  }
+
+  observeEvent(models_state$catalog, {
+    update_setup_service_choices()
+  })
+
+  observeEvent(list(input$setup_service, models_state$catalog), {
+    update_setup_model_choices()
+  })
+
+  observeEvent(list(input$setup_service, input$setup_model, models_state$catalog), {
+    update_setup_type_choices()
+  })
+
+  observeEvent(input$setup_service,
+    {
+      if (isTRUE(setup_state$loading)) {
+        return()
+      }
+      svc <- input$setup_service %||% ""
+      catalog <- models_state$catalog
+      preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
+      model_choices <- .model_model_choices(catalog, svc)
+      new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
+      setup_state$desired_model <- new_model
+      preferred_type <- if (nzchar(new_model) && tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
+      type_choices <- .model_type_choices(catalog, svc, new_model)
+      new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
+      setup_state$desired_type <- new_type
+    },
+    priority = 5
+  )
+
+  observeEvent(models_state$catalog, {
+    update_agent_service_choices()
+  })
+
+  observeEvent(list(input$agent_setup_service, models_state$catalog), {
+    update_agent_model_choices()
+  })
+
+  observeEvent(list(input$agent_setup_service, input$agent_setup_model, models_state$catalog), {
+    update_agent_type_choices()
+  })
+
+  observeEvent(input$agent_setup_service,
+    {
+      if (isTRUE(agent_state$loading)) {
+        return()
+      }
+      if (!identical(input$agent_setup_mode, "custom")) {
+        return()
+      }
+      svc <- input$agent_setup_service %||% ""
+      catalog <- models_state$catalog
+      preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
+      model_choices <- .model_model_choices(catalog, svc)
+      new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
+      agent_state$custom_desired_model <- new_model
+      preferred_type <- if (nzchar(new_model) && tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
+      type_choices <- .model_type_choices(catalog, svc, new_model)
+      new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
+      agent_state$custom_desired_type <- new_type
+    },
+    priority = 5
+  )
+
+  observeEvent(TRUE,
+    {
+      setup_state$loading <- TRUE
+      on.exit(
+        {
+          setup_state$loading <- FALSE
+        },
+        add = TRUE
+      )
+      setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
+      setup_state$desired_model <- .DEFAULT_MODEL_NAME
+      setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+      update_setup_service_choices()
+      update_setup_model_choices()
+      update_setup_type_choices()
+    },
+    once = TRUE
+  )
+
+  observeEvent(TRUE,
+    {
+      agent_state$loading <- TRUE
+      on.exit(
+        {
+          agent_state$loading <- FALSE
+        },
+        add = TRUE
+      )
+      agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+      agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+      update_agent_service_choices()
+      update_agent_model_choices()
+      update_agent_type_choices()
+    },
+    once = TRUE
+  )
+
+  observeEvent(input$setup_thinking_enabled, {
+    setup_state$thinking_enabled <- isTRUE(input$setup_thinking_enabled)
+  })
+
+  observeEvent(input$setup_thinking_level, {
+    setup_state$thinking_level <- input$setup_thinking_level %||% .DEFAULT_THINKING_LEVEL
+  })
+
+  observeEvent(TRUE,
+    {
+      updateTextInput(session, "models_directory", value = models_state$directory)
+    },
+    once = TRUE
+  )
+
+  observeEvent(models_state$catalog, {
+    provider_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
+    current_view <- input$models_view_provider
+    if (is.null(current_view) || !current_view %in% .MODEL_PROVIDERS) {
+      current_view <- .DEFAULT_MODEL_SERVICE
+    }
+    updateSelectInput(session, "models_view_provider", choices = provider_choices, selected = current_view)
+    current_update <- input$models_update_provider
+    if (is.null(current_update) || !current_update %in% .MODEL_PROVIDERS) {
+      updateSelectInput(session, "models_update_provider", choices = provider_choices, selected = .DEFAULT_MODEL_SERVICE)
+    } else {
+      updateSelectInput(session, "models_update_provider", choices = provider_choices, selected = current_update)
+    }
+  })
+
+  observeEvent(input$models_directory, {
+    dir <- trimws(input$models_directory)
+    if (!nzchar(dir) || identical(dir, models_state$directory)) {
+      return()
+    }
+    models_state$directory <- dir
+    models_state$catalog <- .load_models_catalog(dir)
+    models_state$status <- paste0("Loaded models from ", dir)
+  })
+
+  observeEvent(input$models_refresh, {
+    dir <- models_state$directory
+    models_state$catalog <- .load_models_catalog(dir)
+    models_state$status <- paste0("Reloaded models from ", dir)
+    showNotification("Models reloaded from disk.", type = "message")
+  })
+
+  observeEvent(input$models_update_all, {
+    dir <- trimws(input$models_directory)
+    if (!nzchar(dir)) {
+      showNotification("Provide a directory for model CSV files.", type = "warning")
+      return()
+    }
+    withProgress(message = "Updating all model providers...", value = 0, {
+      tryCatch(
+        {
+          gen_update_models(provider = NULL, directory = dir, verbose = TRUE)
+          incProgress(1)
+          models_state$directory <- dir
+          models_state$catalog <- .load_models_catalog(dir)
+          models_state$status <- paste0("Updated all providers at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+          updateTextInput(session, "models_directory", value = dir)
+          showNotification("All model providers updated.", type = "message")
+        },
+        error = function(e) {
+          models_state$status <- paste("Update failed:", conditionMessage(e))
+          showNotification(conditionMessage(e), type = "error")
+        }
+      )
+    })
+  })
+
+  observeEvent(input$models_update_selected, {
+    dir <- trimws(input$models_directory)
+    provider <- input$models_update_provider %||% ""
+    if (!nzchar(dir)) {
+      showNotification("Provide a directory for model CSV files.", type = "warning")
+      return()
+    }
+    if (!nzchar(provider)) {
+      showNotification("Select a provider to update.", type = "warning")
+      return()
+    }
+    withProgress(message = paste0("Updating ", .model_label(provider), " models..."), value = 0, {
+      tryCatch(
+        {
+          gen_update_models(provider = provider, directory = dir, verbose = TRUE)
+          incProgress(1)
+          models_state$directory <- dir
+          models_state$catalog <- .load_models_catalog(dir)
+          models_state$status <- paste0("Updated ", .model_label(provider), " at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+          updateTextInput(session, "models_directory", value = dir)
+          showNotification(paste(.model_label(provider), "models updated."), type = "message")
+        },
+        error = function(e) {
+          models_state$status <- paste("Update failed:", conditionMessage(e))
+          showNotification(conditionMessage(e), type = "error")
+        }
+      )
+    })
+  })
+
+  output$models_status <- renderText({
+    models_state$status
+  })
+
+  output$models_summary <- renderText({
+    catalog <- models_state$catalog
+    if (nrow(catalog) == 0) {
+      return("No models cached yet. Use the controls on the left to fetch provider model lists.")
+    }
+    provider <- input$models_view_provider %||% .DEFAULT_MODEL_SERVICE
+    model_values <- catalog$model
+    model_values[is.na(model_values)] <- ""
+    total <- sum(nzchar(model_values))
+    provider_mask <- tolower(catalog$service) == tolower(provider)
+    provider_models <- model_values[provider_mask]
+    provider_count <- if (length(provider_models)) sum(nzchar(provider_models)) else 0
+    sprintf(
+      "%s models available: %d total cached (%d from %s).",
+      .model_label(provider),
+      total,
+      provider_count,
+      .model_label(provider)
+    )
+  })
+
+  output$models_table <- renderDT({
+    provider <- input$models_view_provider %||% .DEFAULT_MODEL_SERVICE
+    catalog <- models_state$catalog
+    if (nrow(catalog) > 0) {
+      mask <- tolower(catalog$service) == tolower(provider)
+      catalog <- catalog[mask, , drop = FALSE]
+    }
+    if (nrow(catalog) == 0) {
+      datatable(
+        data.frame(Message = "No models found for this provider yet."),
+        rownames = FALSE,
+        options = list(dom = "t", ordering = FALSE)
+      )
+    } else {
+      display <- data.frame(
+        Provider = .model_label(catalog$service),
+        Model = ifelse(is.na(catalog$model), "", catalog$model),
+        Type = if ("type" %in% names(catalog)) ifelse(is.na(catalog$type), "", catalog$type) else "",
+        Pricing = if ("pricing" %in% names(catalog)) ifelse(is.na(catalog$pricing), "", catalog$pricing) else "",
+        Description = if ("description" %in% names(catalog)) ifelse(is.na(catalog$description), "", catalog$description) else "",
+        stringsAsFactors = FALSE
+      )
+      datatable(
+        display,
+        rownames = FALSE,
+        options = list(pageLength = 10, autoWidth = TRUE, order = list(list(1, "asc")))
+      )
+    }
+  })
 
   refresh_setup_list <- function(selected = NULL) {
     choices <- sort(.load_setup_names())
@@ -833,29 +1496,70 @@ server <- function(input, output, session) {
   }
 
   reset_setup_form <- function() {
+    setup_state$loading <- TRUE
+    on.exit(
+      {
+        setup_state$loading <- FALSE
+      },
+      add = TRUE
+    )
     updateTextInput(session, "setup_name", value = "")
-    updateTextInput(session, "setup_service", value = "")
-    updateTextInput(session, "setup_model", value = "")
-    updateTextInput(session, "setup_type", value = "")
+    setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
+    setup_state$desired_model <- .DEFAULT_MODEL_NAME
+    setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+    update_setup_service_choices()
+    update_setup_model_choices()
+    update_setup_type_choices()
     updateNumericInput(session, "setup_temp", value = NA)
     setup_state$extras <- list()
+    setup_state$thinking_enabled <- FALSE
+    setup_state$thinking_level <- .DEFAULT_THINKING_LEVEL
+    updateCheckboxInput(session, "setup_thinking_enabled", value = FALSE)
+    updateSelectInput(session, "setup_thinking_level", selected = .DEFAULT_THINKING_LEVEL)
     output$setup_extra_fields <- renderUI(.render_kv_fields(setup_state$extras, "setup_extra", input, session))
   }
 
   load_setup <- function(name) {
-    if (is.null(name) || !nzchar(name)) return()
+    if (is.null(name) || !nzchar(name)) {
+      return()
+    }
+    setup_state$loading <- TRUE
+    on.exit(
+      {
+        setup_state$loading <- FALSE
+      },
+      add = TRUE
+    )
     setup <- tryCatch(get_setup(name, assign = FALSE), error = function(e) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(setup)) return()
+    if (is.null(setup)) {
+      return()
+    }
     setup_state$selected <- name
     setup_state$original <- setup
     updateTextInput(session, "setup_name", value = setup$sname %||% name)
-    updateTextInput(session, "setup_service", value = setup$service %||% "")
-    updateTextInput(session, "setup_model", value = setup$model %||% "")
-    updateTextInput(session, "setup_type", value = setup$type %||% "")
+    service_value <- setup$service %||% ""
+    model_value <- setup$model %||% ""
+    type_value <- setup$type %||% ""
+    setup_state$desired_service <- service_value
+    setup_state$desired_model <- model_value
+    setup_state$desired_type <- type_value
+    update_setup_service_choices()
+    update_setup_model_choices()
+    update_setup_type_choices()
     updateNumericInput(session, "setup_temp", value = setup$temp %||% NA)
+    thinking_flag <- setup$thinking %||% setup$reasoning %||% FALSE
+    thinking_level <- setup$thinking_budget %||% setup$thinking_level %||% setup$reasoning_effort %||% .DEFAULT_THINKING_LEVEL
+    thinking_level <- tolower(thinking_level)
+    if (!thinking_level %in% .THINKING_LEVEL_CHOICES) {
+      thinking_level <- .DEFAULT_THINKING_LEVEL
+    }
+    setup_state$thinking_enabled <- isTRUE(thinking_flag)
+    setup_state$thinking_level <- thinking_level
+    updateCheckboxInput(session, "setup_thinking_enabled", value = setup_state$thinking_enabled)
+    updateSelectInput(session, "setup_thinking_level", selected = setup_state$thinking_level)
     setup_state$extras <- .build_setup_extras(setup)
     output$setup_extra_fields <- renderUI(.render_kv_fields(setup_state$extras, "setup_extra", input, session))
   }
@@ -904,7 +1608,9 @@ server <- function(input, output, session) {
   observeEvent(input$confirm_delete_setup, {
     name <- isolate(setup_state$selected)
     removeModal()
-    if (is.null(name)) return()
+    if (is.null(name)) {
+      return()
+    }
     res <- tryCatch(rm_setup(name), warning = function(w) {
       showNotification(conditionMessage(w), type = "warning")
       FALSE
@@ -938,10 +1644,14 @@ server <- function(input, output, session) {
   observeEvent(input$setup_extra_action, {
     action <- input$setup_extra_action$action
     field_id <- input$setup_extra_action$field
-    if (!nzchar(field_id)) return()
+    if (!nzchar(field_id)) {
+      return()
+    }
     extras <- setup_state$extras
     idx <- which(vapply(extras, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     if (action == "remove") {
       extras <- extras[-idx]
@@ -964,15 +1674,15 @@ server <- function(input, output, session) {
       showNotification("Setup name is required.", type = "error")
       return()
     }
-    service <- trimws(input$setup_service)
-    model <- trimws(input$setup_model)
+    service <- trimws(input$setup_service %||% "")
+    model <- trimws(input$setup_model %||% "")
     if (!nzchar(service) || !nzchar(model)) {
       showNotification("Service and model are required.", type = "error")
       return()
     }
     temp <- input$setup_temp
     if (is.na(temp)) temp <- NULL
-    type <- trimws(input$setup_type)
+    type <- trimws(input$setup_type %||% "")
     if (!nzchar(type)) type <- NULL
 
     extras <- list()
@@ -991,14 +1701,29 @@ server <- function(input, output, session) {
         if (mode %in% c("null", "na")) {
           extras[[field_name]] <- .convert_value("", mode)
         } else {
-          tryCatch({
-            extras[[field_name]] <- .convert_value(value_raw, mode)
-          }, error = function(e) {
-            showNotification(sprintf("Field '%s': %s", field_name, conditionMessage(e)), type = "error")
-            stop("conversion_error")
-          })
+          tryCatch(
+            {
+              extras[[field_name]] <- .convert_value(value_raw, mode)
+            },
+            error = function(e) {
+              showNotification(sprintf("Field '%s': %s", field_name, conditionMessage(e)), type = "error")
+              stop("conversion_error")
+            }
+          )
         }
       }
+    }
+
+    extras[c("thinking", "thinking_budget", "thinking_level", "reasoning", "reasoning_effort")] <- NULL
+    thinking_enabled <- isTRUE(input$setup_thinking_enabled)
+    thinking_level <- input$setup_thinking_level %||% setup_state$thinking_level %||% .DEFAULT_THINKING_LEVEL
+    thinking_level <- tolower(thinking_level)
+    if (!thinking_level %in% .THINKING_LEVEL_CHOICES) {
+      thinking_level <- .DEFAULT_THINKING_LEVEL
+    }
+    if (thinking_enabled) {
+      extras$thinking <- TRUE
+      extras$thinking_budget <- thinking_level
     }
 
     args <- c(
@@ -1019,7 +1744,9 @@ server <- function(input, output, session) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(res)) return()
+    if (is.null(res)) {
+      return()
+    }
 
     original_name <- setup_state$selected
     if (!is.null(original_name) && !identical(original_name, name)) {
@@ -1040,12 +1767,16 @@ server <- function(input, output, session) {
   }
 
   load_content <- function(name) {
-    if (is.null(name) || !nzchar(name)) return()
+    if (is.null(name) || !nzchar(name)) {
+      return()
+    }
     content <- tryCatch(get_content(name, assign = FALSE), error = function(e) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(content)) return()
+    if (is.null(content)) {
+      return()
+    }
     content_state$selected <- name
     content_state$original <- content
     updateTextInput(session, "content_name", value = name)
@@ -1097,7 +1828,9 @@ server <- function(input, output, session) {
   observeEvent(input$confirm_delete_content, {
     name <- isolate(content_state$selected)
     removeModal()
-    if (is.null(name)) return()
+    if (is.null(name)) {
+      return()
+    }
     res <- tryCatch(rm_content(name), warning = function(w) {
       showNotification(conditionMessage(w), type = "warning")
       FALSE
@@ -1140,7 +1873,9 @@ server <- function(input, output, session) {
     field_id <- input$content_field_action$field
     fields <- content_state$fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     field <- fields[[idx]]
     label_id <- paste0("content_field_", field_id, "_label")
@@ -1195,7 +1930,9 @@ server <- function(input, output, session) {
         showNotification(conditionMessage(e), type = "error")
         NULL
       })
-      if (is.null(preview)) return()
+      if (is.null(preview)) {
+        return()
+      }
       showModal(modalDialog(
         title = "Preview",
         div(class = "gf-preview", .format_preview(preview, 800)),
@@ -1207,7 +1944,9 @@ server <- function(input, output, session) {
   observeEvent(input$content_modal_use_file, {
     field_id <- content_state$modal_field
     removeModal()
-    if (is.null(field_id)) return()
+    if (is.null(field_id)) {
+      return()
+    }
     upload <- input$content_modal_file
     if (is.null(upload) || !file.exists(upload$datapath)) {
       showNotification("No file selected.", type = "warning")
@@ -1217,10 +1956,14 @@ server <- function(input, output, session) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(text)) return()
+    if (is.null(text)) {
+      return()
+    }
     fields <- content_state$fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     fields[[idx]]$mode <- "text"
     fields[[idx]]$text_value <- text
@@ -1233,7 +1976,9 @@ server <- function(input, output, session) {
   observeEvent(input$content_modal_use_path_text, {
     field_id <- content_state$modal_field
     removeModal()
-    if (is.null(field_id)) return()
+    if (is.null(field_id)) {
+      return()
+    }
     path_value <- trimws(input$content_modal_path)
     if (!nzchar(path_value)) {
       showNotification("Path is empty.", type = "warning")
@@ -1243,10 +1988,14 @@ server <- function(input, output, session) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(text)) return()
+    if (is.null(text)) {
+      return()
+    }
     fields <- content_state$fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     fields[[idx]]$mode <- "text"
     fields[[idx]]$text_value <- text
@@ -1259,7 +2008,9 @@ server <- function(input, output, session) {
   observeEvent(input$content_modal_use_path_store, {
     field_id <- content_state$modal_field
     removeModal()
-    if (is.null(field_id)) return()
+    if (is.null(field_id)) {
+      return()
+    }
     path_value <- trimws(input$content_modal_path)
     if (!nzchar(path_value)) {
       showNotification("Path is empty.", type = "warning")
@@ -1267,7 +2018,9 @@ server <- function(input, output, session) {
     }
     fields <- content_state$fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     fields[[idx]]$mode <- "path"
     fields[[idx]]$path_value <- path_value
@@ -1338,7 +2091,9 @@ server <- function(input, output, session) {
       NULL
     })
 
-    if (is.null(res)) return()
+    if (is.null(res)) {
+      return()
+    }
     original_name <- content_state$selected
     if (!is.null(original_name) && !identical(original_name, name)) {
       rm_content(original_name)
@@ -1352,12 +2107,23 @@ server <- function(input, output, session) {
   output$content_fields_ui <- renderUI(.render_content_fields(content_state$fields, "content_field", input))
 
   load_agent <- function(name) {
-    if (is.null(name) || !nzchar(name)) return()
+    if (is.null(name) || !nzchar(name)) {
+      return()
+    }
+    agent_state$loading <- TRUE
+    on.exit(
+      {
+        agent_state$loading <- FALSE
+      },
+      add = TRUE
+    )
     agent <- tryCatch(get_agent(name, assign = FALSE), error = function(e) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(agent)) return()
+    if (is.null(agent)) {
+      return()
+    }
     agent_state$selected <- name
     agent_state$original <- agent
     agent_state$content_modal_field <- NULL
@@ -1371,15 +2137,21 @@ server <- function(input, output, session) {
       setup_fields <- setup_details %||% list()
     } else {
       updateRadioButtons(session, "agent_setup_mode", selected = "custom")
-      updateTextInput(session, "agent_setup_service", value = agent$service %||% "")
-      updateTextInput(session, "agent_setup_model", value = agent$model %||% "")
-      updateTextInput(session, "agent_setup_type", value = agent$type %||% "")
+      service_value <- agent$service %||% ""
+      model_value <- agent$model %||% ""
+      type_value <- agent$type %||% ""
+      agent_state$custom_desired_service <- if (nzchar(service_value)) service_value else .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_model <- if (nzchar(model_value)) model_value else .DEFAULT_MODEL_NAME
+      agent_state$custom_desired_type <- if (nzchar(type_value)) type_value else .DEFAULT_MODEL_TYPE
+      update_agent_service_choices()
+      update_agent_model_choices()
+      update_agent_type_choices()
       updateNumericInput(session, "agent_setup_temp", value = agent$temp %||% NA)
       setup_fields <- list(
-        service = agent$service,
-        model = agent$model,
+        service = if (nzchar(service_value)) service_value else NULL,
+        model = if (nzchar(model_value)) model_value else NULL,
         temp = agent$temp,
-        type = agent$type
+        type = if (nzchar(type_value)) type_value else NULL
       )
     }
 
@@ -1418,20 +2190,48 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$agent_setup_select, {
-    if (!identical(input$agent_setup_mode, "existing")) return()
+    if (!identical(input$agent_setup_mode, "existing")) {
+      return()
+    }
     update_agent_setup_preview(trimws(input$agent_setup_select))
   })
 
   observeEvent(input$agent_setup_mode, {
     if (!identical(input$agent_setup_mode, "existing")) {
       output$agent_setup_preview <- renderUI(NULL)
+      if (identical(input$agent_setup_mode, "custom")) {
+        agent_state$loading <- TRUE
+        on.exit(
+          {
+            agent_state$loading <- FALSE
+          },
+          add = TRUE
+        )
+        current_service <- input$agent_setup_service %||% ""
+        current_model <- input$agent_setup_model %||% ""
+        current_type <- input$agent_setup_type %||% ""
+        if (!nzchar(current_service)) {
+          agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+        }
+        if (!nzchar(current_model)) {
+          agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+        }
+        if (!nzchar(current_type)) {
+          agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+        }
+        update_agent_service_choices()
+        update_agent_model_choices()
+        update_agent_type_choices()
+      }
     } else {
       isolate(update_agent_setup_preview(trimws(input$agent_setup_select)))
     }
   })
 
   observeEvent(input$agent_content_select, {
-    if (!identical(input$agent_content_mode, "existing")) return()
+    if (!identical(input$agent_content_mode, "existing")) {
+      return()
+    }
     update_agent_content_preview(trimws(input$agent_content_select))
   })
 
@@ -1444,6 +2244,13 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$agent_new, {
+    agent_state$loading <- TRUE
+    on.exit(
+      {
+        agent_state$loading <- FALSE
+      },
+      add = TRUE
+    )
     agent_state$selected <- NULL
     agent_state$original <- NULL
     updateTextInput(session, "agent_name", value = "")
@@ -1451,6 +2258,12 @@ server <- function(input, output, session) {
     updateSelectInput(session, "agent_setup_select", selected = "")
     updateRadioButtons(session, "agent_content_mode", selected = "none")
     updateSelectInput(session, "agent_content_select", selected = "")
+    agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+    agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+    agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+    update_agent_service_choices()
+    update_agent_model_choices()
+    update_agent_type_choices()
     agent_state$setup_extras <- list()
     agent_state$custom_content_fields <- .build_content_fields(list())
     agent_state$overrides <- list(
@@ -1492,7 +2305,9 @@ server <- function(input, output, session) {
   observeEvent(input$confirm_delete_agent, {
     name <- isolate(agent_state$selected)
     removeModal()
-    if (is.null(name)) return()
+    if (is.null(name)) {
+      return()
+    }
     res <- tryCatch(rm_agent(name), warning = function(w) {
       showNotification(conditionMessage(w), type = "warning")
       FALSE
@@ -1526,7 +2341,9 @@ server <- function(input, output, session) {
     field_id <- input$agent_setup_extra_action$field
     fields <- agent_state$setup_extras
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     if (action == "remove") {
       fields <- fields[-idx]
@@ -1560,7 +2377,9 @@ server <- function(input, output, session) {
     field_id <- input$agent_content_field_action$field
     fields <- agent_state$custom_content_fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     field <- fields[[idx]]
     label_id <- paste0("agent_content_field_", field_id, "_label")
@@ -1615,7 +2434,9 @@ server <- function(input, output, session) {
         showNotification(conditionMessage(e), type = "error")
         NULL
       })
-      if (is.null(preview)) return()
+      if (is.null(preview)) {
+        return()
+      }
       showModal(modalDialog(
         title = "Preview",
         div(class = "gf-preview", .format_preview(preview, 800)),
@@ -1628,7 +2449,9 @@ server <- function(input, output, session) {
     field_id <- agent_state$content_modal_field
     removeModal()
     agent_state$content_modal_field <- NULL
-    if (is.null(field_id)) return()
+    if (is.null(field_id)) {
+      return()
+    }
     upload <- input$agent_content_modal_file
     if (is.null(upload) || !file.exists(upload$datapath)) {
       showNotification("No file selected.", type = "warning")
@@ -1638,10 +2461,14 @@ server <- function(input, output, session) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(text)) return()
+    if (is.null(text)) {
+      return()
+    }
     fields <- agent_state$custom_content_fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     fields[[idx]]$mode <- "text"
     fields[[idx]]$text_value <- text
@@ -1655,7 +2482,9 @@ server <- function(input, output, session) {
     field_id <- agent_state$content_modal_field
     removeModal()
     agent_state$content_modal_field <- NULL
-    if (is.null(field_id)) return()
+    if (is.null(field_id)) {
+      return()
+    }
     path_value <- trimws(input$agent_content_modal_path)
     if (!nzchar(path_value)) {
       showNotification("Path is empty.", type = "warning")
@@ -1665,10 +2494,14 @@ server <- function(input, output, session) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(text)) return()
+    if (is.null(text)) {
+      return()
+    }
     fields <- agent_state$custom_content_fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     fields[[idx]]$mode <- "text"
     fields[[idx]]$text_value <- text
@@ -1682,7 +2515,9 @@ server <- function(input, output, session) {
     field_id <- agent_state$content_modal_field
     removeModal()
     agent_state$content_modal_field <- NULL
-    if (is.null(field_id)) return()
+    if (is.null(field_id)) {
+      return()
+    }
     path_value <- trimws(input$agent_content_modal_path)
     if (!nzchar(path_value)) {
       showNotification("Path is empty.", type = "warning")
@@ -1690,7 +2525,9 @@ server <- function(input, output, session) {
     }
     fields <- agent_state$custom_content_fields
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     fields[[idx]]$mode <- "path"
     fields[[idx]]$path_value <- path_value
@@ -1718,7 +2555,9 @@ server <- function(input, output, session) {
     field_id <- input$agent_override_action$field
     fields <- agent_state$overrides
     idx <- which(vapply(fields, `[[`, character(1), "id") == field_id)
-    if (!length(idx)) return()
+    if (!length(idx)) {
+      return()
+    }
     idx <- idx[[1]]
     if (action == "remove") {
       fields <- fields[-idx]
@@ -1732,6 +2571,13 @@ server <- function(input, output, session) {
     if (!is.null(agent_state$original)) {
       load_agent(agent_state$original$name %||% agent_state$selected)
     } else {
+      agent_state$loading <- TRUE
+      on.exit(
+        {
+          agent_state$loading <- FALSE
+        },
+        add = TRUE
+      )
       agent_state$selected <- NULL
       agent_state$original <- NULL
       updateTextInput(session, "agent_name", value = "")
@@ -1739,6 +2585,12 @@ server <- function(input, output, session) {
       updateSelectInput(session, "agent_setup_select", selected = "")
       updateRadioButtons(session, "agent_content_mode", selected = "none")
       updateSelectInput(session, "agent_content_select", selected = "")
+      agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+      agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+      update_agent_service_choices()
+      update_agent_model_choices()
+      update_agent_type_choices()
       agent_state$setup_extras <- list()
       agent_state$custom_content_fields <- .build_content_fields(list())
       agent_state$overrides <- list()
@@ -1749,7 +2601,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$agent_save, {
-    name <- trimws(input$agent_name)
+    name <- trimws(input$agent_name %||% "")
     if (!nzchar(name)) {
       showNotification("Agent name is required.", type = "error")
       return()
@@ -1760,15 +2612,15 @@ server <- function(input, output, session) {
 
     setup_argument <- NULL
     if (setup_mode == "existing") {
-      setup_selected <- trimws(input$agent_setup_select)
+      setup_selected <- trimws(input$agent_setup_select %||% "")
       if (!nzchar(setup_selected)) {
         showNotification("Select a setup for the agent.", type = "error")
         return()
       }
       setup_argument <- setup_selected
     } else {
-      service <- trimws(input$agent_setup_service)
-      model <- trimws(input$agent_setup_model)
+      service <- trimws(input$agent_setup_service %||% "")
+      model <- trimws(input$agent_setup_model %||% "")
       if (!nzchar(service) || !nzchar(model)) {
         showNotification("Custom setup requires service and model.", type = "error")
         return()
@@ -1779,7 +2631,7 @@ server <- function(input, output, session) {
         model = model,
         temp = if (is.na(input$agent_setup_temp)) NULL else input$agent_setup_temp,
         type = {
-          x <- trimws(input$agent_setup_type)
+          x <- trimws(input$agent_setup_type %||% "")
           if (!nzchar(x)) NULL else x
         }
       )
@@ -1796,12 +2648,15 @@ server <- function(input, output, session) {
           if (mode %in% c("null", "na")) {
             custom_setup[[field_name]] <- .convert_value("", mode)
           } else {
-            tryCatch({
-              custom_setup[[field_name]] <- .convert_value(value_raw, mode)
-            }, error = function(e) {
-              showNotification(sprintf("Custom setup '%s': %s", field_name, conditionMessage(e)), type = "error")
-              stop("conversion_error")
-            })
+            tryCatch(
+              {
+                custom_setup[[field_name]] <- .convert_value(value_raw, mode)
+              },
+              error = function(e) {
+                showNotification(sprintf("Custom setup '%s': %s", field_name, conditionMessage(e)), type = "error")
+                stop("conversion_error")
+              }
+            )
           }
         }
       }
@@ -1810,7 +2665,7 @@ server <- function(input, output, session) {
 
     content_argument <- NULL
     if (content_mode == "existing") {
-      content_selected <- trimws(input$agent_content_select)
+      content_selected <- trimws(input$agent_content_select %||% "")
       if (!nzchar(content_selected)) {
         showNotification("Select content or choose 'None'.", type = "error")
         return()
@@ -1858,12 +2713,15 @@ server <- function(input, output, session) {
         if (mode %in% c("null", "na")) {
           overrides[[field_name]] <- .convert_value("", mode)
         } else {
-          tryCatch({
-            overrides[[field_name]] <- .convert_value(value_raw, mode)
-          }, error = function(e) {
-            showNotification(sprintf("Override '%s': %s", field_name, conditionMessage(e)), type = "error")
-            stop("conversion_error")
-          })
+          tryCatch(
+            {
+              overrides[[field_name]] <- .convert_value(value_raw, mode)
+            },
+            error = function(e) {
+              showNotification(sprintf("Override '%s': %s", field_name, conditionMessage(e)), type = "error")
+              stop("conversion_error")
+            }
+          )
         }
       }
     }
@@ -1884,7 +2742,9 @@ server <- function(input, output, session) {
       showNotification(conditionMessage(e), type = "error")
       NULL
     })
-    if (is.null(res)) return()
+    if (is.null(res)) {
+      return()
+    }
 
     original <- agent_state$selected
     if (!is.null(original) && !identical(original, name)) {

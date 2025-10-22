@@ -14,14 +14,18 @@ RoxygenNote: 7.3.2
 License: GPL (>= 3)
 Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
 Imports: 
-    jsonlite,
+    DT,
+    bslib,
     dplyr,
     htmltools,
     httr,
+    jsonlite,
     magick,
+    magrittr,
     purrr,
+    readr,
     rstudioapi,
-    tibble,
-    magrittr
+    shiny,
+    tibble
 Suggests: 
     base64enc
