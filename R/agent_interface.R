@@ -91,14 +91,14 @@ library(jsonlite)
     return(list(service = service, model = model, type = type))
   }
   if (!nzchar(model)) {
-    return(structure(NULL, error = "Select a favorite model before saving."))
+    stop("Select a favorite model before saving.")
   }
   if (!nrow(favorites)) {
-    return(structure(NULL, error = "No favorites available. Add a favorite model first."))
+    stop("No favorites available. Add a favorite model first.")
   }
   candidate <- favorites[tolower(favorites$model) == tolower(model), , drop = FALSE]
   if (!nrow(candidate)) {
-    return(structure(NULL, error = sprintf("Model '%s' is not marked as favorite.", model)))
+    stop(sprintf("Model '%s' is not marked as favorite.", model))
   }
   if (nzchar(type)) {
     candidate_type <- candidate[tolower(candidate$type) == tolower(type), , drop = FALSE]
@@ -109,7 +109,7 @@ library(jsonlite)
   resolved_service <- candidate$service[1]
   resolved_type <- candidate$type[1]
   if (!nzchar(resolved_service)) {
-    return(structure(NULL, error = "Favorite entry is missing provider information."))
+    stop("Favorite entry is missing provider information.")
   }
   if (!nzchar(resolved_type)) {
     match_idx <- which(tolower(catalog$service) == resolved_service & catalog$model == model)[1]
@@ -930,6 +930,36 @@ library(jsonlite)
   }))
 }
 
+.setup_summary_text <- function(setup) {
+  if (is.null(setup)) {
+    return("")
+  }
+  values <- c(setup$service %||% "", setup$model %||% "", setup$type %||% "")
+  values <- values[nzchar(values)]
+  if (length(values)) paste(values, collapse = " • ") else ""
+}
+
+.content_summary_text <- function(content) {
+  if (is.null(content) || !length(content)) {
+    return("")
+  }
+  keys <- names(content)
+  if (is.null(keys)) {
+    keys <- paste0("item", seq_along(content))
+  }
+  previews <- vapply(content, function(x) .format_preview(x, 80), character(1))
+  paste(keys, previews, sep = ": ", collapse = " | ")
+}
+
+.agent_summary_text <- function(agent) {
+  if (is.null(agent)) {
+    return("")
+  }
+  values <- c(agent$service %||% "", agent$model %||% "", agent$sname %||% "", agent$cname %||% "")
+  values <- values[nzchar(values)]
+  if (length(values)) paste(values, collapse = " • ") else ""
+}
+
 .build_content_fields <- function(content_list = list()) {
   existing_names <- names(content_list)
   fields <- list()
@@ -1045,6 +1075,10 @@ server <- function(input, output, session) {
     custom_desired_type = NULL,
     loading = FALSE
   )
+
+  setup_summary_cache <- new.env(parent = emptyenv())
+  content_preview_cache <- new.env(parent = emptyenv())
+  agent_summary_cache <- new.env(parent = emptyenv())
 
   initial_models_dir <- .default_models_dir()
   initial_catalog <- .load_models_catalog(initial_models_dir)
@@ -1541,28 +1575,6 @@ server <- function(input, output, session) {
     agent_state$custom_desired_type <- new_type
   }, priority = 5)
 
-  observeEvent(input$agent_setup_service,
-    {
-      if (isTRUE(agent_state$loading)) {
-        return()
-      }
-      if (!identical(input$agent_setup_mode, "custom")) {
-        return()
-      }
-      svc <- input$agent_setup_service %||% ""
-      catalog <- models_state$catalog
-      preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
-      model_choices <- .model_model_choices(catalog, svc)
-      new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
-      agent_state$custom_desired_model <- new_model
-      preferred_type <- if (nzchar(new_model) && tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
-      type_choices <- .model_type_choices(catalog, svc, new_model)
-      new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
-      agent_state$custom_desired_type <- new_type
-    },
-    priority = 5
-  )
-
   observeEvent(TRUE,
     {
       setup_state$loading <- TRUE
@@ -1920,23 +1932,39 @@ server <- function(input, output, session) {
   refresh_setup_list <- function(selected = NULL) {
     choices <- sort(.load_setup_names())
     setup_state$list <- choices
+    summary_lookup <- setNames(character(0), character(0))
+    if (!length(choices)) {
+      existing_keys <- ls(envir = setup_summary_cache, all.names = TRUE)
+      if (length(existing_keys)) {
+        rm(list = existing_keys, envir = setup_summary_cache)
+      }
+    } else {
+      existing_keys <- ls(envir = setup_summary_cache, all.names = TRUE)
+      to_drop <- setdiff(existing_keys, choices)
+      if (length(to_drop)) {
+        rm(list = to_drop, envir = setup_summary_cache)
+      }
+      summary_lookup <- setNames(character(length(choices)), choices)
+      for (name in choices) {
+        if (exists(name, envir = setup_summary_cache, inherits = FALSE)) {
+          summary_lookup[[name]] <- setup_summary_cache[[name]]
+        } else {
+          details <- suppressWarnings(tryCatch(get_setup(name, assign = FALSE), error = function(e) NULL))
+          summary <- .setup_summary_text(details)
+          summary_lookup[[name]] <- summary
+          if (!is.null(details)) {
+            setup_summary_cache[[name]] <- summary
+          }
+        }
+      }
+    }
     output$setup_list_ui <- renderUI({
       if (!length(choices)) {
         return(div(class = "gf-empty", "No setups saved yet."))
       }
       active <- isolate(setup_state$selected)
       tagList(lapply(choices, function(name) {
-        summary_text <- ""
-        suppressWarnings({
-          details <- tryCatch(get_setup(name, assign = FALSE), error = function(e) NULL)
-          if (!is.null(details)) {
-            bits <- c(details$service, details$model, details$type)
-            bits <- bits[nzchar(bits)]
-            if (length(bits)) {
-              summary_text <- paste(bits, collapse = " • ")
-            }
-          }
-        })
+        summary_text <- summary_lookup[[name]] %||% ""
         div(
           class = paste("gf-entity-item", if (!is.null(active) && active == name) "active"),
           onclick = sprintf(
@@ -1957,20 +1985,39 @@ server <- function(input, output, session) {
   refresh_content_list <- function(selected = NULL) {
     choices <- sort(.load_content_names())
     content_state$list <- choices
+    preview_lookup <- setNames(character(0), character(0))
+    if (!length(choices)) {
+      existing_keys <- ls(envir = content_preview_cache, all.names = TRUE)
+      if (length(existing_keys)) {
+        rm(list = existing_keys, envir = content_preview_cache)
+      }
+    } else {
+      existing_keys <- ls(envir = content_preview_cache, all.names = TRUE)
+      to_drop <- setdiff(existing_keys, choices)
+      if (length(to_drop)) {
+        rm(list = to_drop, envir = content_preview_cache)
+      }
+      preview_lookup <- setNames(character(length(choices)), choices)
+      for (name in choices) {
+        if (exists(name, envir = content_preview_cache, inherits = FALSE)) {
+          preview_lookup[[name]] <- content_preview_cache[[name]]
+        } else {
+          details <- suppressWarnings(tryCatch(get_content(name, assign = FALSE), error = function(e) NULL))
+          preview <- .content_summary_text(details)
+          preview_lookup[[name]] <- preview
+          if (!is.null(details)) {
+            content_preview_cache[[name]] <- preview
+          }
+        }
+      }
+    }
     output$content_list_ui <- renderUI({
       if (!length(choices)) {
         return(div(class = "gf-empty", "No content saved yet."))
       }
       active <- isolate(content_state$selected)
       tagList(lapply(choices, function(name) {
-        preview <- ""
-        suppressWarnings({
-          details <- tryCatch(get_content(name, assign = FALSE), error = function(e) NULL)
-          if (!is.null(details)) {
-            sample_values <- vapply(details, function(x) .format_preview(x, 80), character(1))
-            preview <- paste(names(sample_values), sample_values, sep = ": ", collapse = " | ")
-          }
-        })
+        preview <- preview_lookup[[name]] %||% ""
         div(
           class = paste("gf-entity-item", if (!is.null(active) && active == name) "active"),
           onclick = sprintf(
@@ -1991,21 +2038,39 @@ server <- function(input, output, session) {
   refresh_agent_list <- function(selected = NULL) {
     choices <- sort(.load_agent_names())
     agent_state$list <- choices
+    summary_lookup <- setNames(character(0), character(0))
+    if (!length(choices)) {
+      existing_keys <- ls(envir = agent_summary_cache, all.names = TRUE)
+      if (length(existing_keys)) {
+        rm(list = existing_keys, envir = agent_summary_cache)
+      }
+    } else {
+      existing_keys <- ls(envir = agent_summary_cache, all.names = TRUE)
+      to_drop <- setdiff(existing_keys, choices)
+      if (length(to_drop)) {
+        rm(list = to_drop, envir = agent_summary_cache)
+      }
+      summary_lookup <- setNames(character(length(choices)), choices)
+      for (name in choices) {
+        if (exists(name, envir = agent_summary_cache, inherits = FALSE)) {
+          summary_lookup[[name]] <- agent_summary_cache[[name]]
+        } else {
+          details <- suppressWarnings(tryCatch(get_agent(name, assign = FALSE), error = function(e) NULL))
+          summary <- .agent_summary_text(details)
+          summary_lookup[[name]] <- summary
+          if (!is.null(details)) {
+            agent_summary_cache[[name]] <- summary
+          }
+        }
+      }
+    }
     output$agent_list_ui <- renderUI({
       if (!length(choices)) {
         return(div(class = "gf-empty", "No agents saved yet."))
       }
       active <- isolate(agent_state$selected)
       tagList(lapply(choices, function(name) {
-        summary_text <- ""
-        suppressWarnings({
-          details <- tryCatch(get_agent(name, assign = FALSE), error = function(e) NULL)
-          if (!is.null(details)) {
-            bits <- c(details$service, details$model, details$sname, details$cname)
-            bits <- bits[nzchar(bits)]
-            if (length(bits)) summary_text <- paste(bits, collapse = " • ")
-          }
-        })
+        summary_text <- summary_lookup[[name]] %||% ""
         div(
           class = paste("gf-entity-item", if (!is.null(active) && active == name) "active"),
           onclick = sprintf(
@@ -2109,6 +2174,7 @@ server <- function(input, output, session) {
     }
     setup_state$selected <- name
     setup_state$original <- setup
+    setup_summary_cache[[name]] <- .setup_summary_text(setup)
     updateTextInput(session, "setup_name", value = setup$sname %||% name)
     service_value <- setup$service %||% ""
     model_value <- setup$model %||% ""
@@ -2193,6 +2259,9 @@ server <- function(input, output, session) {
     }
     setup_state$selected <- NULL
     setup_state$original <- NULL
+    if (exists(name, envir = setup_summary_cache, inherits = FALSE)) {
+      rm(list = name, envir = setup_summary_cache)
+    }
     reset_setup_form()
     refresh_setup_list()
   })
@@ -2253,18 +2322,22 @@ server <- function(input, output, session) {
     temp <- input$setup_temp
     if (is.na(temp)) temp <- NULL
     type_input <- trimws(input$setup_type %||% "")
-    resolved <- .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog)
-    if (is.null(resolved)) {
-      msg <- attr(resolved, "error") %||% "Unable to resolve favorite selection."
-      showNotification(msg, type = "error")
-      return()
-    }
+    resolved <- tryCatch(
+      .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(resolved)) return()
     service <- resolved$service
     model <- resolved$model
     type <- resolved$type
     if (!nzchar(type)) type <- NULL
 
     extras <- list()
+    reserved_setup_names <- tolower(c("sname", "service", "model", "temp", "type", "thinking", "thinking_budget", "thinking_level", "reasoning", "reasoning_effort"))
+    seen_extra_names <- character()
     if (length(setup_state$extras)) {
       for (field in setup_state$extras) {
         name_id <- paste0("setup_extra_", field$id, "_name")
@@ -2273,6 +2346,16 @@ server <- function(input, output, session) {
           showNotification("Extra field names cannot be empty.", type = "error")
           return()
         }
+        field_key <- tolower(field_name)
+        if (field_key %in% reserved_setup_names) {
+          showNotification(sprintf("Field '%s' conflicts with a reserved setup attribute.", field_name), type = "error")
+          return()
+        }
+        if (field_key %in% seen_extra_names) {
+          showNotification(sprintf("Field '%s' is duplicated. Use unique names.", field_name), type = "error")
+          return()
+        }
+        seen_extra_names <- c(seen_extra_names, field_key)
         mode_id <- paste0("setup_extra_", field$id, "_mode")
         value_id <- paste0("setup_extra_", field$id, "_value")
         mode <- input[[mode_id]] %||% field$mode
@@ -2330,10 +2413,14 @@ server <- function(input, output, session) {
     original_name <- setup_state$selected
     if (!is.null(original_name) && !identical(original_name, name)) {
       rm_setup(original_name)
+      if (exists(original_name, envir = setup_summary_cache, inherits = FALSE)) {
+        rm(list = original_name, envir = setup_summary_cache)
+      }
     }
 
     setup_state$selected <- name
     setup_state$original <- res
+    setup_summary_cache[[name]] <- .setup_summary_text(res)
     showNotification(sprintf("Setup '%s' saved.", name), type = "message")
     refresh_setup_list(selected = name)
   })
@@ -2358,6 +2445,7 @@ server <- function(input, output, session) {
     }
     content_state$selected <- name
     content_state$original <- content
+    content_preview_cache[[name]] <- .content_summary_text(content)
     updateTextInput(session, "content_name", value = name)
     reset_content_fields(content)
   }
@@ -2422,6 +2510,9 @@ server <- function(input, output, session) {
     }
     content_state$selected <- NULL
     content_state$original <- NULL
+    if (exists(name, envir = content_preview_cache, inherits = FALSE)) {
+      rm(list = name, envir = content_preview_cache)
+    }
     updateTextInput(session, "content_name", value = "")
     reset_content_fields(list())
     refresh_content_list()
@@ -2676,9 +2767,13 @@ server <- function(input, output, session) {
     original_name <- content_state$selected
     if (!is.null(original_name) && !identical(original_name, name)) {
       rm_content(original_name)
+      if (exists(original_name, envir = content_preview_cache, inherits = FALSE)) {
+        rm(list = original_name, envir = content_preview_cache)
+      }
     }
     content_state$selected <- name
     content_state$original <- payload
+    content_preview_cache[[name]] <- .content_summary_text(res)
     showNotification(sprintf("Content '%s' saved.", name), type = "message")
     refresh_content_list(selected = name)
   })
@@ -2705,6 +2800,7 @@ server <- function(input, output, session) {
     }
     agent_state$selected <- name
     agent_state$original <- agent
+    agent_summary_cache[[name]] <- .agent_summary_text(agent)
     agent_state$content_modal_field <- NULL
     updateTextInput(session, "agent_name", value = agent$name %||% name)
 
@@ -2908,6 +3004,9 @@ server <- function(input, output, session) {
     }
     agent_state$selected <- NULL
     agent_state$original <- NULL
+    if (exists(name, envir = agent_summary_cache, inherits = FALSE)) {
+      rm(list = name, envir = agent_summary_cache)
+    }
     refresh_agent_list()
   })
 
@@ -3214,10 +3313,14 @@ server <- function(input, output, session) {
         return()
       }
       type_input <- trimws(input$agent_setup_type %||% "")
-      resolved <- .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog)
+      resolved <- tryCatch(
+        .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog),
+        error = function(e) {
+          showNotification(conditionMessage(e), type = "error")
+          NULL
+        }
+      )
       if (is.null(resolved)) {
-        msg <- attr(resolved, "error") %||% "Unable to resolve favorite selection."
-        showNotification(msg, type = "error")
         return()
       }
       service <- resolved$service
@@ -3230,6 +3333,8 @@ server <- function(input, output, session) {
         temp = if (is.na(input$agent_setup_temp)) NULL else input$agent_setup_temp,
         type = if (!nzchar(resolved_type)) NULL else resolved_type
       )
+      reserved_setup_names <- tolower(c("sname", "service", "model", "temp", "type", "thinking", "thinking_budget", "thinking_level", "reasoning", "reasoning_effort"))
+      seen_setup_names <- character()
       if (length(agent_state$setup_extras)) {
         for (field in agent_state$setup_extras) {
           name_id <- paste0("agent_setup_extra_", field$id, "_name")
@@ -3238,6 +3343,16 @@ server <- function(input, output, session) {
             showNotification("Custom setup field names cannot be empty.", type = "error")
             return()
           }
+          field_key <- tolower(field_name)
+          if (field_key %in% reserved_setup_names) {
+            showNotification(sprintf("Custom setup field '%s' conflicts with a reserved name.", field_name), type = "error")
+            return()
+          }
+          if (field_key %in% seen_setup_names) {
+            showNotification(sprintf("Custom setup field '%s' is duplicated. Use unique names.", field_name), type = "error")
+            return()
+          }
+          seen_setup_names <- c(seen_setup_names, field_key)
           mode <- input[[paste0("agent_setup_extra_", field$id, "_mode")]] %||% field$mode
           value_raw <- input[[paste0("agent_setup_extra_", field$id, "_value")]] %||% field$value
           if (mode %in% c("null", "na")) {
@@ -3295,6 +3410,12 @@ server <- function(input, output, session) {
     }
 
     overrides <- list()
+    reserved_override_names <- tolower(c(
+      "name", "setup", "content", "save", "assign", "overwrite",
+      "sname", "cname", "service", "model", "temp", "type",
+      "thinking", "thinking_budget", "thinking_level", "reasoning", "reasoning_effort"
+    ))
+    seen_override_names <- character()
     if (length(agent_state$overrides)) {
       for (field in agent_state$overrides) {
         name_id <- paste0("agent_override_", field$id, "_name")
@@ -3303,6 +3424,16 @@ server <- function(input, output, session) {
           showNotification("Override field names cannot be empty.", type = "error")
           return()
         }
+        field_key <- tolower(field_name)
+        if (field_key %in% reserved_override_names) {
+          showNotification(sprintf("Override '%s' conflicts with a reserved agent attribute.", field_name), type = "error")
+          return()
+        }
+        if (field_key %in% seen_override_names) {
+          showNotification(sprintf("Override '%s' is duplicated. Use unique names.", field_name), type = "error")
+          return()
+        }
+        seen_override_names <- c(seen_override_names, field_key)
         mode <- input[[paste0("agent_override_", field$id, "_mode")]] %||% field$mode
         value_raw <- input[[paste0("agent_override_", field$id, "_value")]] %||% field$value
         if (mode %in% c("null", "na")) {
@@ -3344,10 +3475,14 @@ server <- function(input, output, session) {
     original <- agent_state$selected
     if (!is.null(original) && !identical(original, name)) {
       rm_agent(original)
+      if (exists(original, envir = agent_summary_cache, inherits = FALSE)) {
+        rm(list = original, envir = agent_summary_cache)
+      }
     }
 
     agent_state$selected <- name
     agent_state$original <- res
+    agent_summary_cache[[name]] <- .agent_summary_text(res)
     showNotification(sprintf("Agent '%s' saved.", name), type = "message")
     refresh_agent_list(selected = name)
   })
