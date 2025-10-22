@@ -2,12 +2,9 @@
 % Please edit documentation in R/agent_management.R
 \name{rm_setup}
 \alias{rm_setup}
-\alias{rm_model}
 \title{Delete a cached setup}
 \usage{
 rm_setup(sname)
-
-rm_model(sname)
 }
 \arguments{
 \item{sname}{Setup identifier.}

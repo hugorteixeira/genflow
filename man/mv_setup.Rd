@@ -2,12 +2,9 @@
 % Please edit documentation in R/agent_management.R
 \name{mv_setup}
 \alias{mv_setup}
-\alias{mv_model}
 \title{Rename a cached setup}
 \usage{
 mv_setup(from, to)
-
-mv_model(from, to)
 }
 \arguments{
 \item{from}{Current setup name.}

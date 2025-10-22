@@ -140,10 +140,6 @@ set_setup <- function(sname,
   setup
 }
 
-#' @rdname set_setup
-#' @export
-set_model <- set_setup
-
 #' Retrieve a saved setup
 #'
 #' @param sname Setup identifier.
@@ -161,10 +157,6 @@ get_setup <- function(sname, assign = FALSE, envir = .GlobalEnv) {
   }
   setup
 }
-
-#' @rdname get_setup
-#' @export
-get_model <- get_setup
 
 #' Rename a cached setup
 #' @param from Current setup name.
@@ -189,10 +181,6 @@ mv_setup <- function(from, to) {
   invisible(TRUE)
 }
 
-#' @rdname mv_setup
-#' @export
-mv_model <- mv_setup
-
 #' Delete a cached setup
 #' @param sname Setup identifier.
 #' @return Invisible TRUE when removed.
@@ -207,10 +195,6 @@ rm_setup <- function(sname) {
   file.remove(path)
   invisible(TRUE)
 }
-
-#' @rdname rm_setup
-#' @export
-rm_model <- rm_setup
 
 #' List cached setups
 #'
@@ -239,11 +223,6 @@ list_setups <- function() {
     paste(sname, "-", paste(summary, collapse = " | "))
   }, character(1))
 }
-
-
-#' @rdname list_setups
-#' @export
-list_models <- list_setups
 
 # Content helpers ----------------------------------------------------------
 

@@ -2,12 +2,9 @@
 % Please edit documentation in R/agent_management.R
 \name{get_setup}
 \alias{get_setup}
-\alias{get_model}
 \title{Retrieve a saved setup}
 \usage{
 get_setup(sname, assign = FALSE, envir = .GlobalEnv)
-
-get_model(sname, assign = FALSE, envir = .GlobalEnv)
 }
 \arguments{
 \item{sname}{Setup identifier.}

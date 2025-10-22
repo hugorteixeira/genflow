@@ -2,23 +2,9 @@
 % Please edit documentation in R/agent_management.R
 \name{set_setup}
 \alias{set_setup}
-\alias{set_model}
 \title{Create or update a reusable setup}
 \usage{
 set_setup(
-  sname,
-  service,
-  model,
-  temp = NULL,
-  type = NULL,
-  ...,
-  save = TRUE,
-  assign = TRUE,
-  envir = .GlobalEnv,
-  overwrite = TRUE
-)
-
-set_model(
   sname,
   service,
   model,

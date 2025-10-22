@@ -2,12 +2,9 @@
 % Please edit documentation in R/agent_management.R
 \name{list_setups}
 \alias{list_setups}
-\alias{list_models}
 \title{List cached setups}
 \usage{
 list_setups()
-
-list_models()
 }
 \value{
 Character vector with one line per setup.
