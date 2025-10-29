@@ -18,6 +18,7 @@ gen_txt(context, ...)
   service = "openai",
   model = "gpt-5-mini",
   temp = 1,
+  reasoning = NULL,
   tools = FALSE,
   my_tools = NULL,
   timeout_api = 240,
@@ -53,6 +54,8 @@ sanitized derivation of \code{context}.}
 \item{model}{Character; model identifier for the chosen \code{service}.}
 
 \item{temp}{Optional numeric; sampling temperature. If \code{NULL}, defaults to 0.7.}
+
+\item{reasoning}{One of low, medium, high or minimal. Also known as just go with high.}
 
 \item{tools}{Logical; whether to enable tool/function calling for providers
 that support it.}
