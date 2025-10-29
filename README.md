@@ -53,20 +53,19 @@ usethis::edit_r_environ()
 
 After adding your keys, restart your R session for the changes to take effect.
 
-## 💡 Powerful Examples
+## 💡 Examples
 
-### Text Generation That Speaks Volumes
+### Text Generation
 
 ```r
 library(genflow)
 
 # Transform complex concepts into clear explanations
 result <- gen_txt(
-  context = "Explain quantum computing in simple terms",
+  context = "Explain quantum computing like I'm dumb as a potato",
   service = "openai",
-  model = "gpt-4o-mini",
-  reasoning = "high",
-  temp = 0.7
+  model = "gpt-5",
+  reasoning = "high"
 )
 
 # Instantly visualize your results
@@ -89,7 +88,7 @@ set_setup(
 set_content(
   cname   = "launch_brief",
   context = "We are launching an AI-first analytics tool.",
-  add     = "Audience: startup founders who use R every day.",
+  add     = "Audience: crazy data people who are in a serious relationship with R.",
   label   = "launch_announcement"
 )
 
@@ -102,7 +101,7 @@ creative_agent <- set_agent(
 
 # Pipe agents directly into generators
 creative_agent |> gen_txt()
-creative_agent |> gen_img(prompt = "An astronaut surfing a wave of binary code, synthwave palette")
+creative_agent |> gen_img(prompt = "Richard Feynman and Michael Jackson playing Final Fantasy IX")
 
 # Inspect everything that is cached
 gen_list()
@@ -121,12 +120,12 @@ gen_interface()
 
 You’ll also find a “Launch Genflow Agent Interface” entry under the RStudio Addins menu for one-click access.
 
-### Image Generation That Captures Imagination
+### Image Generation
 
 ```r
 # Bring your ideas to visual life
 image_result <- gen_img(
-  prompt = "A futuristic cityscape at sunset, hyper-realistic, 4K",
+  prompt = "An image of existence if existence didn't exist and even thinking about existence would make it exist.",
   service = "hf",  # Hugging Face
   model = "black-forest-labs/FLUX.1-schnell",
   h = 1024,
@@ -146,14 +145,14 @@ agent <- get_agent("creative_writer")
 # Optional per-item data
 one_item_each <- list(
   list(topic = "Healthcare analytics", tone = "optimistic"),
-  list(topic = "Retail analytics", tone = "playful"),
-  list(topic = "Financial forecasting", tone = "analytical")
+  list(topic = "Retail analytics", tone = "boring"),
+  list(topic = "Financial forecasting", tone = "cynical")
 )
 
 # Run a batch in parallel – temporary agents are created and cleaned up automatically
 results <- agent |> gen_batch_agent(
   qty = 3,
-  instructions = "Write a 120-word launch announcement tailored to the topic and tone.",
+  instructions = "Write a 120-word launch announcement of a atomic bomb made of gummy bears.",
   one_item_each = one_item_each,
   directory = "generated_content"
 )
@@ -219,7 +218,7 @@ agent <- get_agent("creative_writer")
 
 # Generate both narrative and visuals for your reports
 copy <- agent |> gen_txt()
-visual <- agent |> gen_img(prompt = "A neon data stream flowing through a city skyline")
+visual <- agent |> gen_img(prompt = "Millions of rubber ducks blitzkrieging Geneva")
 
 # Feed generated assets into downstream analysis, dashboards, and reports
 ```
