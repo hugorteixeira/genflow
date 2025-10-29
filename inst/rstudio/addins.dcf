@@ -1,0 +1,4 @@
+Name: Launch Genflow Agent Interface
+Description: Start the Genflow agent management UI.
+Binding: gen_interface
+Interactive: true

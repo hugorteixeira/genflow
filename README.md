@@ -65,6 +65,7 @@ result <- gen_txt(
   context = "Explain quantum computing in simple terms",
   service = "openai",
   model = "gpt-4o-mini",
+  reasoning = "high",
   temp = 0.7
 )
 
@@ -111,6 +112,14 @@ Agents, setups, and content are stored under `options("genflow.cache_dir")`
 (defaults to `tools::R_user_dir("genflow", "cache")`), so they survive across R
 sessions. A simple `get_agent("creative_writer")` in a future session gives you
 a ready-to-use list that pipes straight into any generator.
+
+Need an interface? Launch the interactive agent manager anytime with:
+
+```r
+gen_interface()
+```
+
+You’ll also find a “Launch Genflow Agent Interface” entry under the RStudio Addins menu for one-click access.
 
 ### Image Generation That Captures Imagination
 
@@ -198,6 +207,7 @@ graph TD
 | `mv_*()` / `rm_*()` | Rename or delete cached setups, content, or agents |
 | `gen_list()` | Summarize everything saved in the cache directory |
 | `gen_batch_agent()` | Run batch workloads directly from a `genflow_agent` |
+| `gen_interface()` | Launch the interactive agent management interface (also available as an RStudio addin) |
 
 ## 📊 Workflow Integration
 

@@ -3492,4 +3492,4 @@ server <- function(input, output, session) {
   output$agent_override_fields <- renderUI(.render_kv_fields(agent_state$overrides, "agent_override", input, session))
 }
 
-shinyApp(ui = ui, server = server)
+genflow_agent_app <- shinyApp(ui = ui, server = server)
