@@ -339,7 +339,7 @@
     stop("Environment variable HUGGINGFACE_API_TOKEN not set.")
   }
   # Using the TGI OpenAI-compatible endpoint format
-  api_url <- paste0("https://api-inference.hf.co/models/", model) # Base URL
+  api_url <- paste0("https://router.huggingface.co/hf-inference/", model) # Base URL
   # Check if the model supports the chat completions endpoint
   # Some models might only support /generate or require a specific task endpoint
   # Assuming /v1/chat/completions is supported by the chosen model
