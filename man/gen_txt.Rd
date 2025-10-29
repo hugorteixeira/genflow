@@ -22,7 +22,8 @@ gen_txt(context, ...)
   tools = FALSE,
   my_tools = NULL,
   timeout_api = 240,
-  null_repeat = TRUE
+  null_repeat = TRUE,
+  ...
 )
 
 \method{gen_txt}{genflow_agent}(context, ...)

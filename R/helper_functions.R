@@ -476,7 +476,7 @@
 }
 #' Detect agent suffix style (internal)
 #'
-#' Checks whether agent variables exist as alphabetic (a,b,…) or numeric (1,2,…)
+#' Checks whether agent variables exist as alphabetic (a,b,...) or numeric (1,2,...)
 #' suffixes in `.GlobalEnv`.
 #'
 #' @param agent_prefix Prefix for agent variables.

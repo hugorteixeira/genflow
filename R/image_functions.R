@@ -34,7 +34,7 @@ gen_img <- function(prompt, ...) {
 #' @rdname gen_img
 #' @method gen_img default
 #' @export
-gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, service = "hf", model = "black-forest-labs/FLUX.1-schnell", temp = 5, steps = 18, h = 1072, y = 1920) { # Ensure 'y' matches internal calls (or use 'w')
+gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, service = "hf", model = "black-forest-labs/FLUX.1-schnell", temp = 5, steps = 18, h = 1072, y = 1920, ...) { # Ensure 'y' matches internal calls (or use 'w')
 
   start_time <- Sys.time()
 

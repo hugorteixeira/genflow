@@ -583,7 +583,8 @@ gen_txt.default <- function(
   tools = FALSE,
   my_tools = NULL,
   timeout_api = 240,
-  null_repeat = TRUE
+  null_repeat = TRUE,
+  ...
 ) {
   # Helpers
   is_emptyish <- function(x) {

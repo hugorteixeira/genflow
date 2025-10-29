@@ -1,9 +1,3 @@
-library(shiny)
-library(bslib)
-library(DT)
-library(readr)
-library(jsonlite)
-
 `%||%` <- function(x, y) if (!is.null(x)) x else y
 
 .MODEL_PROVIDER_LABELS <- c(
@@ -321,7 +315,7 @@ library(jsonlite)
     return("(empty)")
   }
   if (nchar(txt) > max_chars) {
-    paste0(substr(txt, 1, max_chars), "…")
+    paste0(substr(txt, 1, max_chars), "...")
   } else {
     txt
   }
@@ -936,7 +930,7 @@ library(jsonlite)
   }
   values <- c(setup$service %||% "", setup$model %||% "", setup$type %||% "")
   values <- values[nzchar(values)]
-  if (length(values)) paste(values, collapse = " • ") else ""
+  if (length(values)) paste(values, collapse = " * ") else ""
 }
 
 .content_summary_text <- function(content) {
@@ -957,7 +951,7 @@ library(jsonlite)
   }
   values <- c(agent$service %||% "", agent$model %||% "", agent$sname %||% "", agent$cname %||% "")
   values <- values[nzchar(values)]
-  if (length(values)) paste(values, collapse = " • ") else ""
+  if (length(values)) paste(values, collapse = " * ") else ""
 }
 
 .build_content_fields <- function(content_list = list()) {
@@ -1139,7 +1133,7 @@ server <- function(input, output, session) {
         provider_label <- .model_label(fav_row$service[1])
         type_label <- fav_row$type[which(nzchar(fav_row$type))[1]]
         if (!is.null(type_label) && nzchar(type_label)) {
-          sprintf("%s (%s · %s)", m, provider_label, type_label)
+          sprintf("%s (%s - %s)", m, provider_label, type_label)
         } else {
           sprintf("%s (%s)", m, provider_label)
         }
@@ -1274,7 +1268,7 @@ server <- function(input, output, session) {
         provider_label <- .model_label(fav_row$service[1])
         type_label <- fav_row$type[which(nzchar(fav_row$type))[1]]
         if (!is.null(type_label) && nzchar(type_label)) {
-          sprintf("%s (%s · %s)", m, provider_label, type_label)
+          sprintf("%s (%s - %s)", m, provider_label, type_label)
         } else {
           sprintf("%s (%s)", m, provider_label)
         }
@@ -1873,7 +1867,7 @@ server <- function(input, output, session) {
         order = list(list(2, "asc")),
         columnDefs = list(list(orderable = FALSE, targets = 0))
       ),
-      callback = JS(
+      callback = DT::JS(
         "table.on('click', 'span.favorite-star', function() {",
         "  var el = $(this);",
         "  var service = el.data('service');",

@@ -44,6 +44,8 @@ to the agent's \code{name}, \code{sname}, or "agent".}
 \item{always_fix_errors}{Logical; when TRUE (default) reuses successful results
 from the previous run with the same signature and only re-executes failed
 indices until the batch completes without errors.}
+
+\item{...}{Additional arguments passed to \code{gen_batch()}.}
 }
 \value{
 The result of \code{gen_batch()}.

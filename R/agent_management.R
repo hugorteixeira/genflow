@@ -68,12 +68,12 @@
   }
   values <- as.character(x)
   if (length(values) > 3) {
-    values <- c(values[1:3], "…")
+    values <- c(values[1:3], "...")
   }
   txt <- paste(values, collapse = ",")
   txt <- gsub("\n", " ", txt)
   if (nchar(txt) > max_chars) {
-    paste0(substr(txt, 1, max_chars), "…")
+    paste0(substr(txt, 1, max_chars), "...")
   } else {
     txt
   }

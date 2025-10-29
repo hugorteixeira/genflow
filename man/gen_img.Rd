@@ -18,7 +18,8 @@ gen_img(prompt, ...)
   temp = 5,
   steps = 18,
   h = 1072,
-  y = 1920
+  y = 1920,
+  ...
 )
 
 \method{gen_img}{genflow_agent}(prompt, ...)

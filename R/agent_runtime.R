@@ -106,6 +106,7 @@
 #' @inheritParams gen_batch
 #' @param agent_prefix Optional prefix used for the temporary agents. Defaults
 #'   to the agent's `name`, `sname`, or "agent".
+#' @param ... Additional arguments passed to `gen_batch()`.
 #' @return The result of `gen_batch()`.
 #' @export
 gen_batch_agent <- function(agent,
