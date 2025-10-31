@@ -6,19 +6,19 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 <!-- badges: end -->
 
-> **Flow into the Future of AI**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
+> **Easy generative AI inference for R**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
 
-Dive into the next generation of AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Hugging Face, Replicate, and FAL.
+Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Hugging Face, Replicate, and FAL.
 
 ## ✨ Why genflow?
 
-- 🚀 **Blazing Fast Integration**: Connect to multiple AI providers in seconds, not hours
+- 🚀 **Fast Integration**: Connect to multiple AI providers in seconds, not hours
 - 🎯 **Intentional Design**: Built specifically for R workflows and data science pipelines
-- 🌐 **Universal Provider Support**: OpenAI, OpenRouter, Hugging Face, Replicate, FAL, and more
-- 📝 **Multi-Modal Mastery**: Text generation, image creation, audio processing, and beyond
-- ⚡ **Optimized Performance**: Batch processing and parallel execution for maximum throughput
+- 🌐 **Popular Provider Support**: OpenAI, OpenRouter, Hugging Face, Replicate, FAL, and more
+- 📝 **Multi-Modal Inference**: Text generation, image creation, audio processing, and beyond
+- ⚡ **Optimized Performance**: Batch processing and parallel execution for faster tasks
 - 📊 **Smart Analytics**: Built-in tracking, logging, and performance metrics
-- 🔄 **Seamless Updates**: Automatic model discovery and management
+- 🔄 **Easy Model Updates**: Automatic model discovery and management
 - 👁️ **Integrated Viewer**: Built-in visualization for all generated content
 - 🧠 **Reusable Agents**: Define setups, content, and agents once, then reuse them across sessions with a single pipe
 
@@ -116,7 +116,11 @@ Need an interface? Launch the interactive agent manager anytime with:
 
 ```r
 gen_interface()
+
 ```
+
+![Easier to use, save, re-use and setup!](./gen_interface.png)
+
 
 You’ll also find a “Launch Genflow Agent Interface” entry under the RStudio Addins menu for one-click access.
 
@@ -136,7 +140,11 @@ image_result <- gen_img(
 gen_view(image_result)
 ```
 
-### Supercharged Batch Processing
+### Easy Object Visualization
+
+![Just use function gen_view(object1,object2,object3,etc)](./gen_view.png)
+
+### Batch Processing
 
 ```r
 # Load or build an agent
@@ -247,11 +255,9 @@ We welcome contributions! Whether it's:
 - 📝 Documentation improvements
 - 🎯 Performance optimizations
 
-Check out our [Contributing Guidelines](CONTRIBUTING.md) to get started.
-
 ## 📄 License
 
-This project is licensed under the GPL-3 License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GPL-3 License.
 
 ## 🙏 Acknowledgments
 
@@ -259,7 +265,7 @@ Special thanks to the AI provider communities and the R ecosystem for making gen
 
 ## 👨‍💻 About the Author
 
-Hi, I'm Hugo. I build tools around trading, backtesting, and generative models in R to iterate on strategies faster and create amazing things. If you find genflow useful (or want to suggest improvements!), feedback is always welcome.
+Hi, I'm Hugo. I build tools around trading, backtesting, and generative models in R to iterate on strategies faster and create cool stuff. If you find genflow useful (or want to suggest improvements!), feedback is always welcome.
 
 ---
 
