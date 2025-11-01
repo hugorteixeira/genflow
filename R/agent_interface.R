@@ -943,6 +943,19 @@
     return("")
   }
   values <- c(setup$service %||% "", setup$model %||% "", setup$type %||% "")
+  temp_value <- setup$temp %||% setup$temperature %||% setup$Temp
+  if (!is.null(temp_value) && length(temp_value)) {
+    temp_scalar <- temp_value[[1]]
+    if (!is.null(temp_scalar) && !is.na(temp_scalar) && nzchar(as.character(temp_scalar))) {
+      temp_numeric <- suppressWarnings(as.numeric(temp_scalar))
+      temp_label <- if (!is.na(temp_numeric)) {
+        sprintf("Temp %s", format(temp_numeric, trim = TRUE, digits = 3))
+      } else {
+        sprintf("Temp %s", as.character(temp_scalar))
+      }
+      values <- c(values, temp_label)
+    }
+  }
   values <- values[nzchar(values)]
   if (length(values)) paste(values, collapse = " * ") else ""
 }
