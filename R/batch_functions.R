@@ -329,6 +329,27 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
   if (missing(agent_prefix)) stop("'agent_prefix' is required.")
   if (!is.numeric(qty) || qty < 1) stop("'qty' must be a positive integer.")
   qty <- as.integer(qty)
+  add_missing <- missing(add)
+  add_img_missing <- missing(add_img)
+  one_item_each_missing <- missing(one_item_each)
+
+  if (is.list(instructions)) {
+    instructions_obj <- instructions
+    context_candidate <- instructions_obj$context %||% instructions_obj$instructions %||% NULL
+    if (!is.null(context_candidate)) {
+      message("Detected list-based instructions. Extracting context and optional fields...")
+      instructions <- context_candidate
+      if ((add_missing || is.null(add)) && !is.null(instructions_obj$add)) {
+        add <- instructions_obj$add
+      }
+      if ((add_img_missing || is.null(add_img)) && !is.null(instructions_obj$add_img)) {
+        add_img <- instructions_obj$add_img
+      }
+      if ((one_item_each_missing || is.null(one_item_each)) && !is.null(instructions_obj$one_item_each)) {
+        one_item_each <- instructions_obj$one_item_each
+      }
+    }
+  }
 
   n_cores <- min(qty, max(1, parallel::detectCores() - 1))
   cat("Preparing to execute", qty, "tasks with prefix '", agent_prefix, "' using", n_cores, "cores.\n")
