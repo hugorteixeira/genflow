@@ -8,6 +8,13 @@
   replicate = "Replicate"
 )
 
+.MODEL_SPECIAL_LABELS <- c(
+  all = "All providers",
+  favorites = "Favorites"
+)
+
+.MODEL_ALL_OPTION <- "all"
+
 .MODEL_PROVIDERS <- names(.MODEL_PROVIDER_LABELS)
 .DEFAULT_MODEL_SERVICE <- "openai"
 .DEFAULT_MODEL_NAME <- "gpt-5"
@@ -123,7 +130,8 @@
     return(character())
   }
   svc <- tolower(service)
-  labels <- .MODEL_PROVIDER_LABELS[svc]
+  label_lookup <- c(.MODEL_PROVIDER_LABELS, .MODEL_SPECIAL_LABELS)
+  labels <- label_lookup[svc]
   defaults <- tools::toTitleCase(service)
   labels[is.na(labels)] <- defaults[is.na(labels)]
   unname(labels)
@@ -408,6 +416,9 @@
   .gf-section-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
   .gf-section-header h3 { margin: 0; }
   #main_tabs .nav-link { font-weight: 600; }
+  .gf-cell-scroll { max-height: 96px; overflow-y: auto; padding-right: 4px; white-space: normal; word-break: break-word; }
+  .gf-cell-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  .gf-cell-scroll::-webkit-scrollbar-thumb { background: rgba(79, 70, 229, 0.35); border-radius: 4px; }
   .favorite-star { cursor: pointer; color: #cfd8f3; font-size: 1.1rem; transition: color 0.15s ease-in-out; }
   .favorite-star:hover { color: #facc15; }
   .favorite-star.is-fav { color: #facc15; }
@@ -691,7 +702,10 @@
               selectInput(
                 "models_view_provider",
                 NULL,
-                choices = setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS)),
+                choices = c(
+                  setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)),
+                  setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
+                ),
                 selected = .DEFAULT_MODEL_SERVICE
               )
             ),
@@ -1414,7 +1428,10 @@ server <- function(input, output, session) {
     has_favs <- nrow(favs) > 0
     models_state$favorites_present <- has_favs
     base_provider_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
-    view_choices <- if (has_favs) c(setNames("favorites", "Favorites"), base_provider_choices) else base_provider_choices
+    view_choices <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_provider_choices)
+    if (has_favs) {
+      view_choices <- c(setNames("favorites", .model_label("favorites")), view_choices)
+    }
     current_view <- input$models_view_provider
     if (has_favs && !prev_has) {
       current_view <- "favorites"
@@ -1663,9 +1680,9 @@ server <- function(input, output, session) {
     }
     models_state$favorites_present <- nrow(models_state$favorites) > 0
     base_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
-    provider_choices_view <- base_choices
+    provider_choices_view <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_choices)
     if (models_state$favorites_present) {
-      provider_choices_view <- c(setNames("favorites", "Favorites"), provider_choices_view)
+      provider_choices_view <- c(setNames("favorites", .model_label("favorites")), provider_choices_view)
     }
     provider_choices_update <- base_choices
     current_view <- input$models_view_provider
@@ -1783,7 +1800,8 @@ server <- function(input, output, session) {
       return("No models cached yet. Use the controls on the left to fetch provider model lists.")
     }
     provider <- input$models_view_provider %||% .DEFAULT_MODEL_SERVICE
-    if (identical(tolower(provider), "favorites")) {
+    provider_lower <- tolower(provider)
+    if (identical(provider_lower, "favorites")) {
       favs <- models_state$favorites
       fav_count <- nrow(favs)
       if (!fav_count) {
@@ -1796,15 +1814,27 @@ server <- function(input, output, session) {
     model_values <- catalog$model
     model_values[is.na(model_values)] <- ""
     total <- sum(nzchar(model_values))
-    provider_mask <- tolower(catalog$service) == tolower(provider)
+    if (identical(provider_lower, .MODEL_ALL_OPTION)) {
+      services <- tolower(catalog$service)
+      services[is.na(services)] <- ""
+      providers <- unique(services[nzchar(services)])
+      provider_count <- length(providers)
+      return(sprintf(
+        "%s: %d cached model(s) across %d provider(s).",
+        .model_label(provider_lower),
+        total,
+        provider_count
+      ))
+    }
+    provider_mask <- tolower(catalog$service) == provider_lower
     provider_models <- model_values[provider_mask]
     provider_count <- if (length(provider_models)) sum(nzchar(provider_models)) else 0
     sprintf(
       "%s models available: %d total cached (%d from %s).",
-      .model_label(provider),
+      .model_label(provider_lower),
       total,
       provider_count,
-      .model_label(provider)
+      .model_label(provider_lower)
     )
   })
 
@@ -1829,6 +1859,8 @@ server <- function(input, output, session) {
       if (!"description" %in% names(merged)) merged$description <- ""
       merged$description <- if ("description.catalog" %in% names(merged)) ifelse(nzchar(merged$description), merged$description, merged$description.catalog %||% "") else merged$description %||% ""
       catalog <- merged[, c("service", "model", "type", "pricing", "description"), drop = FALSE]
+    } else if (identical(provider_lower, .MODEL_ALL_OPTION)) {
+      catalog <- catalog_all
     } else {
       catalog <- catalog_all[tolower(catalog_all$service) == provider_lower, , drop = FALSE]
     }
@@ -1855,13 +1887,36 @@ server <- function(input, output, session) {
       ifelse(is_fav, "Remove from favorites", "Add to favorites")
     )
 
+    pricing_raw <- if ("pricing" %in% names(catalog)) catalog$pricing else rep("", nrow(catalog))
+    description_raw <- if ("description" %in% names(catalog)) catalog$description else rep("", nrow(catalog))
+    format_scroll_cell <- function(values) {
+      if (!length(values)) {
+        return(character())
+      }
+      vapply(values, function(val) {
+        if (is.null(val) || !length(val)) {
+          return("")
+        }
+        scalar <- val[[1]]
+        if (is.null(scalar) || (length(scalar) && is.na(scalar))) {
+          return("")
+        }
+        text <- as.character(scalar)
+        if (!nzchar(text)) {
+          ""
+        } else {
+          sprintf("<div class='gf-cell-scroll'>%s</div>", htmltools::htmlEscape(text))
+        }
+      }, character(1), USE.NAMES = FALSE)
+    }
     display <- data.frame(
       Favorite = star_html,
+      FavoriteRank = as.integer(is_fav),
       Provider = .model_label(row_service),
       Model = row_model,
       Type = row_type,
-      Pricing = if ("pricing" %in% names(catalog)) ifelse(is.na(catalog$pricing), "", catalog$pricing) else "",
-      Description = if ("description" %in% names(catalog)) ifelse(is.na(catalog$description), "", catalog$description) else "",
+      Pricing = format_scroll_cell(pricing_raw),
+      Description = format_scroll_cell(description_raw),
       stringsAsFactors = FALSE
     )
 
@@ -1873,8 +1928,13 @@ server <- function(input, output, session) {
       options = list(
         pageLength = 10,
         autoWidth = TRUE,
-        order = list(list(2, "asc")),
-        columnDefs = list(list(orderable = FALSE, targets = 0))
+        order = list(list(0, "desc"), list(3, "asc")),
+        columnDefs = list(
+          list(visible = FALSE, searchable = FALSE, targets = 1),
+          list(orderData = 1, orderSequence = c("desc", "asc"), targets = 0)
+        ),
+        stateSave = TRUE,
+        stateDuration = 0
       ),
       callback = DT::JS(
         "table.on('click', 'span.favorite-star', function() {",
