@@ -1046,14 +1046,20 @@ server <- function(input, output, session) {
     desired_type = NULL,
     thinking_enabled = FALSE,
     thinking_level = .DEFAULT_THINKING_LEVEL,
-    loading = FALSE
+    loading = FALSE,
+    draft_name = NULL,
+    draft_summary = NULL,
+    draft_source = NULL
   )
 
   content_state <- reactiveValues(
     list = character(),
     selected = NULL,
     original = NULL,
-    fields = .build_content_fields(list())
+    fields = .build_content_fields(list()),
+    draft_name = NULL,
+    draft_summary = NULL,
+    draft_source = NULL
   )
 
   agent_state <- reactiveValues(
@@ -1067,7 +1073,10 @@ server <- function(input, output, session) {
     custom_desired_service = NULL,
     custom_desired_model = NULL,
     custom_desired_type = NULL,
-    loading = FALSE
+    loading = FALSE,
+    draft_name = NULL,
+    draft_summary = NULL,
+    draft_source = NULL
   )
 
   setup_summary_cache <- new.env(parent = emptyenv())
@@ -1924,22 +1933,35 @@ server <- function(input, output, session) {
   })
 
   refresh_setup_list <- function(selected = NULL) {
-    choices <- sort(.load_setup_names())
-    setup_state$list <- choices
+    saved_choices <- sort(.load_setup_names())
+    draft_name <- isolate(setup_state$draft_name)
+    draft_summary <- isolate(setup_state$draft_summary)
+    draft_summary <- draft_summary %||% ""
+    combined_choices <- saved_choices
+    unsaved_names <- character()
+    if (!is.null(draft_name) && nzchar(draft_name) && !(draft_name %in% saved_choices)) {
+      combined_choices <- sort(c(saved_choices, draft_name))
+      unsaved_names <- draft_name
+    } else if (!is.null(draft_name) && draft_name %in% saved_choices) {
+      setup_state$draft_name <- NULL
+      setup_state$draft_summary <- NULL
+      setup_state$draft_source <- NULL
+    }
+    setup_state$list <- combined_choices
     summary_lookup <- setNames(character(0), character(0))
-    if (!length(choices)) {
+    if (!length(saved_choices)) {
       existing_keys <- ls(envir = setup_summary_cache, all.names = TRUE)
       if (length(existing_keys)) {
         rm(list = existing_keys, envir = setup_summary_cache)
       }
     } else {
       existing_keys <- ls(envir = setup_summary_cache, all.names = TRUE)
-      to_drop <- setdiff(existing_keys, choices)
+      to_drop <- setdiff(existing_keys, saved_choices)
       if (length(to_drop)) {
         rm(list = to_drop, envir = setup_summary_cache)
       }
-      summary_lookup <- setNames(character(length(choices)), choices)
-      for (name in choices) {
+      summary_lookup <- setNames(character(length(saved_choices)), saved_choices)
+      for (name in saved_choices) {
         if (exists(name, envir = setup_summary_cache, inherits = FALSE)) {
           summary_lookup[[name]] <- setup_summary_cache[[name]]
         } else {
@@ -1952,47 +1974,92 @@ server <- function(input, output, session) {
         }
       }
     }
+    if (length(unsaved_names)) {
+      unsaved_summary <- draft_summary
+      if (!nzchar(unsaved_summary)) {
+        source_label <- isolate(setup_state$draft_source)
+        source_label <- source_label %||% ""
+        unsaved_summary <- if (nzchar(source_label)) {
+          sprintf("Unsaved copy of '%s'. Save to keep it.", source_label)
+        } else {
+          "Unsaved copy. Save to keep it."
+        }
+      }
+      summary_lookup <- c(summary_lookup, setNames(unsaved_summary, draft_name))
+    }
     output$setup_list_ui <- renderUI({
-      if (!length(choices)) {
+      if (!length(combined_choices)) {
         return(div(class = "gf-empty", "No setups saved yet."))
       }
       active <- isolate(setup_state$selected)
-      tagList(lapply(choices, function(name) {
+      if (is.null(active) && length(unsaved_names)) {
+        active <- isolate(setup_state$draft_name)
+      }
+      tagList(lapply(combined_choices, function(name) {
+        is_unsaved <- length(unsaved_names) && name %in% unsaved_names
         summary_text <- summary_lookup[[name]] %||% ""
-        div(
-          class = paste("gf-entity-item", if (!is.null(active) && active == name) "active"),
-          onclick = sprintf(
+        item_classes <- c("gf-entity-item")
+        if (!is.null(active) && identical(active, name)) {
+          item_classes <- c(item_classes, "active")
+        }
+        if (is_unsaved) {
+          item_classes <- c(item_classes, "gf-entity-item-unsaved")
+        }
+        name_children <- list(name)
+        if (is_unsaved) {
+          name_children <- c(name_children, list(span(class = "gf-pill", "Unsaved copy")))
+        }
+        name_node <- do.call(span, c(list(class = "gf-entity-name"), name_children))
+        summary_node <- if (nzchar(summary_text)) div(class = "gf-entity-summary", summary_text) else NULL
+        item_args <- c(
+          list(class = paste(item_classes, collapse = " ")),
+          Filter(Negate(is.null), list(name_node, summary_node))
+        )
+        if (!is_unsaved) {
+          item_args$onclick <- sprintf(
             "Shiny.setInputValue('%s', {name: '%s', nonce: Math.random()}, {priority: 'event'});",
             "setup_select_trigger", name
-          ),
-          span(class = "gf-entity-name", name),
-          if (nzchar(summary_text)) div(class = "gf-entity-summary", summary_text)
-        )
+          )
+        }
+        do.call(div, item_args)
       }))
     })
-    updateSelectInput(session, "agent_setup_select", choices = c("", choices))
+    updateSelectInput(session, "agent_setup_select", choices = c("", saved_choices))
     if (!is.null(selected)) {
       setup_state$selected <- selected
     }
   }
 
   refresh_content_list <- function(selected = NULL) {
-    choices <- sort(.load_content_names())
-    content_state$list <- choices
+    saved_choices <- sort(.load_content_names())
+    draft_name <- isolate(content_state$draft_name)
+    draft_summary <- isolate(content_state$draft_summary)
+    draft_summary <- draft_summary %||% ""
+    combined_choices <- saved_choices
+    unsaved_names <- character()
+    if (!is.null(draft_name) && nzchar(draft_name) && !(draft_name %in% saved_choices)) {
+      combined_choices <- sort(c(saved_choices, draft_name))
+      unsaved_names <- draft_name
+    } else if (!is.null(draft_name) && draft_name %in% saved_choices) {
+      content_state$draft_name <- NULL
+      content_state$draft_summary <- NULL
+      content_state$draft_source <- NULL
+    }
+    content_state$list <- combined_choices
     preview_lookup <- setNames(character(0), character(0))
-    if (!length(choices)) {
+    if (!length(saved_choices)) {
       existing_keys <- ls(envir = content_preview_cache, all.names = TRUE)
       if (length(existing_keys)) {
         rm(list = existing_keys, envir = content_preview_cache)
       }
     } else {
       existing_keys <- ls(envir = content_preview_cache, all.names = TRUE)
-      to_drop <- setdiff(existing_keys, choices)
+      to_drop <- setdiff(existing_keys, saved_choices)
       if (length(to_drop)) {
         rm(list = to_drop, envir = content_preview_cache)
       }
-      preview_lookup <- setNames(character(length(choices)), choices)
-      for (name in choices) {
+      preview_lookup <- setNames(character(length(saved_choices)), saved_choices)
+      for (name in saved_choices) {
         if (exists(name, envir = content_preview_cache, inherits = FALSE)) {
           preview_lookup[[name]] <- content_preview_cache[[name]]
         } else {
@@ -2005,47 +2072,92 @@ server <- function(input, output, session) {
         }
       }
     }
+    if (length(unsaved_names)) {
+      unsaved_summary <- draft_summary
+      if (!nzchar(unsaved_summary)) {
+        source_label <- isolate(content_state$draft_source)
+        source_label <- source_label %||% ""
+        unsaved_summary <- if (nzchar(source_label)) {
+          sprintf("Unsaved copy of '%s'. Save to keep it.", source_label)
+        } else {
+          "Unsaved copy. Save to keep it."
+        }
+      }
+      preview_lookup <- c(preview_lookup, setNames(unsaved_summary, draft_name))
+    }
     output$content_list_ui <- renderUI({
-      if (!length(choices)) {
+      if (!length(combined_choices)) {
         return(div(class = "gf-empty", "No content saved yet."))
       }
       active <- isolate(content_state$selected)
-      tagList(lapply(choices, function(name) {
+      if (is.null(active) && length(unsaved_names)) {
+        active <- isolate(content_state$draft_name)
+      }
+      tagList(lapply(combined_choices, function(name) {
+        is_unsaved <- length(unsaved_names) && name %in% unsaved_names
         preview <- preview_lookup[[name]] %||% ""
-        div(
-          class = paste("gf-entity-item", if (!is.null(active) && active == name) "active"),
-          onclick = sprintf(
+        item_classes <- c("gf-entity-item")
+        if (!is.null(active) && identical(active, name)) {
+          item_classes <- c(item_classes, "active")
+        }
+        if (is_unsaved) {
+          item_classes <- c(item_classes, "gf-entity-item-unsaved")
+        }
+        name_children <- list(name)
+        if (is_unsaved) {
+          name_children <- c(name_children, list(span(class = "gf-pill", "Unsaved copy")))
+        }
+        name_node <- do.call(span, c(list(class = "gf-entity-name"), name_children))
+        preview_node <- if (nzchar(preview)) div(class = "gf-entity-summary", preview) else NULL
+        item_args <- c(
+          list(class = paste(item_classes, collapse = " ")),
+          Filter(Negate(is.null), list(name_node, preview_node))
+        )
+        if (!is_unsaved) {
+          item_args$onclick <- sprintf(
             "Shiny.setInputValue('%s', {name: '%s', nonce: Math.random()}, {priority: 'event'});",
             "content_select_trigger", name
-          ),
-          span(class = "gf-entity-name", name),
-          if (nzchar(preview)) div(class = "gf-entity-summary", preview)
-        )
+          )
+        }
+        do.call(div, item_args)
       }))
     })
-    updateSelectInput(session, "agent_content_select", choices = c("", choices))
+    updateSelectInput(session, "agent_content_select", choices = c("", saved_choices))
     if (!is.null(selected)) {
       content_state$selected <- selected
     }
   }
 
   refresh_agent_list <- function(selected = NULL) {
-    choices <- sort(.load_agent_names())
-    agent_state$list <- choices
+    saved_choices <- sort(.load_agent_names())
+    draft_name <- isolate(agent_state$draft_name)
+    draft_summary <- isolate(agent_state$draft_summary)
+    draft_summary <- draft_summary %||% ""
+    combined_choices <- saved_choices
+    unsaved_names <- character()
+    if (!is.null(draft_name) && nzchar(draft_name) && !(draft_name %in% saved_choices)) {
+      combined_choices <- sort(c(saved_choices, draft_name))
+      unsaved_names <- draft_name
+    } else if (!is.null(draft_name) && draft_name %in% saved_choices) {
+      agent_state$draft_name <- NULL
+      agent_state$draft_summary <- NULL
+      agent_state$draft_source <- NULL
+    }
+    agent_state$list <- combined_choices
     summary_lookup <- setNames(character(0), character(0))
-    if (!length(choices)) {
+    if (!length(saved_choices)) {
       existing_keys <- ls(envir = agent_summary_cache, all.names = TRUE)
       if (length(existing_keys)) {
         rm(list = existing_keys, envir = agent_summary_cache)
       }
     } else {
       existing_keys <- ls(envir = agent_summary_cache, all.names = TRUE)
-      to_drop <- setdiff(existing_keys, choices)
+      to_drop <- setdiff(existing_keys, saved_choices)
       if (length(to_drop)) {
         rm(list = to_drop, envir = agent_summary_cache)
       }
-      summary_lookup <- setNames(character(length(choices)), choices)
-      for (name in choices) {
+      summary_lookup <- setNames(character(length(saved_choices)), saved_choices)
+      for (name in saved_choices) {
         if (exists(name, envir = agent_summary_cache, inherits = FALSE)) {
           summary_lookup[[name]] <- agent_summary_cache[[name]]
         } else {
@@ -2058,22 +2170,54 @@ server <- function(input, output, session) {
         }
       }
     }
+    if (length(unsaved_names)) {
+      unsaved_summary <- draft_summary
+      if (!nzchar(unsaved_summary)) {
+        source_label <- isolate(agent_state$draft_source)
+        source_label <- source_label %||% ""
+        unsaved_summary <- if (nzchar(source_label)) {
+          sprintf("Unsaved copy of '%s'. Save to keep it.", source_label)
+        } else {
+          "Unsaved copy. Save to keep it."
+        }
+      }
+      summary_lookup <- c(summary_lookup, setNames(unsaved_summary, draft_name))
+    }
     output$agent_list_ui <- renderUI({
-      if (!length(choices)) {
+      if (!length(combined_choices)) {
         return(div(class = "gf-empty", "No agents saved yet."))
       }
       active <- isolate(agent_state$selected)
-      tagList(lapply(choices, function(name) {
+      if (is.null(active) && length(unsaved_names)) {
+        active <- isolate(agent_state$draft_name)
+      }
+      tagList(lapply(combined_choices, function(name) {
+        is_unsaved <- length(unsaved_names) && name %in% unsaved_names
         summary_text <- summary_lookup[[name]] %||% ""
-        div(
-          class = paste("gf-entity-item", if (!is.null(active) && active == name) "active"),
-          onclick = sprintf(
+        item_classes <- c("gf-entity-item")
+        if (!is.null(active) && identical(active, name)) {
+          item_classes <- c(item_classes, "active")
+        }
+        if (is_unsaved) {
+          item_classes <- c(item_classes, "gf-entity-item-unsaved")
+        }
+        name_children <- list(name)
+        if (is_unsaved) {
+          name_children <- c(name_children, list(span(class = "gf-pill", "Unsaved copy")))
+        }
+        name_node <- do.call(span, c(list(class = "gf-entity-name"), name_children))
+        summary_node <- if (nzchar(summary_text)) div(class = "gf-entity-summary", summary_text) else NULL
+        item_args <- c(
+          list(class = paste(item_classes, collapse = " ")),
+          Filter(Negate(is.null), list(name_node, summary_node))
+        )
+        if (!is_unsaved) {
+          item_args$onclick <- sprintf(
             "Shiny.setInputValue('%s', {name: '%s', nonce: Math.random()}, {priority: 'event'});",
             "agent_select_trigger", name
-          ),
-          span(class = "gf-entity-name", name),
-          if (nzchar(summary_text)) div(class = "gf-entity-summary", summary_text)
-        )
+          )
+        }
+        do.call(div, item_args)
       }))
     })
     if (!is.null(selected)) agent_state$selected <- selected
@@ -2152,6 +2296,9 @@ server <- function(input, output, session) {
     if (is.null(name) || !nzchar(name)) {
       return()
     }
+    setup_state$draft_name <- NULL
+    setup_state$draft_summary <- NULL
+    setup_state$draft_source <- NULL
     setup_state$loading <- TRUE
     on.exit(
       {
@@ -2192,6 +2339,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "setup_thinking_level", selected = setup_state$thinking_level)
     setup_state$extras <- .build_setup_extras(setup)
     output$setup_extra_fields <- renderUI(.render_kv_fields(setup_state$extras, "setup_extra", input, session))
+    refresh_setup_list(selected = name)
   }
 
   observeEvent(input$setup_select_trigger, {
@@ -2205,7 +2353,11 @@ server <- function(input, output, session) {
   observeEvent(input$setup_new, {
     setup_state$selected <- NULL
     setup_state$original <- NULL
+    setup_state$draft_name <- NULL
+    setup_state$draft_summary <- NULL
+    setup_state$draft_source <- NULL
     reset_setup_form()
+    refresh_setup_list()
   })
 
   observeEvent(input$setup_duplicate, {
@@ -2213,10 +2365,15 @@ server <- function(input, output, session) {
       showNotification("Select a setup to duplicate.", type = "warning")
       return()
     }
-    load_setup(setup_state$selected)
-    new_name <- paste0(setup_state$selected, "_copy")
+    source_name <- setup_state$selected
+    load_setup(source_name)
+    new_name <- paste0(source_name, "_copy")
     updateTextInput(session, "setup_name", value = new_name)
+    setup_state$draft_name <- new_name
+    setup_state$draft_source <- source_name
+    setup_state$draft_summary <- sprintf("Unsaved copy of '%s'. Save to keep it.", source_name)
     setup_state$selected <- NULL
+    refresh_setup_list()
   })
 
   observeEvent(input$setup_delete, {
@@ -2412,6 +2569,9 @@ server <- function(input, output, session) {
       }
     }
 
+    setup_state$draft_name <- NULL
+    setup_state$draft_summary <- NULL
+    setup_state$draft_source <- NULL
     setup_state$selected <- name
     setup_state$original <- res
     setup_summary_cache[[name]] <- .setup_summary_text(res)
@@ -2430,6 +2590,9 @@ server <- function(input, output, session) {
     if (is.null(name) || !nzchar(name)) {
       return()
     }
+    content_state$draft_name <- NULL
+    content_state$draft_summary <- NULL
+    content_state$draft_source <- NULL
     content <- tryCatch(get_content(name, assign = FALSE), error = function(e) {
       showNotification(conditionMessage(e), type = "error")
       NULL
@@ -2442,6 +2605,7 @@ server <- function(input, output, session) {
     content_preview_cache[[name]] <- .content_summary_text(content)
     updateTextInput(session, "content_name", value = name)
     reset_content_fields(content)
+    refresh_content_list(selected = name)
   }
 
   observeEvent(input$content_select_trigger, {
@@ -2455,8 +2619,12 @@ server <- function(input, output, session) {
   observeEvent(input$content_new, {
     content_state$selected <- NULL
     content_state$original <- NULL
+    content_state$draft_name <- NULL
+    content_state$draft_summary <- NULL
+    content_state$draft_source <- NULL
     updateTextInput(session, "content_name", value = "")
     reset_content_fields(list())
+    refresh_content_list()
   })
 
   observeEvent(input$content_duplicate, {
@@ -2464,10 +2632,15 @@ server <- function(input, output, session) {
       showNotification("Select content to duplicate.", type = "warning")
       return()
     }
-    load_content(content_state$selected)
-    new_name <- paste0(content_state$selected, "_copy")
+    source_name <- content_state$selected
+    load_content(source_name)
+    new_name <- paste0(source_name, "_copy")
     updateTextInput(session, "content_name", value = new_name)
+    content_state$draft_name <- new_name
+    content_state$draft_source <- source_name
+    content_state$draft_summary <- sprintf("Unsaved copy of '%s'. Save to keep it.", source_name)
     content_state$selected <- NULL
+    refresh_content_list()
   })
 
   observeEvent(input$content_delete, {
@@ -2765,6 +2938,9 @@ server <- function(input, output, session) {
         rm(list = original_name, envir = content_preview_cache)
       }
     }
+    content_state$draft_name <- NULL
+    content_state$draft_summary <- NULL
+    content_state$draft_source <- NULL
     content_state$selected <- name
     content_state$original <- payload
     content_preview_cache[[name]] <- .content_summary_text(res)
@@ -2778,6 +2954,9 @@ server <- function(input, output, session) {
     if (is.null(name) || !nzchar(name)) {
       return()
     }
+    agent_state$draft_name <- NULL
+    agent_state$draft_summary <- NULL
+    agent_state$draft_source <- NULL
     agent_state$loading <- TRUE
     on.exit(
       {
@@ -2848,6 +3027,7 @@ server <- function(input, output, session) {
     agent_state$overrides <- .build_override_fields(agent, setup_fields, content_fields)
     output$agent_setup_extra_fields <- renderUI(.render_kv_fields(agent_state$setup_extras, "agent_setup_extra", input, session))
     output$agent_override_fields <- renderUI(.render_kv_fields(agent_state$overrides, "agent_override", input, session))
+    refresh_agent_list(selected = name)
   }
 
   observeEvent(input$agent_select_trigger, {
@@ -2922,6 +3102,9 @@ server <- function(input, output, session) {
     )
     agent_state$selected <- NULL
     agent_state$original <- NULL
+    agent_state$draft_name <- NULL
+    agent_state$draft_summary <- NULL
+    agent_state$draft_source <- NULL
     updateTextInput(session, "agent_name", value = "")
     updateRadioButtons(session, "agent_setup_mode", selected = "existing")
     updateSelectInput(session, "agent_setup_select", selected = "")
@@ -2951,6 +3134,7 @@ server <- function(input, output, session) {
     output$agent_setup_extra_fields <- renderUI(.render_kv_fields(agent_state$setup_extras, "agent_setup_extra", input, session))
     output$agent_content_fields_ui <- renderUI(.render_content_fields(agent_state$custom_content_fields, "agent_content_field", input))
     output$agent_override_fields <- renderUI(.render_kv_fields(agent_state$overrides, "agent_override", input, session))
+    refresh_agent_list()
   })
 
   observeEvent(input$agent_duplicate, {
@@ -2958,10 +3142,15 @@ server <- function(input, output, session) {
       showNotification("Select an agent to duplicate.", type = "warning")
       return()
     }
-    load_agent(agent_state$selected)
-    new_name <- paste0(agent_state$selected, "_copy")
+    source_name <- agent_state$selected
+    load_agent(source_name)
+    new_name <- paste0(source_name, "_copy")
     updateTextInput(session, "agent_name", value = new_name)
+    agent_state$draft_name <- new_name
+    agent_state$draft_source <- source_name
+    agent_state$draft_summary <- sprintf("Unsaved copy of '%s'. Save to keep it.", source_name)
     agent_state$selected <- NULL
+    refresh_agent_list()
   })
 
   observeEvent(input$agent_delete, {
@@ -3474,6 +3663,9 @@ server <- function(input, output, session) {
       }
     }
 
+    agent_state$draft_name <- NULL
+    agent_state$draft_summary <- NULL
+    agent_state$draft_source <- NULL
     agent_state$selected <- name
     agent_state$original <- res
     agent_summary_cache[[name]] <- .agent_summary_text(res)
