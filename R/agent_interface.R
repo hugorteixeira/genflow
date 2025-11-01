@@ -1076,7 +1076,8 @@ server <- function(input, output, session) {
     loading = FALSE,
     draft_name = NULL,
     draft_summary = NULL,
-    draft_source = NULL
+    draft_source = NULL,
+    skip_service_event = FALSE
   )
 
   content_state <- reactiveValues(
@@ -1158,7 +1159,7 @@ server <- function(input, output, session) {
       choices <- unique(choices)
       if (!length(choices)) {
         updateSelectizeInput(session, "setup_model", choices = character(), selected = "", server = TRUE)
-        setup_state$desired_model <- NULL
+        if (!isTRUE(setup_state$loading)) setup_state$desired_model <- NULL
         return()
       }
       labels <- vapply(choices, function(m) {
@@ -1180,7 +1181,7 @@ server <- function(input, output, session) {
         selected <- choices[[1]]
       }
       updateSelectizeInput(session, "setup_model", choices = named_choices, selected = selected, server = TRUE)
-      setup_state$desired_model <- NULL
+      if (!isTRUE(setup_state$loading)) setup_state$desired_model <- NULL
       return()
     }
 
@@ -1194,7 +1195,7 @@ server <- function(input, output, session) {
     selected <- desired %||% current
     if (!length(choices)) {
       updateSelectizeInput(session, "setup_model", choices = choices, selected = selected %||% "", server = TRUE)
-      setup_state$desired_model <- NULL
+      if (!isTRUE(setup_state$loading)) setup_state$desired_model <- NULL
       return()
     }
     if (!nzchar(selected) || !selected %in% choices) {
@@ -1202,7 +1203,7 @@ server <- function(input, output, session) {
       selected <- .pick_preferred_choice(choices, preferred)
     }
     updateSelectizeInput(session, "setup_model", choices = choices, selected = selected, server = TRUE)
-    setup_state$desired_model <- NULL
+    if (!isTRUE(setup_state$loading)) setup_state$desired_model <- NULL
   }
 
   update_setup_type_choices <- function() {
@@ -1226,14 +1227,14 @@ server <- function(input, output, session) {
       selected <- desired %||% current
       if (!length(choices)) {
         updateSelectizeInput(session, "setup_type", choices = character(), selected = selected %||% "", server = TRUE)
-        setup_state$desired_type <- NULL
+        if (!isTRUE(setup_state$loading)) setup_state$desired_type <- NULL
         return()
       }
       if (!nzchar(selected) || !selected %in% choices) {
         selected <- choices[[1]]
       }
       updateSelectizeInput(session, "setup_type", choices = choices, selected = selected, server = TRUE)
-      setup_state$desired_type <- NULL
+      if (!isTRUE(setup_state$loading)) setup_state$desired_type <- NULL
       return()
     }
     choices <- .model_type_choices(catalog, service, model, include = include_values)
@@ -1246,7 +1247,7 @@ server <- function(input, output, session) {
     selected <- desired %||% current
     if (!length(choices)) {
       updateSelectizeInput(session, "setup_type", choices = character(), selected = selected %||% "", server = TRUE)
-      setup_state$desired_type <- NULL
+      if (!isTRUE(setup_state$loading)) setup_state$desired_type <- NULL
       return()
     }
     if (!nzchar(selected) || !selected %in% choices) {
@@ -1254,7 +1255,7 @@ server <- function(input, output, session) {
       selected <- .pick_preferred_choice(choices, preferred)
     }
     updateSelectizeInput(session, "setup_type", choices = choices, selected = selected, server = TRUE)
-    setup_state$desired_type <- NULL
+    if (!isTRUE(setup_state$loading)) setup_state$desired_type <- NULL
   }
 
   update_agent_service_choices <- function() {
@@ -1409,16 +1410,46 @@ server <- function(input, output, session) {
       if (isTRUE(setup_state$loading)) {
         return()
       }
+      if (isTRUE(setup_state$skip_service_event)) {
+        setup_state$skip_service_event <- FALSE
+        return()
+      }
       svc <- input$setup_service %||% ""
       catalog <- models_state$catalog
+      current_model <- isolate(input$setup_model) %||% ""
       preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
-      model_choices <- .model_model_choices(catalog, svc)
-      new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
-      setup_state$desired_model <- new_model
-      preferred_type <- if (nzchar(new_model) && tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
-      type_choices <- .model_type_choices(catalog, svc, new_model)
-      new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
-      setup_state$desired_type <- new_type
+      desired_model <- setup_state$desired_model %||% current_model
+      model_choices <- .model_model_choices(catalog, svc, include = c(current_model, desired_model))
+      selected_model <- if (nzchar(desired_model) && desired_model %in% model_choices) {
+        desired_model
+      } else if (nzchar(current_model) && current_model %in% model_choices) {
+        current_model
+      } else if (length(model_choices)) {
+        .pick_preferred_choice(model_choices, preferred_model)
+      } else {
+        ""
+      }
+      setup_state$desired_model <- selected_model
+
+      current_type <- isolate(input$setup_type) %||% ""
+      desired_type <- setup_state$desired_type %||% current_type
+      preferred_type <- if (nzchar(selected_model) && tolower(selected_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
+      type_choices <- .model_type_choices(catalog, svc, selected_model, include = c(current_type, desired_type))
+      selected_type <- if (nzchar(desired_type) && desired_type %in% type_choices) {
+        desired_type
+      } else if (nzchar(current_type) && current_type %in% type_choices) {
+        current_type
+      } else if (length(type_choices)) {
+        .pick_preferred_choice(type_choices, preferred_type)
+      } else {
+        ""
+      }
+      setup_state$desired_type <- selected_type
+
+      if (!isTRUE(setup_state$loading)) {
+        if (!nzchar(setup_state$desired_model)) setup_state$desired_model <- NULL
+        if (!nzchar(setup_state$desired_type)) setup_state$desired_type <- NULL
+      }
     },
     priority = 5
   )
@@ -1464,12 +1495,17 @@ server <- function(input, output, session) {
 
     if (has_favs && !prev_has) {
       setup_state$loading <- TRUE
+      session$onFlushed(function() {
+        setup_state$loading <- FALSE
+        setup_state$desired_model <- NULL
+        setup_state$desired_type <- NULL
+      }, once = TRUE)
       setup_state$desired_service <- "favorites"
       setup_state$desired_model <- favs$model[1]
       model_types <- favs$type[favs$model == favs$model[1]]
       model_types <- model_types[nzchar(model_types)]
       setup_state$desired_type <- if (length(model_types)) model_types[[1]] else ""
-      setup_state$loading <- FALSE
+      setup_state$skip_service_event <- TRUE
       update_setup_service_choices()
       update_setup_model_choices()
       update_setup_type_choices()
@@ -1491,10 +1527,15 @@ server <- function(input, output, session) {
     } else if (!has_favs && prev_has) {
       if (identical(tolower(input$setup_service %||% ""), "favorites")) {
         setup_state$loading <- TRUE
+        session$onFlushed(function() {
+          setup_state$loading <- FALSE
+          setup_state$desired_model <- NULL
+          setup_state$desired_type <- NULL
+        }, once = TRUE)
         setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
         setup_state$desired_model <- .DEFAULT_MODEL_NAME
         setup_state$desired_type <- .DEFAULT_MODEL_TYPE
-        setup_state$loading <- FALSE
+        setup_state$skip_service_event <- TRUE
         update_setup_service_choices()
         update_setup_model_choices()
         update_setup_type_choices()
@@ -2336,7 +2377,11 @@ server <- function(input, output, session) {
     setup_state$loading <- TRUE
     on.exit(
       {
-        setup_state$loading <- FALSE
+        session$onFlushed(function() {
+          setup_state$loading <- FALSE
+          setup_state$desired_model <- NULL
+          setup_state$desired_type <- NULL
+        }, once = TRUE)
       },
       add = TRUE
     )
@@ -2375,7 +2420,11 @@ server <- function(input, output, session) {
     setup_state$loading <- TRUE
     on.exit(
       {
-        setup_state$loading <- FALSE
+        session$onFlushed(function() {
+          setup_state$loading <- FALSE
+          setup_state$desired_model <- NULL
+          setup_state$desired_type <- NULL
+        }, once = TRUE)
       },
       add = TRUE
     )
@@ -2396,6 +2445,7 @@ server <- function(input, output, session) {
     setup_state$desired_service <- service_value
     setup_state$desired_model <- model_value
     setup_state$desired_type <- type_value
+    setup_state$skip_service_event <- TRUE
     update_setup_service_choices()
     update_setup_model_choices()
     update_setup_type_choices()
