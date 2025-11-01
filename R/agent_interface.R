@@ -1398,10 +1398,12 @@ server <- function(input, output, session) {
   })
 
   observeEvent(list(input$setup_service, models_state$catalog), {
+    if (isTRUE(setup_state$loading)) return()
     update_setup_model_choices()
   })
 
   observeEvent(list(input$setup_service, input$setup_model, models_state$catalog), {
+    if (isTRUE(setup_state$loading)) return()
     update_setup_type_choices()
   })
 
@@ -1411,7 +1413,6 @@ server <- function(input, output, session) {
         return()
       }
       if (isTRUE(setup_state$skip_service_event)) {
-        setup_state$skip_service_event <- FALSE
         return()
       }
       svc <- input$setup_service %||% ""
@@ -1459,10 +1460,12 @@ server <- function(input, output, session) {
   })
 
   observeEvent(list(input$agent_setup_service, models_state$catalog), {
+    if (isTRUE(agent_state$loading)) return()
     update_agent_model_choices()
   })
 
   observeEvent(list(input$agent_setup_service, input$agent_setup_model, models_state$catalog), {
+    if (isTRUE(agent_state$loading)) return()
     update_agent_type_choices()
   })
 
@@ -1580,39 +1583,6 @@ server <- function(input, output, session) {
     }
   })
 
-  observeEvent(input$setup_service, {
-    if (isTRUE(setup_state$loading)) return()
-    svc <- input$setup_service %||% ""
-    catalog <- models_state$catalog
-    if (identical(tolower(svc), "favorites")) {
-      favs <- models_state$favorites
-      if (nrow(favs) == 0) {
-        setup_state$desired_model <- ""
-        setup_state$desired_type <- ""
-      } else {
-        new_model <- favs$model[1]
-        types_for_model <- favs$type[favs$model == new_model]
-        types_for_model <- types_for_model[nzchar(types_for_model)]
-        if (!length(types_for_model)) {
-          actual_service <- favs$service[favs$model == new_model][1]
-          type_choices <- .model_type_choices(catalog, actual_service, new_model)
-          types_for_model <- type_choices
-        }
-        new_type <- if (length(types_for_model)) types_for_model[[1]] else ""
-        setup_state$desired_model <- new_model
-        setup_state$desired_type <- new_type
-      }
-      return()
-    }
-    preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
-    model_choices <- .model_model_choices(catalog, svc)
-    new_model <- if (length(model_choices)) .pick_preferred_choice(model_choices, preferred_model) else ""
-    preferred_type <- if (tolower(new_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
-    type_choices <- .model_type_choices(catalog, svc, new_model)
-    new_type <- if (length(type_choices)) .pick_preferred_choice(type_choices, preferred_type) else ""
-    setup_state$desired_model <- new_model
-    setup_state$desired_type <- new_type
-  }, priority = 5)
 
   observeEvent(input$agent_setup_service, {
     if (isTRUE(agent_state$loading)) return()
@@ -2379,8 +2349,6 @@ server <- function(input, output, session) {
       {
         session$onFlushed(function() {
           setup_state$loading <- FALSE
-          setup_state$desired_model <- NULL
-          setup_state$desired_type <- NULL
         }, once = TRUE)
       },
       add = TRUE
@@ -2422,8 +2390,7 @@ server <- function(input, output, session) {
       {
         session$onFlushed(function() {
           setup_state$loading <- FALSE
-          setup_state$desired_model <- NULL
-          setup_state$desired_type <- NULL
+          setup_state$skip_service_event <- FALSE
         }, once = TRUE)
       },
       add = TRUE
