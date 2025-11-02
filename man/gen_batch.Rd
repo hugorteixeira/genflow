@@ -6,10 +6,11 @@
 \usage{
 gen_batch(
   qty = 8,
-  instructions,
+  instructions = NULL,
   add = NULL,
   one_item_each = NULL,
   add_img = NULL,
+  append = c("before", "before"),
   agent_prefix,
   directory = "content",
   directory_img = "content",
@@ -20,13 +21,20 @@ gen_batch(
 \arguments{
 \item{qty}{Integer number of workers/tasks to launch.}
 
-\item{instructions}{Character base prompt/context text.}
+\item{instructions}{Character base prompt/context text. When \code{NULL}, the
+agent's stored \code{context} (if any) is used.}
 
-\item{add}{Optional additional context mixed into the prompt per worker.}
+\item{add}{Optional additional context mixed into the prompt per worker. When
+omitted, the agent's stored \code{add} value (if any) is used.}
 
 \item{one_item_each}{Optional list of per-worker items to include in prompts.}
 
 \item{add_img}{Optional image input for vision-capable providers.}
+
+\item{append}{Character vector or named list (values: \code{"before"}, \code{"after"},
+\code{"replace"}) controlling how supplied \code{instructions} and \code{add} merge with
+each agent's stored context/addition. The first entry applies to
+instructions, the second to add data.}
 
 \item{agent_prefix}{Character prefix used to locate agent configs in \code{.GlobalEnv}.}
 

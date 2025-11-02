@@ -308,10 +308,16 @@ gen_stats_rm <- function(date = NULL) {
 #' and returns a list that optionally includes an `combined_stats` block.
 #'
 #' @param qty Integer number of workers/tasks to launch.
-#' @param instructions Character base prompt/context text.
-#' @param add Optional additional context mixed into the prompt per worker.
+#' @param instructions Character base prompt/context text. When `NULL`, the
+#'   agent's stored `context` (if any) is used.
+#' @param add Optional additional context mixed into the prompt per worker. When
+#'   omitted, the agent's stored `add` value (if any) is used.
 #' @param one_item_each Optional list of per-worker items to include in prompts.
 #' @param add_img Optional image input for vision-capable providers.
+#' @param append Character vector or named list (values: `"before"`, `"after"`,
+#'   `"replace"`) controlling how supplied `instructions` and `add` merge with
+#'   each agent's stored context/addition. The first entry applies to
+#'   instructions, the second to add data.
 #' @param agent_prefix Character prefix used to locate agent configs in `.GlobalEnv`.
 #' @param directory Character path to save chat/text artifacts.
 #' @param directory_img Character path to save images.
@@ -327,7 +333,7 @@ gen_stats_rm <- function(date = NULL) {
 #' # gen_batch(2, instructions = "Describe a cat", agent_prefix = "agent")
 #'
 #' @export
-gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, add_img = NULL, agent_prefix, directory = "content", directory_img = "content", log = FALSE, always_fix_errors = TRUE) { # Add log = TRUE here
+gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = NULL, add_img = NULL, append = c("before", "before"), agent_prefix, directory = "content", directory_img = "content", log = FALSE, always_fix_errors = TRUE) { # Add log = TRUE here
 
   inicio_geral <- Sys.time()
   if (!requireNamespace("parallel", quietly = TRUE)) stop("Package 'parallel' needed.")
@@ -337,6 +343,68 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
   add_missing <- missing(add)
   add_img_missing <- missing(add_img)
   one_item_each_missing <- missing(one_item_each)
+
+  normalize_append_argument <- function(arg) {
+    allowed <- c("before", "after", "replace")
+    default <- list(instructions = "replace", add = "replace")
+    if (is.null(arg)) {
+      return(default)
+    }
+    values <- arg
+    if (is.list(values)) {
+      values <- unlist(values, use.names = TRUE)
+    }
+    if (!is.vector(values)) {
+      stop("`append` must be NULL, a character vector, or a named list.", call. = FALSE)
+    }
+    if (length(values) == 0) {
+      return(default)
+    }
+    if (is.null(names(values)) || all(names(values) == "")) {
+      values <- as.character(values)
+      if (length(values) == 1) {
+        values <- c(instructions = values[1], add = values[1])
+      } else {
+        values <- values[seq_len(min(2, length(values)))]
+        names(values) <- c("instructions", "add")[seq_along(values)]
+        if (length(values) == 1) {
+          values <- c(values, add = values[1])
+        }
+      }
+    } else {
+      values <- as.character(values)
+      missing_names <- names(values) == ""
+      if (any(missing_names)) {
+        fallback_names <- c("instructions", "add")
+        for (idx in which(missing_names)) {
+          fallback_idx <- min(idx, length(fallback_names))
+          names(values)[idx] <- fallback_names[fallback_idx]
+        }
+      }
+    }
+    result <- default
+    for (nm_raw in names(values)) {
+      nm <- tolower(nm_raw)
+      target <- if (startsWith(nm, "instr")) {
+        "instructions"
+      } else if (startsWith(nm, "add")) {
+        "add"
+      } else {
+        NULL
+      }
+      if (is.null(target)) {
+        next
+      }
+      val <- tolower(values[[nm_raw]])
+      if (!val %in% allowed) {
+        warning("Invalid append mode '", values[[nm_raw]], "' for ", target, ". Using 'replace'.")
+        val <- "replace"
+      }
+      result[[target]] <- val
+    }
+    result
+  }
+  append_modes <- normalize_append_argument(append)
 
   if (is.list(instructions)) {
     instructions_obj <- instructions
@@ -395,12 +463,31 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
     vec
   }
 
+  agent_signature <- NULL
   use_cache <- isTRUE(always_fix_errors)
   cache_key <- NULL
   cache_entry <- NULL
   indices_to_run <- seq_len(qty)
   reused_indices <- integer(0)
   if (use_cache) {
+    agent_signature <- lapply(seq_len(qty), function(idx) {
+      label <- if (suffix_type == "alphabetic") {
+        if (idx > 0 && idx <= length(letters)) paste0(agent_prefix, letters[idx]) else paste0(agent_prefix, "invalid_idx_", idx)
+      } else {
+        paste0(agent_prefix, idx)
+      }
+      if (!exists(label, envir = .GlobalEnv)) {
+        return(NULL)
+      }
+      cfg <- get(label, envir = .GlobalEnv)
+      if (!is.list(cfg)) {
+        return(NULL)
+      }
+      list(
+        context = cfg$context %||% cfg$instructions %||% NULL,
+        add = cfg$add %||% NULL
+      )
+    })
     cache_key <- .batch_cache_make_key(
       agent_prefix = agent_prefix,
       qty = qty,
@@ -409,7 +496,9 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
       one_item_each = if (!is.null(one_item_each)) one_item_each else NULL,
       add_img = add_img,
       directory = directory,
-      directory_img = directory_img
+      directory_img = directory_img,
+      append_modes = append_modes,
+      agent_signature = agent_signature
     )
     if (is.null(cache_key)) {
       message("always_fix_errors enabled but cache key could not be generated; running full batch.")
@@ -460,10 +549,10 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
     cat("Using parLapply with", n_cores, "cores (Windows)...\n")
     cl <- parallel::makeCluster(n_cores)
     tryCatch({
-      .export_cluster_vars(cl, qty, agent_prefix, suffix_type, instructions, add, add_img, directory, directory_img)
+      .export_cluster_vars(cl, qty, agent_prefix, suffix_type, instructions, add, add_img, append_modes, directory, directory_img)
       raw_results <- parallel::parLapply(cl, indices_to_run, function(i) {
         tryCatch(
-          .execute_agent_task(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type),
+          .execute_agent_task(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type, append_modes),
           error = function(e) {
             structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
           }
@@ -477,7 +566,7 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
     cat("Using mclapply with", n_cores, "cores (Non-Windows)...\n")
     raw_results <- parallel::mclapply(indices_to_run, function(i) {
       tryCatch(
-        .execute_agent_task(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type),
+        .execute_agent_task(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type, append_modes),
         error = function(e) {
           structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
         }

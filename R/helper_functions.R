@@ -26,7 +26,16 @@
   if (!is.null(a)) a else b
 }
 .batch_cache_env <- new.env(parent = emptyenv())
-.batch_cache_make_key <- function(agent_prefix, qty, instructions, add, one_item_each, add_img, directory, directory_img) {
+.batch_cache_make_key <- function(agent_prefix,
+                                 qty,
+                                 instructions,
+                                 add,
+                                 one_item_each,
+                                 add_img,
+                                 directory,
+                                 directory_img,
+                                 append_modes = NULL,
+                                 agent_signature = NULL) {
   sanitize_prefix <- function(prefix) {
     cleaned <- gsub("[^A-Za-z0-9_]", "_", prefix %||% "agent")
     if (!nzchar(cleaned)) cleaned <- "agent"
@@ -40,7 +49,9 @@
     one_item_each = one_item_each,
     add_img = add_img,
     directory = directory,
-    directory_img = directory_img
+    directory_img = directory_img,
+    append_modes = append_modes,
+    agent_signature = agent_signature
   )
   raw_payload <- tryCatch(serialize(payload, NULL, ascii = FALSE), error = function(e) NULL)
   if (is.null(raw_payload) || length(raw_payload) == 0) {
@@ -549,6 +560,9 @@
 #' @keywords internal
 #' @noRd
 .sanitize_instructions <- function(instructions) {
+  if (is.null(instructions)) {
+    return(NULL)
+  }
   if (!is.character(instructions)) {
     warning("'instructions' was not character. Converting...")
     instructions <- as.character(instructions)
@@ -582,10 +596,10 @@
 #'
 #' @keywords internal
 #' @noRd
-.export_cluster_vars <- function(cl, qty, agent_prefix, suffix_type, instructions, add, add_img, directory, directory_img, worker_timeout_seconds = NULL) {
+.export_cluster_vars <- function(cl, qty, agent_prefix, suffix_type, instructions, add, add_img, append_modes, directory, directory_img, worker_timeout_seconds = NULL) {
   # base list of variables to export
   varlist_base <- c(
-    ".execute_agent_task", ".estimate_tokens", "instructions", "add", "add_img",
+    ".execute_agent_task", ".estimate_tokens", "instructions", "add", "add_img", "append_modes",
     "directory", "directory_img", "agent_prefix", "suffix_type", ".sanitize_filename",
     "gen_txt", "gen_img", "%||%", "get", "exists", "processar_add", "toJSON", "gen_txt_hyperbolic",
     "gen_txt_groq", "gen_txt_gemini", ".gen_txt_openai", "gen_txt_nebius", ".gen_img_fal",
@@ -618,7 +632,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.execute_agent_task <- function(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type) {
+.execute_agent_task <- function(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type, append_modes) {
   inicio_duration <- Sys.time()
   # Signal to downstream generators to skip per-call persistence (avoid parallel write races)
   try(Sys.setenv(genflow_SKIP_PERSIST_LOG = "1"), silent = TRUE)
@@ -656,6 +670,105 @@
       return(NULL)
     }
     eval(fmls[[arg]], envir = environment(fn))
+  }
+  allowed_append_modes <- c("before", "after", "replace")
+  normalize_mode <- function(value) {
+    val <- tolower(value %||% "replace")
+    if (!val %in% allowed_append_modes) {
+      val <- "replace"
+    }
+    val
+  }
+  append_modes <- append_modes %||% list()
+  append_modes <- list(
+    instructions = normalize_mode(append_modes$instructions),
+    add = normalize_mode(append_modes$add)
+  )
+  coerce_instruction_block <- function(value) {
+    if (is.null(value) || length(value) == 0) {
+      return(NULL)
+    }
+    vec <- tryCatch(unlist(value, use.names = FALSE), error = function(e) {
+      tryCatch(as.character(value), error = function(e2) NULL)
+    })
+    if (is.null(vec)) {
+      return(NULL)
+    }
+    vec <- as.character(vec)
+    vec <- vec[!is.na(vec)]
+    if (length(vec) == 0) {
+      return(NULL)
+    }
+    vec <- trimws(vec)
+    vec <- vec[nzchar(vec)]
+    if (length(vec) == 0) {
+      return(NULL)
+    }
+    paste(vec, collapse = "\n")
+  }
+  combine_instruction_blocks <- function(agent_block, user_block, mode) {
+    mode <- normalize_mode(mode)
+    if (mode == "replace") {
+      if (!is.null(user_block)) {
+        return(user_block)
+      }
+      return(agent_block)
+    }
+    if (is.null(agent_block)) {
+      return(user_block)
+    }
+    if (is.null(user_block)) {
+      return(agent_block)
+    }
+    if (mode == "before") {
+      return(paste(user_block, agent_block, sep = "\n\n"))
+    }
+    paste(agent_block, user_block, sep = "\n\n")
+  }
+  coerce_add_list <- function(value) {
+    if (is.null(value) || length(value) == 0) {
+      return(list())
+    }
+    lst <- if (is.list(value)) value else as.list(value)
+    if (length(lst) == 0) {
+      return(list())
+    }
+    lst[!vapply(lst, function(item) {
+      if (is.null(item)) {
+        return(TRUE)
+      }
+      if (is.atomic(item) && length(item) == 1) {
+        if (is.na(item)) {
+          return(TRUE)
+        }
+        if (is.character(item) && nchar(trimws(item)) == 0) {
+          return(TRUE)
+        }
+      }
+      FALSE
+    }, logical(1))]
+  }
+  combine_add_blocks <- function(agent_block, user_block, mode) {
+    agent_list <- coerce_add_list(agent_block)
+    user_list <- coerce_add_list(user_block)
+    mode <- normalize_mode(mode)
+    if (length(user_list) == 0) {
+      return(if (length(agent_list) == 0) NULL else agent_list)
+    }
+    if (length(agent_list) == 0) {
+      return(user_list)
+    }
+    combined <- switch(mode,
+      before = c(user_list, agent_list),
+      after = c(agent_list, user_list),
+      replace = user_list,
+      user_list
+    )
+    if (length(combined) == 0) {
+      NULL
+    } else {
+      combined
+    }
   }
   erro_interno <- NULL
   response_estrutura_api <- NULL
@@ -738,7 +851,46 @@
       # --- 3. Prepare Context/Prompt --- ## Integration of processar_add logic here ##
       logs_internos <- c(logs_internos, "  -> Preparing final prompt...\n")
       prompt_final_parts <- list()
-      prompt_final_parts$instructions <- instructions # Start with base instructions
+      agent_context_raw <- config_agente$context %||% config_agente$instructions %||% NULL
+      agent_context_block <- coerce_instruction_block(agent_context_raw)
+      user_context_block <- coerce_instruction_block(instructions)
+      final_instructions <- combine_instruction_blocks(agent_context_block, user_context_block, append_modes$instructions)
+      if (is.null(final_instructions)) {
+        stop(paste0("No instructions/context available for agent '", label_agente, "'. Provide `instructions` or ensure the agent has a `context`."))
+      }
+      prompt_final_parts$instructions <- final_instructions
+      logs_internos <- c(
+        logs_internos,
+        paste0(
+          "     -> Instructions assembled (agent source: ",
+          ifelse(is.null(agent_context_block), "no", "yes"),
+          ", supplied: ",
+          ifelse(is.null(user_context_block), "no", "yes"),
+          ", mode: ",
+          append_modes$instructions,
+          ").\n"
+        )
+      )
+      agent_add_raw <- config_agente$add %||% NULL
+      user_add_raw <- add
+      agent_add_list_preview <- coerce_add_list(agent_add_raw)
+      user_add_list_preview <- coerce_add_list(user_add_raw)
+      add <- combine_add_blocks(agent_add_raw, user_add_raw, append_modes$add)
+      combined_add_list_preview <- coerce_add_list(add)
+      logs_internos <- c(
+        logs_internos,
+        paste0(
+          "     -> Additional 'add' context assembled (agent items: ",
+          length(agent_add_list_preview),
+          ", supplied items: ",
+          length(user_add_list_preview),
+          ", result items: ",
+          length(combined_add_list_preview),
+          ", mode: ",
+          append_modes$add,
+          ").\n"
+        )
+      )
 
       # 3.1 Process one_item_each (item specific)
       if (!is.null(one_item_each) && i <= length(one_item_each)) {

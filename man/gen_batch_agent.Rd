@@ -7,10 +7,11 @@
 gen_batch_agent(
   agent,
   qty = 8,
-  instructions,
+  instructions = NULL,
   add = NULL,
   one_item_each = NULL,
   add_img = NULL,
+  append = c("replace", "replace"),
   agent_prefix = NULL,
   directory = "content",
   directory_img = "content",
@@ -24,13 +25,20 @@ gen_batch_agent(
 
 \item{qty}{Number of batch items to generate.}
 
-\item{instructions}{Character base prompt/context text.}
+\item{instructions}{Character base prompt/context text. When \code{NULL}, the
+agent's stored \code{context} (if any) is used.}
 
-\item{add}{Optional additional context mixed into the prompt per worker.}
+\item{add}{Optional additional context mixed into the prompt per worker. When
+omitted, the agent's stored \code{add} value (if any) is used.}
 
 \item{one_item_each}{Optional list of per-worker items to include in prompts.}
 
 \item{add_img}{Optional image input for vision-capable providers.}
+
+\item{append}{Character vector or named list (values: \code{"before"}, \code{"after"},
+\code{"replace"}) controlling how supplied \code{instructions} and \code{add} merge with
+each agent's stored context/addition. The first entry applies to
+instructions, the second to add data.}
 
 \item{agent_prefix}{Optional prefix used for the temporary agents. Defaults
 to the agent's \code{name}, \code{sname}, or "agent".}
