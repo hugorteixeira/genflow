@@ -702,7 +702,7 @@
       }
       tipo_agente_raw <- as.character(tipo_agente_raw)
       tipo_agente <- tolower(trimws(tipo_agente_raw))
-      if (tipo_agente %in% c("Chat", "Vision")) {
+      if (tipo_agente %in% c("chat", "vision")) {
         if (!("model" %in% names(config_agente)) || is_missing_field(config_agente$model)) {
           stop(paste0("Configuration '", label_agente, "' requires a non-empty 'model' for agent type '", tipo_agente_raw, "'."))
         }
@@ -720,12 +720,12 @@
       ))
 
       # --- 2. Determine Agent Type ---
-      if (!tipo_agente %in% c("Chat", "Vision", "Image")) {
+      if (!tipo_agente %in% c("chat", "vision", "image")) {
         warning(paste0("Agent type '", tipo_agente_raw, "' not recognized for '", label_agente, "'. Treating as 'Chat'."))
         logs_internos <- c(logs_internos, paste0("  -> Agent type not recognized '", tipo_agente_raw, "', using fallback 'Chat'.\n"))
-        tipo_agente <- "Chat" # Safe fallback
+        tipo_agente <- "chat" # Safe fallback (lowercase for comparisons)
       } else {
-        logs_internos <- c(logs_internos, paste0("  -> Agent type set: '", tipo_agente, "'\n"))
+        logs_internos <- c(logs_internos, paste0("  -> Agent type set: '", tipo_agente_raw, "'\n"))
       }
 
       service_cfg <- get_config_value(config_agente, "service", "Service")
@@ -912,7 +912,7 @@
 
 
       # --- 4. Main API Call (Chat or Image) ---
-      if (tipo_agente %in% c("Chat", "Vision")) {
+      if (tipo_agente %in% c("chat", "vision")) {
         logs_internos <- c(logs_internos, paste0("  -> Calling gen_txt for ", label_agente, "...\n"))
         # Use the correctly constructed context_final
         # DO NOT pass 'add' or 'one_item_each' separately here

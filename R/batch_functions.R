@@ -12,7 +12,6 @@
 #' @keywords internal
 #' @noRd
 .summarize_results <- function(objects) {
-
   # 1. Input Validation & Identify Result Elements
   if (!is.list(objects)) {
     warning("gen_stats expects a list as input.")
@@ -24,7 +23,7 @@
 
   # Check if the last element is the statistics block and adjust count
   if (num_total_elements > 0 && is.list(objects[[num_total_elements]]) &&
-      !is.null(names(objects)) && names(objects)[num_total_elements] == "combined_stats") {
+    !is.null(names(objects)) && names(objects)[num_total_elements] == "combined_stats") {
     num_results <- num_total_elements - 1
   } else {
     # Assumes all elements are results if no named stats block is found
@@ -38,11 +37,11 @@
   # Handle case where there are no result elements (e.g., called with qty=0)
   if (num_results <= 0) {
     stats_vazio <- data.frame(
-      label      = character(0),
-      model     = character(0),
-      temp       = numeric(0),
-      duration      = numeric(0),
-      tks_envia  = numeric(0), # Match original column names
+      label = character(0),
+      model = character(0),
+      temp = numeric(0),
+      duration = numeric(0),
+      tks_envia = numeric(0), # Match original column names
       tks_recebe = numeric(0), # Match original column names
       status_api = character(0), # Add status for context
       stringsAsFactors = FALSE
@@ -56,11 +55,11 @@
 
   # 2. Initialize Data Frame for Local Results
   stats_local <- data.frame(
-    label      = character(num_results),
-    model     = character(num_results),
-    temp       = numeric(num_results),
-    duration      = numeric(num_results),
-    tks_envia  = numeric(num_results), # Renamed from tokens_sent
+    label = character(num_results),
+    model = character(num_results),
+    temp = numeric(num_results),
+    duration = numeric(num_results),
+    tks_envia = numeric(num_results), # Renamed from tokens_sent
     tks_recebe = numeric(num_results), # Renamed from tokens_received
     status_api = character(num_results), # Add status
     stringsAsFactors = FALSE
@@ -72,22 +71,22 @@
 
     # Check if it's a valid result list (returned by gen_txt/gen_img)
     if (is.list(res_item) && !is.null(res_item$status_api)) { # Check for a key field
-      stats_local$label[i]      <- res_item$label %||% NA_character_
-      stats_local$model[i]     <- res_item$model %||% NA_character_
-      stats_local$temp[i]       <- res_item$temp %||% NA_real_
-      stats_local$duration[i]      <- res_item$duration %||% NA_real_
-      stats_local$tks_envia[i]  <- res_item$tokens_sent %||% NA_real_ # Map from new name
+      stats_local$label[i] <- res_item$label %||% NA_character_
+      stats_local$model[i] <- res_item$model %||% NA_character_
+      stats_local$temp[i] <- res_item$temp %||% NA_real_
+      stats_local$duration[i] <- res_item$duration %||% NA_real_
+      stats_local$tks_envia[i] <- res_item$tokens_sent %||% NA_real_ # Map from new name
       stats_local$tks_recebe[i] <- res_item$tokens_received %||% NA_real_ # Map from new name
       stats_local$status_api[i] <- res_item$status_api %||% "UNKNOWN"
     } else {
       # Handle cases where res_item is NULL or not the expected list
-      stats_local$label[i]      <- paste0("Index_", i, "Invalid")
+      stats_local$label[i] <- paste0("Index_", i, "Invalid")
       stats_local$status_api[i] <- "ERROR_ESTRUTURA_INTERNA"
       # Fill others with NA
-      stats_local$model[i]     <- NA_character_
-      stats_local$temp[i]       <- NA_real_
-      stats_local$duration[i]      <- NA_real_
-      stats_local$tks_envia[i]  <- NA_real_
+      stats_local$model[i] <- NA_character_
+      stats_local$temp[i] <- NA_real_
+      stats_local$duration[i] <- NA_real_
+      stats_local$tks_envia[i] <- NA_real_
       stats_local$tks_recebe[i] <- NA_real_
     }
   }
@@ -139,13 +138,13 @@ gen_stats <- function(date = NULL) {
   fp <- file.path(dir, paste0(format(d, "%Y%m%d"), ".rds"))
   if (!file.exists(fp)) {
     message("No logs found for ", format(d, "%Y-%m-%d"), ".")
-    df_empty <- data.frame(label=character(0), model=character(0), temp=numeric(0), duration=numeric(0), tks_envia=numeric(0), tks_recebe=numeric(0), status_api=character(0), stringsAsFactors = FALSE)
+    df_empty <- data.frame(label = character(0), model = character(0), temp = numeric(0), duration = numeric(0), tks_envia = numeric(0), tks_recebe = numeric(0), status_api = character(0), stringsAsFactors = FALSE)
     return(invisible(df_empty))
   }
   df <- tryCatch(readRDS(fp), error = function(e) NULL)
   if (!is.data.frame(df)) {
     warning("Log file corrupted or invalid: ", fp)
-    df <- data.frame(label=character(0), model=character(0), temp=numeric(0), duration=numeric(0), tks_envia=numeric(0), tks_recebe=numeric(0), status_api=character(0), stringsAsFactors = FALSE)
+    df <- data.frame(label = character(0), model = character(0), temp = numeric(0), duration = numeric(0), tks_envia = numeric(0), tks_recebe = numeric(0), status_api = character(0), stringsAsFactors = FALSE)
   }
   print(df)
   invisible(df)
@@ -161,10 +160,14 @@ gen_stats <- function(date = NULL) {
 #' @export
 gen_stats_rm <- function(date = NULL) {
   dir <- tools::R_user_dir("genflow", which = "data")
-  if (!dir.exists(dir)) return(invisible(FALSE))
+  if (!dir.exists(dir)) {
+    return(invisible(FALSE))
+  }
   if (is.null(date)) {
     files <- list.files(dir, pattern = "^[0-9]{8}\\.rds$", full.names = TRUE)
-    if (length(files) == 0) return(invisible(FALSE))
+    if (length(files) == 0) {
+      return(invisible(FALSE))
+    }
     ok <- all(file.remove(files))
     if (ok) message("Removed ", length(files), " log file(s).")
     return(invisible(ok))
@@ -183,7 +186,9 @@ gen_stats_rm <- function(date = NULL) {
   }
   if (is.na(d)) stop("Could not parse 'date'. Use YYYYMMDD or YYYY-MM-DD or Date object.")
   fp <- file.path(dir, paste0(format(d, "%Y%m%d"), ".rds"))
-  if (!file.exists(fp)) return(invisible(FALSE))
+  if (!file.exists(fp)) {
+    return(invisible(FALSE))
+  }
   ok <- file.remove(fp)
   if (ok) message("Removed ", basename(fp), ".")
   invisible(ok)
@@ -221,7 +226,7 @@ gen_stats_rm <- function(date = NULL) {
 
   # Check for valid, positive times before calculating speedup
   if (!is.na(duration_real_decorrido) && as.numeric(duration_real_decorrido) > 0 &&
-      !is.na(duration_total_somado_num) && duration_total_somado_num > 0) {
+    !is.na(duration_total_somado_num) && duration_total_somado_num > 0) {
     fator_speedup <- duration_total_somado_num / as.numeric(duration_real_decorrido)
     cat("Speedup Factor (approx.):", round(fator_speedup, 2), "x\n")
   } else {
@@ -235,8 +240,8 @@ gen_stats_rm <- function(date = NULL) {
     tipos_validos <- agent_types[!is.na(agent_types)]
     if (length(tipos_validos) > 0) {
       task_summary <- table(tipos_validos)
-      for(type_name in names(task_summary)) {
-        cat("tasks '", type_name, "': ", task_summary[[type_name]], "\n", sep="")
+      for (type_name in names(task_summary)) {
+        cat("tasks '", type_name, "': ", task_summary[[type_name]], "\n", sep = "")
       }
     } else {
       cat("(No valid agent type recorded after filtering NA)\n")
@@ -256,7 +261,7 @@ gen_stats_rm <- function(date = NULL) {
   indices_erro <- which(!sapply(erros, is.null))
   if (length(indices_erro) > 0) {
     cat("--- Found Errors or Worker Failures (", length(indices_erro), "/", qty, ") ---\n")
-    for(idx in indices_erro) {
+    for (idx in indices_erro) {
       # Rebuild the expected label for the index with error
       label_esperado <- if (suffix_type == "alphabetic") {
         if (idx <= length(letters)) paste0(agent_prefix, letters[idx]) else paste0(agent_prefix, "extra", idx)
@@ -265,11 +270,11 @@ gen_stats_rm <- function(date = NULL) {
       }
       # Attempt to get the agent type (may be 'worker_failed_or_unknown') - requires processed types
       # For simplicity, report the error and expected label
-      cat("Index ", idx, " (Label esperado '", label_esperado, "'): ", erros[[idx]], "\n", sep="")
+      cat("Index ", idx, " (Label esperado '", label_esperado, "'): ", erros[[idx]], "\n", sep = "")
     }
     cat("--- End of Errors ---\n\n")
   } else {
-    cat("--- Status: Nenhuma tarefa resultou em Error direto ou failure de worker detectada. ---\n\n")
+    cat("--- Status: No errors detected. ---\n\n")
   }
 }
 #' Post-process results for quick visualization (internal)
@@ -278,14 +283,14 @@ gen_stats_rm <- function(date = NULL) {
 #' @noRd
 .pos_process_results <- function(results) {
   cat("--- Post-Processing and results ---\n")
-  #cat("WARNING: results may be text/images. 'mostrar_text'/'gen_stats' may need adaptation.\n\n")
-  if(exists("gen_view")) {
-    #cat("Tentando 'mostrar_text'...\n")
+  # cat("WARNING: results may be text/images. 'mostrar_text'/'gen_stats' may need adaptation.\n\n")
+  if (exists("gen_view")) {
+    # cat("Tentando 'mostrar_text'...\n")
     try(gen_view(results), silent = TRUE)
   } else {
     warning("'mostrar_text' not found.")
   }
-  #Sys.sleep(0.5)
+  # Sys.sleep(0.5)
   if (exists(".summarize_results")) {
     # Print local summary without touching persisted logs/global env
     try(.summarize_results(results), silent = TRUE)
@@ -428,8 +433,10 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
             indices_to_run <- pending_indices
             reused_indices <- setdiff(seq_len(qty), pending_indices)
             if (length(reused_indices) > 0) {
-              message("always_fix_errors: reusing ", length(reused_indices), " successful result(s): ",
-                      paste(reused_indices, collapse = ", "))
+              message(
+                "always_fix_errors: reusing ", length(reused_indices), " successful result(s): ",
+                paste(reused_indices, collapse = ", ")
+              )
             }
           } else {
             .batch_cache_clear(cache_key)
@@ -508,13 +515,13 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
 
   # Extrai os componentes principais
   results_individual_lists <- results_processed$results
-  final_errors                   <- results_processed$erros
-  logs_list                      <- results_processed$logs_list
-  single_durations             <- results_processed$single_durations
-  agent_types                   <- results_processed$agent_types
+  final_errors <- results_processed$erros
+  logs_list <- results_processed$logs_list
+  single_durations <- results_processed$single_durations
+  agent_types <- results_processed$agent_types
 
   # ----- Imprimir Logs e Metrics -----
-  logs_for_print <- paste(unlist(logs_list), collapse="")
+  logs_for_print <- paste(unlist(logs_list), collapse = "")
   # Pass the 'log' argument here
   .print_metric_logs(logs_for_print, inicio_geral, final_geral, single_durations, agent_types, qty, log = log)
   .report_errors(erros = final_errors, qty = qty, agent_prefix = agent_prefix, suffix_type = suffix_type)
@@ -525,7 +532,7 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
     duration_real_secs = as.numeric(difftime(final_geral, inicio_geral, units = "secs")),
     duration_sum_secs = sum(single_durations, na.rm = TRUE),
     cores_number = n_cores,
-    parallel_mode = if(use_parlapply) "parLapply" else "mclapply",
+    parallel_mode = if (use_parlapply) "parLapply" else "mclapply",
     valid_results = results_processed$valid_results_count,
     qty_solicited = qty,
     detailed_errors = final_errors,
@@ -536,7 +543,7 @@ gen_batch <- function(qty = 8, instructions, add = NULL, one_item_each = NULL, a
     # logs_detalhados = logs_list # Optionally include raw logs here if needed, even if not printed
   )
   results_final_obj <- vector("list", qty + 1)
-  for(i in 1:qty) {
+  for (i in 1:qty) {
     results_final_obj[[i]] <- results_individual_lists[[i]]
   }
   results_final_obj[[qty + 1]] <- combined_stats
