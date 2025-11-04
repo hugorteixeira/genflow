@@ -284,6 +284,28 @@
   as.character(scalar)
 }
 
+.label_choices <- function(values) {
+  if (is.null(values) || !length(values)) {
+    return(setNames(character(0), character(0)))
+  }
+  values_chr <- as.character(values)
+  labels <- vapply(values_chr, function(val) {
+    if (!nzchar(val)) {
+      return("")
+    }
+    base <- basename(val)
+    if (!nzchar(base)) {
+      base <- val
+    }
+    base
+  }, character(1), USE.NAMES = FALSE)
+  duplicates <- duplicated(labels) | duplicated(labels, fromLast = TRUE)
+  if (any(duplicates)) {
+    labels[duplicates] <- sprintf("%s (%s)", labels[duplicates], values_chr[duplicates])
+  }
+  stats::setNames(values_chr, labels)
+}
+
 .rand_id <- function(prefix = "id") {
   paste0(prefix, "-", paste(sample(c(letters, LETTERS, 0:9), 8, replace = TRUE), collapse = ""))
 }
@@ -328,8 +350,33 @@
   if (is.null(text)) {
     return("(NULL)")
   }
-  txt <- paste(text, collapse = "\n")
-  txt <- trimws(txt)
+  if (is.list(text) && !is.data.frame(text)) {
+    text <- unlist(text, recursive = TRUE, use.names = FALSE)
+  }
+  if (length(text) == 0) {
+    return("(empty)")
+  }
+  text_chr <- as.character(text)
+  if (!length(text_chr)) {
+    return("(empty)")
+  }
+  process_entry <- function(entry) {
+    entry <- trimws(entry)
+    if (!nzchar(entry)) {
+      return("(empty)")
+    }
+    looks_like_path <- !grepl("\n", entry, fixed = TRUE) && (
+      grepl("[/\\\\]", entry) ||
+        startsWith(entry, "~") ||
+        grepl("^[A-Za-z]:", entry)
+    )
+    if (looks_like_path) {
+      entry <- basename(entry)
+    }
+    entry
+  }
+  processed <- vapply(text_chr, process_entry, character(1))
+  txt <- trimws(paste(processed, collapse = "\n"))
   if (!nzchar(txt)) {
     return("(empty)")
   }
@@ -2240,7 +2287,9 @@ server <- function(input, output, session) {
         do.call(div, item_args)
       }))
     })
-    updateSelectInput(session, "agent_setup_select", choices = c("", saved_choices))
+    labelled_setups <- .label_choices(saved_choices)
+    setup_choices <- if (length(labelled_setups)) c("", labelled_setups) else ""
+    updateSelectInput(session, "agent_setup_select", choices = setup_choices)
     if (!is.null(selected)) {
       setup_state$selected <- selected
     }
@@ -2338,7 +2387,9 @@ server <- function(input, output, session) {
         do.call(div, item_args)
       }))
     })
-    updateSelectInput(session, "agent_content_select", choices = c("", saved_choices))
+    labelled_content <- .label_choices(saved_choices)
+    content_choices <- if (length(labelled_content)) c("", labelled_content) else ""
+    updateSelectInput(session, "agent_content_select", choices = content_choices)
     if (!is.null(selected)) {
       content_state$selected <- selected
     }
