@@ -1288,13 +1288,14 @@
       # Extract components from the worker's result list
       response_estrutura_api <- res_item$response # This is the LIST from gen_txt/gen_img (or NULL)
       worker_internal_error <- res_item$erro # Error string from worker's tryCatch (or NULL)
-      logs_list[[original_i]] <- res_item$logs
+      # Keep list indices stable even when the stored value is NULL
+      logs_list[original_i] <- list(res_item$logs)
       agent_types[original_i] <- res_item$tipo_agente %||% "unknown" # Use type from worker
       single_durations[original_i] <- res_item$duration_individual %||% NA_real_ # Use worker time
 
       # --- STORE THE RESULT STRUCTURE ---
       # Store the whole list (or NULL) directly
-      results_finais[[original_i]] <- response_estrutura_api
+      results_finais[original_i] <- list(response_estrutura_api)
 
       # --- Determine Final Error Status for this index ---
       final_error_msg_for_index <- NULL
@@ -1326,7 +1327,7 @@
       }
 
       # Assign the determined error message (or NULL if success)
-      final_errors[[original_i]] <- final_error_msg_for_index
+      final_errors[original_i] <- list(final_error_msg_for_index)
 
       # Increment valid count only if no final error was recorded
       if (is.null(final_error_msg_for_index)) {
@@ -1340,7 +1341,7 @@
   if (length(indices_nao_processados) > 0) {
     for (i_faltante in indices_nao_processados) {
       if (is.null(final_errors[[i_faltante]])) { # If no specific error was logged yet
-        final_errors[[i_faltante]] <- paste0("Index ", i_faltante, ": No valid result received or mapped from worker.")
+        final_errors[i_faltante] <- list(paste0("Index ", i_faltante, ": No valid result received or mapped from worker."))
         warning(final_errors[[i_faltante]])
       }
     }
