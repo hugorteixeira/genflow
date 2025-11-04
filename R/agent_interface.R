@@ -273,6 +273,17 @@
   options[[1]]
 }
 
+.normalize_choice_value <- function(value) {
+  if (is.null(value) || length(value) == 0) {
+    return("")
+  }
+  scalar <- value[[1]]
+  if (is.na(scalar)) {
+    return("")
+  }
+  as.character(scalar)
+}
+
 .rand_id <- function(prefix = "id") {
   paste0(prefix, "-", paste(sample(c(letters, LETTERS, 0:9), 8, replace = TRUE), collapse = ""))
 }
@@ -718,6 +729,66 @@
   )
 }
 
+.transfer_tab_ui <- function() {
+  tabPanel(
+    "Import / Export",
+    div(
+      class = "gf-tab-body",
+      fluidRow(
+        column(
+          width = 6,
+          div(
+            class = "gf-panel",
+            div(class = "gf-section-header", h3("Export resources")),
+            tags$p("Create a portable bundle with your saved setups, content, agents, and model catalogs."),
+            textInput(
+              "transfer_export_filename",
+              "Bundle filename",
+              value = paste0("genflow_bundle_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".zip")
+            ),
+            div(
+              class = "gf-field-card",
+              h4("Include components"),
+              checkboxInput("transfer_include_setups", "Setups", value = TRUE),
+              checkboxInput("transfer_include_content", "Content", value = TRUE),
+              checkboxInput("transfer_include_agents", "Agents", value = TRUE),
+              checkboxInput("transfer_include_models", "Models catalog", value = TRUE)
+            ),
+            div(
+              class = "gf-btn-row",
+              downloadButton("transfer_export_download", "Download bundle", icon = icon("download"))
+            ),
+            uiOutput("transfer_export_summary")
+          )
+        ),
+        column(
+          width = 6,
+          div(
+            class = "gf-panel",
+            div(class = "gf-section-header", h3("Import resources")),
+            tags$p("Restore a bundle generated on another machine. Select the components to bring into this installation."),
+            fileInput("transfer_import_file", "Bundle (.zip)", accept = c(".zip")),
+            div(
+              class = "gf-field-card",
+              h4("Import components"),
+              checkboxInput("transfer_import_setups", "Setups", value = TRUE),
+              checkboxInput("transfer_import_content", "Content", value = TRUE),
+              checkboxInput("transfer_import_agents", "Agents", value = TRUE),
+              checkboxInput("transfer_import_models", "Models catalog", value = TRUE)
+            ),
+            checkboxInput("transfer_import_overwrite", "Overwrite existing files when duplicates are found", value = TRUE),
+            div(
+              class = "gf-btn-row",
+              actionButton("transfer_import_run", "Import bundle", icon = icon("upload"))
+            ),
+            uiOutput("transfer_import_summary")
+          )
+        )
+      )
+    )
+  )
+}
+
 .app_ui <- function() {
   fluidPage(
     theme = bs_theme(
@@ -746,7 +817,8 @@
       .setups_tab_ui(),
       .content_tab_ui(),
       .agents_tab_ui(),
-      .models_tab_ui()
+      .models_tab_ui(),
+      .transfer_tab_ui()
     )
   )
 }
@@ -1123,21 +1195,64 @@ server <- function(input, output, session) {
     status = ""
   )
 
+  transfer_state <- reactiveValues(
+    export_summary = NULL,
+    import_summary = NULL
+  )
+
+  current_models_dir <- function() {
+    dir <- models_state$directory %||% ""
+    if (!nzchar(dir)) {
+      dir <- .default_models_dir()
+    }
+    dir
+  }
+
+  format_transfer_counts <- function(counts) {
+    if (is.null(counts) || !length(counts)) {
+      return("No items processed.")
+    }
+    parts <- character()
+    add_part <- function(value, singular, plural = NULL) {
+      if (is.null(value) || is.na(value) || value <= 0) {
+        return()
+      }
+      label <- if (identical(value, 1L) || identical(value, 1)) {
+        singular
+      } else {
+        plural %||% paste0(singular, "s")
+      }
+      parts <<- c(parts, sprintf("%d %s", value, label))
+    }
+    add_part(counts$setups, "setup")
+    add_part(counts$content, "content entry", "content entries")
+    add_part(counts$agents, "agent")
+    add_part(counts$models, "model file")
+    if (!length(parts)) {
+      "No items processed."
+    } else {
+      paste(parts, collapse = " • ")
+    }
+  }
+
   update_setup_service_choices <- function() {
     catalog <- models_state$catalog
-    current <- isolate(input$setup_service) %||% ""
-    desired <- setup_state$desired_service
+    current_raw <- isolate(input$setup_service)
+    desired_raw <- setup_state$desired_service
+    current <- .normalize_choice_value(current_raw)
+    desired <- .normalize_choice_value(desired_raw)
     choices <- .model_service_choices(catalog, include = c(current, desired))
     choices <- choices[choices != "favorites"]
     if (nrow(models_state$favorites) > 0) {
       choices <- c(setNames("favorites", "Favorites"), choices)
     }
     if (!length(choices)) {
-      updateSelectizeInput(session, "setup_service", choices = character(), selected = desired %||% current %||% "", server = TRUE)
+      selected_default <- if (!is.null(desired_raw)) desired else if (!is.null(current_raw)) current else ""
+      updateSelectizeInput(session, "setup_service", choices = character(), selected = selected_default, server = TRUE)
       setup_state$desired_service <- NULL
       return()
     }
-    selected <- desired %||% current
+    selected <- if (!is.null(desired_raw)) desired else current
     if (!nzchar(selected) || !selected %in% choices) {
       selected <- .pick_preferred_choice(choices, .DEFAULT_MODEL_SERVICE)
     }
@@ -1147,9 +1262,11 @@ server <- function(input, output, session) {
 
   update_setup_model_choices <- function() {
     catalog <- models_state$catalog
-    service <- input$setup_service %||% ""
-    current <- isolate(input$setup_model) %||% ""
-    desired <- setup_state$desired_model
+    service <- .normalize_choice_value(input$setup_service)
+    current_raw <- isolate(input$setup_model)
+    desired_raw <- setup_state$desired_model
+    current <- .normalize_choice_value(current_raw)
+    desired <- .normalize_choice_value(desired_raw)
     include_values <- c(current, desired)
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
@@ -1176,7 +1293,7 @@ server <- function(input, output, session) {
         }
       }, character(1))
       named_choices <- stats::setNames(choices, labels)
-      selected <- desired %||% current
+      selected <- if (!is.null(desired_raw)) desired else current
       if (!nzchar(selected) || !selected %in% choices) {
         selected <- choices[[1]]
       }
@@ -1192,9 +1309,10 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(current)) {
       choices <- current
     }
-    selected <- desired %||% current
+    selected <- if (!is.null(desired_raw)) desired else current
     if (!length(choices)) {
-      updateSelectizeInput(session, "setup_model", choices = choices, selected = selected %||% "", server = TRUE)
+      selected_default <- if (nzchar(selected)) selected else ""
+      updateSelectizeInput(session, "setup_model", choices = choices, selected = selected_default, server = TRUE)
       if (!isTRUE(setup_state$loading)) setup_state$desired_model <- NULL
       return()
     }
@@ -1208,10 +1326,12 @@ server <- function(input, output, session) {
 
   update_setup_type_choices <- function() {
     catalog <- models_state$catalog
-    service <- input$setup_service %||% ""
-    model <- input$setup_model %||% ""
-    current <- isolate(input$setup_type) %||% ""
-    desired <- setup_state$desired_type
+    service <- .normalize_choice_value(input$setup_service)
+    model <- .normalize_choice_value(input$setup_model)
+    current_raw <- isolate(input$setup_type)
+    desired_raw <- setup_state$desired_type
+    current <- .normalize_choice_value(current_raw)
+    desired <- .normalize_choice_value(desired_raw)
     include_values <- c(current, desired)
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
@@ -1224,9 +1344,10 @@ server <- function(input, output, session) {
       choices <- c(fav_types, include_values)
       choices <- choices[nzchar(choices)]
       choices <- unique(choices)
-      selected <- desired %||% current
+      selected <- if (!is.null(desired_raw)) desired else current
       if (!length(choices)) {
-        updateSelectizeInput(session, "setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+        selected_default <- if (nzchar(selected)) selected else ""
+        updateSelectizeInput(session, "setup_type", choices = character(), selected = selected_default, server = TRUE)
         if (!isTRUE(setup_state$loading)) setup_state$desired_type <- NULL
         return()
       }
@@ -1244,9 +1365,10 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(current)) {
       choices <- current
     }
-    selected <- desired %||% current
+    selected <- if (!is.null(desired_raw)) desired else current
     if (!length(choices)) {
-      updateSelectizeInput(session, "setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+      selected_default <- if (nzchar(selected)) selected else ""
+      updateSelectizeInput(session, "setup_type", choices = character(), selected = selected_default, server = TRUE)
       if (!isTRUE(setup_state$loading)) setup_state$desired_type <- NULL
       return()
     }
@@ -1260,19 +1382,22 @@ server <- function(input, output, session) {
 
   update_agent_service_choices <- function() {
     catalog <- models_state$catalog
-    current <- isolate(input$agent_setup_service) %||% ""
-    desired <- agent_state$custom_desired_service
+    current_raw <- isolate(input$agent_setup_service)
+    desired_raw <- agent_state$custom_desired_service
+    current <- .normalize_choice_value(current_raw)
+    desired <- .normalize_choice_value(desired_raw)
     choices <- .model_service_choices(catalog, include = c(current, desired))
     choices <- choices[choices != "favorites"]
     if (nrow(models_state$favorites) > 0) {
       choices <- c(setNames("favorites", "Favorites"), choices)
     }
     if (!length(choices)) {
-      updateSelectizeInput(session, "agent_setup_service", choices = character(), selected = desired %||% current %||% "", server = TRUE)
+      selected_default <- if (!is.null(desired_raw)) desired else if (!is.null(current_raw)) current else ""
+      updateSelectizeInput(session, "agent_setup_service", choices = character(), selected = selected_default, server = TRUE)
       agent_state$custom_desired_service <- NULL
       return()
     }
-    selected <- desired %||% current
+    selected <- if (!is.null(desired_raw)) desired else current
     if (!nzchar(selected) || !selected %in% choices) {
       selected <- .pick_preferred_choice(choices, .DEFAULT_MODEL_SERVICE)
     }
@@ -1282,9 +1407,11 @@ server <- function(input, output, session) {
 
   update_agent_model_choices <- function() {
     catalog <- models_state$catalog
-    service <- input$agent_setup_service %||% ""
-    current <- isolate(input$agent_setup_model) %||% ""
-    desired <- agent_state$custom_desired_model
+    service <- .normalize_choice_value(input$agent_setup_service)
+    current_raw <- isolate(input$agent_setup_model)
+    desired_raw <- agent_state$custom_desired_model
+    current <- .normalize_choice_value(current_raw)
+    desired <- .normalize_choice_value(desired_raw)
     include_values <- c(current, desired)
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
@@ -1311,7 +1438,7 @@ server <- function(input, output, session) {
         }
       }, character(1))
       named_choices <- stats::setNames(choices, labels)
-      selected <- desired %||% current
+      selected <- if (!is.null(desired_raw)) desired else current
       if (!nzchar(selected) || !selected %in% choices) {
         selected <- choices[[1]]
       }
@@ -1327,9 +1454,10 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(current)) {
       choices <- current
     }
-    selected <- desired %||% current
+    selected <- if (!is.null(desired_raw)) desired else current
     if (!length(choices)) {
-      updateSelectizeInput(session, "agent_setup_model", choices = character(), selected = selected %||% "", server = TRUE)
+      selected_default <- if (nzchar(selected)) selected else ""
+      updateSelectizeInput(session, "agent_setup_model", choices = character(), selected = selected_default, server = TRUE)
       agent_state$custom_desired_model <- NULL
       return()
     }
@@ -1343,10 +1471,12 @@ server <- function(input, output, session) {
 
   update_agent_type_choices <- function() {
     catalog <- models_state$catalog
-    service <- input$agent_setup_service %||% ""
-    model <- input$agent_setup_model %||% ""
-    current <- isolate(input$agent_setup_type) %||% ""
-    desired <- agent_state$custom_desired_type
+    service <- .normalize_choice_value(input$agent_setup_service)
+    model <- .normalize_choice_value(input$agent_setup_model)
+    current_raw <- isolate(input$agent_setup_type)
+    desired_raw <- agent_state$custom_desired_type
+    current <- .normalize_choice_value(current_raw)
+    desired <- .normalize_choice_value(desired_raw)
     include_values <- c(current, desired)
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
@@ -1359,9 +1489,10 @@ server <- function(input, output, session) {
       choices <- c(fav_types, include_values)
       choices <- choices[nzchar(choices)]
       choices <- unique(choices)
-      selected <- desired %||% current
+      selected <- if (!is.null(desired_raw)) desired else current
       if (!length(choices)) {
-        updateSelectizeInput(session, "agent_setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+        selected_default <- if (nzchar(selected)) selected else ""
+        updateSelectizeInput(session, "agent_setup_type", choices = character(), selected = selected_default, server = TRUE)
         agent_state$custom_desired_type <- NULL
         return()
       }
@@ -1379,9 +1510,10 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(current)) {
       choices <- current
     }
-    selected <- desired %||% current
+    selected <- if (!is.null(desired_raw)) desired else current
     if (!length(choices)) {
-      updateSelectizeInput(session, "agent_setup_type", choices = character(), selected = selected %||% "", server = TRUE)
+      selected_default <- if (nzchar(selected)) selected else ""
+      updateSelectizeInput(session, "agent_setup_type", choices = character(), selected = selected_default, server = TRUE)
       agent_state$custom_desired_type <- NULL
       return()
     }
@@ -3761,6 +3893,192 @@ server <- function(input, output, session) {
     agent_summary_cache[[name]] <- .agent_summary_text(res)
     showNotification(sprintf("Agent '%s' saved.", name), type = "message")
     refresh_agent_list(selected = name)
+  })
+
+  output$transfer_export_download <- downloadHandler(
+    filename = function() {
+      name <- trimws(input$transfer_export_filename %||% "")
+      if (!nzchar(name)) {
+        name <- paste0("genflow_bundle_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".zip")
+      }
+      if (!grepl("\\.zip$", name, ignore.case = TRUE)) {
+        name <- paste0(name, ".zip")
+      }
+      name
+    },
+    content = function(file) {
+      include_flags <- c(
+        setups = isTRUE(input$transfer_include_setups),
+        content = isTRUE(input$transfer_include_content),
+        agents = isTRUE(input$transfer_include_agents),
+        models = isTRUE(input$transfer_include_models)
+      )
+      if (!any(include_flags)) {
+        showNotification("Select at least one component to export.", type = "warning")
+        req(FALSE)
+      }
+      models_dir <- current_models_dir()
+      result <- tryCatch(
+        gen_export_bundle(
+          path = file,
+          include_setups = include_flags[["setups"]],
+          include_agents = include_flags[["agents"]],
+          include_content = include_flags[["content"]],
+          include_models = include_flags[["models"]],
+          models_dir = models_dir,
+          overwrite = TRUE,
+          quiet = TRUE
+        ),
+        error = function(e) {
+          showNotification(conditionMessage(e), type = "error")
+          req(FALSE)
+        }
+      )
+      transfer_state$export_summary <- list(
+        timestamp = Sys.time(),
+        counts = result$counts,
+        includes = result$includes,
+        metadata = result$metadata
+      )
+      showNotification("Export bundle created.", type = "message")
+    }
+  )
+
+  observeEvent(input$transfer_import_run, {
+    file_info <- input$transfer_import_file
+    if (is.null(file_info) || !nzchar(file_info$datapath)) {
+      showNotification("Select a bundle (.zip) to import.", type = "warning")
+      return()
+    }
+    include_flags <- c(
+      setups = isTRUE(input$transfer_import_setups),
+      content = isTRUE(input$transfer_import_content),
+      agents = isTRUE(input$transfer_import_agents),
+      models = isTRUE(input$transfer_import_models)
+    )
+    if (!any(include_flags)) {
+      showNotification("Select at least one component to import.", type = "warning")
+      return()
+    }
+    overwrite <- isTRUE(input$transfer_import_overwrite)
+    models_dir <- current_models_dir()
+    withProgress(message = "Importing bundle...", value = 0, {
+      tryCatch(
+        {
+          result <- gen_import_bundle(
+            path = file_info$datapath,
+            include_setups = include_flags[["setups"]],
+            include_agents = include_flags[["agents"]],
+            include_content = include_flags[["content"]],
+            include_models = include_flags[["models"]],
+            models_dir = models_dir,
+            overwrite = overwrite,
+            quiet = TRUE
+          )
+          incProgress(1)
+          transfer_state$import_summary <- list(
+            timestamp = Sys.time(),
+            counts = result$counts,
+            includes = result$includes,
+            metadata = result$metadata
+          )
+          if (include_flags[["setups"]]) refresh_setup_list()
+          if (include_flags[["content"]]) refresh_content_list()
+          if (include_flags[["agents"]]) refresh_agent_list()
+          if (include_flags[["models"]]) {
+            dir <- current_models_dir()
+            new_catalog <- .load_models_catalog(dir)
+            new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+            models_state$catalog <- new_catalog
+            models_state$favorites <- new_favorites
+            models_state$favorites_present <- nrow(new_favorites) > 0
+            .save_favorites(new_favorites, dir)
+            models_state$status <- paste0("Models reloaded after import at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+            updateTextInput(session, "models_directory", value = dir)
+          }
+          showNotification("Import completed successfully.", type = "message")
+        },
+        error = function(e) {
+          transfer_state$import_summary <- list(
+            timestamp = Sys.time(),
+            error = conditionMessage(e)
+          )
+          showNotification(conditionMessage(e), type = "error")
+        }
+      )
+    })
+  })
+
+  output$transfer_export_summary <- renderUI({
+    summary <- transfer_state$export_summary
+    if (is.null(summary)) {
+      return(div(class = "gf-empty", "No export performed yet."))
+    }
+    counts_text <- format_transfer_counts(summary$counts)
+    metadata <- summary$metadata
+    exported_at <- ""
+    pkg_version <- ""
+    if (!is.null(metadata)) {
+      exported_at <- metadata$exported_at %||% ""
+      pkg_version <- metadata$package_version %||% ""
+    }
+    exported_at <- if (length(exported_at)) as.character(exported_at)[1] else ""
+    pkg_version <- if (length(pkg_version)) as.character(pkg_version)[1] else ""
+    tagList(
+      div(
+        class = "gf-preview",
+        tags$strong("Last export ready for download."),
+        tags$br(),
+        tags$span(counts_text),
+        if (nzchar(exported_at)) {
+          tagList(tags$br(), tags$span(sprintf("Bundle created at %s", exported_at)))
+        },
+        if (nzchar(pkg_version)) {
+          tagList(tags$br(), tags$span(sprintf("Source genflow version: %s", pkg_version)))
+        }
+      )
+    )
+  })
+
+  output$transfer_import_summary <- renderUI({
+    summary <- transfer_state$import_summary
+    if (is.null(summary)) {
+      return(div(class = "gf-empty", "No bundle imported yet."))
+    }
+    if (!is.null(summary$error)) {
+      return(
+        div(
+          class = "gf-preview",
+          tags$strong("Last import failed."),
+          tags$br(),
+          tags$span(summary$error)
+        )
+      )
+    }
+    counts_text <- format_transfer_counts(summary$counts)
+    metadata <- summary$metadata
+    exported_at <- ""
+    pkg_version <- ""
+    if (!is.null(metadata)) {
+      exported_at <- metadata$exported_at %||% ""
+      pkg_version <- metadata$package_version %||% ""
+    }
+    exported_at <- if (length(exported_at)) as.character(exported_at)[1] else ""
+    pkg_version <- if (length(pkg_version)) as.character(pkg_version)[1] else ""
+    tagList(
+      div(
+        class = "gf-preview",
+        tags$strong("Last import completed."),
+        tags$br(),
+        tags$span(counts_text),
+        if (nzchar(exported_at)) {
+          tagList(tags$br(), tags$span(sprintf("Bundle created at %s", exported_at)))
+        },
+        if (nzchar(pkg_version)) {
+          tagList(tags$br(), tags$span(sprintf("Source genflow version: %s", pkg_version)))
+        }
+      )
+    )
   })
 
   output$agent_setup_extra_fields <- renderUI(.render_kv_fields(agent_state$setup_extras, "agent_setup_extra", input, session))

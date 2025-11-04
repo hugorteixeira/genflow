@@ -67,6 +67,26 @@
     x <- unlist(x, recursive = TRUE, use.names = FALSE)
   }
   values <- as.character(x)
+  if (length(values)) {
+    normalize_entry <- function(entry) {
+      entry <- trimws(entry)
+      if (!nzchar(entry)) {
+        return(entry)
+      }
+      if (!grepl("\n", entry, fixed = TRUE) && (
+        grepl("[/\\\\]", entry) ||
+          startsWith(entry, "~") ||
+          grepl("^[A-Za-z]:", entry)
+      )) {
+        base <- basename(entry)
+        if (nzchar(base)) {
+          return(base)
+        }
+      }
+      entry
+    }
+    values <- vapply(values, normalize_entry, character(1))
+  }
   if (length(values) > 3) {
     values <- c(values[1:3], "...")
   }
