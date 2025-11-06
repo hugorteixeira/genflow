@@ -1147,10 +1147,30 @@
     mode <- "text"
     if (is.numeric(value)) mode <- "numeric"
     if (is.logical(value)) mode <- "logical"
+    if (mode == "text" && is.list(value)) {
+      mode <- "json"
+    }
+    if (mode == "text" && is.data.frame(value)) {
+      mode <- "json"
+    }
+    if (mode == "text" && is.character(value) && length(value) == 1) {
+      parsed <- tryCatch(fromJSON(value, simplifyVector = FALSE), error = function(e) NULL)
+      if (!is.null(parsed)) {
+        value <- parsed
+        mode <- "json"
+      }
+    }
+    value_str <- if (identical(mode, "json")) {
+      toJSON(value, auto_unbox = TRUE, pretty = TRUE)
+    } else if (is.atomic(value)) {
+      paste(value, collapse = "\n")
+    } else {
+      toJSON(value, auto_unbox = TRUE, pretty = TRUE)
+    }
     list(
       id = .rand_id("setup"),
       name = nm,
-      value = if (is.atomic(value)) paste(value, collapse = "\n") else toJSON(value, auto_unbox = TRUE, pretty = TRUE),
+      value = value_str,
       mode = mode,
       locked = FALSE
     )
@@ -1169,10 +1189,30 @@
     mode <- "text"
     if (is.numeric(value)) mode <- "numeric"
     if (is.logical(value)) mode <- "logical"
+    if (mode == "text" && is.list(value)) {
+      mode <- "json"
+    }
+    if (mode == "text" && is.data.frame(value)) {
+      mode <- "json"
+    }
+    if (mode == "text" && is.character(value) && length(value) == 1) {
+      parsed <- tryCatch(fromJSON(value, simplifyVector = FALSE), error = function(e) NULL)
+      if (!is.null(parsed)) {
+        value <- parsed
+        mode <- "json"
+      }
+    }
+    value_str <- if (identical(mode, "json")) {
+      toJSON(value, auto_unbox = TRUE, pretty = TRUE)
+    } else if (is.atomic(value)) {
+      paste(value, collapse = "\n")
+    } else {
+      toJSON(value, auto_unbox = TRUE, pretty = TRUE)
+    }
     list(
       id = .rand_id("override"),
       name = nm,
-      value = if (is.atomic(value)) paste(value, collapse = "\n") else toJSON(value, auto_unbox = TRUE, pretty = TRUE),
+      value = value_str,
       mode = mode,
       locked = FALSE
     )

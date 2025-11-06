@@ -13,7 +13,15 @@
 #' @return Character or object; text content, tool-call result, or an error sentinel string.
 #' @keywords internal
 #' @noRd
-.gen_txt_openai <- function(prompt, model, temp_v, reasoning, add_img, tools = FALSE, my_tools = NULL, timeout_secs = 80) {
+.gen_txt_openai <- function(prompt,
+                            model,
+                            temp_v,
+                            reasoning,
+                            add_img,
+                            tools = FALSE,
+                            my_tools = NULL,
+                            plugins = NULL,
+                            timeout_secs = 80) {
   use_responses <- !is.null(reasoning)
   api_url <- if (use_responses) {
     "https://api.openai.com/v1/responses"
@@ -206,7 +214,15 @@
 #' @return Character or object; text content, tool-call result, or an error sentinel string.
 #' @keywords internal
 #' @noRd
-.gen_txt_openrouter <- function(prompt, model, temp_v, reasoning, add_img, tools = FALSE, my_tools = NULL, timeout_secs = 80) {
+.gen_txt_openrouter <- function(prompt,
+                                model,
+                                temp_v,
+                                reasoning,
+                                add_img,
+                                tools = FALSE,
+                                my_tools = NULL,
+                                plugins = NULL,
+                                timeout_secs = 80) {
   # ... (initial code: default model, API key, URL, headers, initial_message, body) ...
   if (is.null(model)) {
     model <- "mistralai/mistral-7b-instruct"
@@ -245,6 +261,9 @@
       body$tools <- tools_payload
       body$tool_choice <- "auto"
     }
+  }
+  if (!is.null(plugins)) {
+    body$plugins <- plugins
   }
   if (!is.null(reasoning)) {
     body$reasoning <- list(effort = reasoning)
@@ -328,7 +347,15 @@
 #' @return Character or object; text content, tool-call result, or an error sentinel string.
 #' @keywords internal
 #' @noRd
-.gen_txt_hf <- function(prompt, model, temp_v, reasoning, add_img, tools = FALSE, my_tools = NULL, timeout_secs = 80) {
+.gen_txt_hf <- function(prompt,
+                        model,
+                        temp_v,
+                        reasoning,
+                        add_img,
+                        tools = FALSE,
+                        my_tools = NULL,
+                        plugins = NULL,
+                        timeout_secs = 80) {
   # --- Configuration ---
   if (is.null(model)) {
     model <- "mistralai/Mixtral-8x7B-Instruct-v0.1" # Default model (example)
@@ -581,6 +608,7 @@ gen_txt.default <- function(
   temp = 1,
   reasoning = NULL,
   tools = FALSE,
+  plugins = NULL,
   my_tools = NULL,
   timeout_api = 240,
   null_repeat = TRUE,
@@ -623,6 +651,52 @@ gen_txt.default <- function(
       stop("Invalid `reasoning` value. Choose one of: minimal, low, medium, high.")
     }
     reasoning_v <- reasoning_value
+  }
+
+  tools_flag <- FALSE
+  tools_payload <- my_tools
+  if (isTRUE(tools)) {
+    tools_flag <- TRUE
+  } else if ((is.logical(tools) && length(tools) == 1 && !tools) || is.null(tools)) {
+    tools_flag <- FALSE
+  } else {
+    candidate <- tools
+    if (is.character(candidate) && length(candidate) == 1) {
+      parsed <- tryCatch(fromJSON(candidate, simplifyVector = FALSE), error = function(e) NULL)
+      if (!is.null(parsed)) {
+        candidate <- parsed
+      } else {
+        stop("`tools` must be logical, a list, or valid JSON describing tools.", call. = FALSE)
+      }
+    }
+    if (!is.list(candidate)) {
+      stop("`tools` must be logical, a list, or valid JSON describing tools.", call. = FALSE)
+    }
+    tools_flag <- TRUE
+    tools_payload <- candidate
+  }
+
+  if (!tools_flag) {
+    tools_payload <- if (!missing(my_tools)) my_tools else NULL
+  } else if (is.null(tools_payload) && !is.null(my_tools)) {
+    tools_payload <- my_tools
+  }
+
+  plugins_payload <- NULL
+  if (!is.null(plugins)) {
+    candidate <- plugins
+    if (is.character(candidate) && length(candidate) == 1) {
+      parsed <- tryCatch(fromJSON(candidate, simplifyVector = FALSE), error = function(e) NULL)
+      if (!is.null(parsed)) {
+        candidate <- parsed
+      } else {
+        stop("`plugins` must be a list or valid JSON describing plugins.", call. = FALSE)
+      }
+    }
+    if (!is.list(candidate)) {
+      stop("`plugins` must be a list or valid JSON describing plugins.", call. = FALSE)
+    }
+    plugins_payload <- candidate
   }
 
   # Build prompt and estimate tokens (supports strings, files, data frames, nested lists)
@@ -672,20 +746,20 @@ gen_txt.default <- function(
   tokens_sent <- info$tokens
 
   # Wrapper that dispatches to provider-specific functions (kept consistent and fixes 'fal' call)
-  .do_call <- function(service, prompt, model, temp_v, reasoning, add_img, tools, my_tools, timeout_api) {
+  .do_call <- function(service, prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_api) {
     switch(tolower(service),
-      "openai" = .gen_txt_openai(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, timeout_secs = timeout_api),
+      "openai" = .gen_txt_openai(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
       #  "gemini"      = .gen_txt_gemini(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "geminicheck" = gen_txt_geminiCHECK(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "vertexai"    = gen_txt_vertexai(prompt, model, temp_v, timeout_secs = timeout_api), # safest signature
-      "openrouter" = .gen_txt_openrouter(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, timeout_secs = timeout_api),
+      "openrouter" = .gen_txt_openrouter(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
       #  "claude"      = gen_txt_claude(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "azure"       = gen_txt_azure(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "mistral"     = gen_txt_mistral(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "oracle"      = gen_txt_oracle(prompt, model, temp_v, timeout_secs = timeout_api),
       #  "groq"        = gen_txt_groq(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       # "zhipu"       = gen_txt_zhipu(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
-      "hf" = .gen_txt_hf(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, timeout_secs = timeout_api),
+      "hf" = .gen_txt_hf(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
       #    "cohere"      = gen_txt_cohere(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #   "grok"        = gen_txt_grok(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "nebius"      = gen_txt_nebius(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
@@ -707,7 +781,7 @@ gen_txt.default <- function(
   api_call_error <- NULL
 
   response_api <- tryCatch(
-    .do_call(service, prompt, model, temp_v, reasoning_v, add_img, tools, my_tools, timeout_api),
+    .do_call(service, prompt, model, temp_v, reasoning_v, add_img, tools_flag, tools_payload, plugins_payload, timeout_api),
     error = function(e) {
       api_call_error <<- paste("Error during API call execution:", conditionMessage(e))
       api_call_error
