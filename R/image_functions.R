@@ -50,7 +50,7 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
   if (is.list(y)) y <- as.numeric(y$y %||% y$w %||% y[[1]]) else if (is.vector(y)) y <- as.numeric(y[1]) # Allow w or y
   if (length(y) != 1 || !is.numeric(y) || is.na(y) || y <= 0) y <- 1024 # Default y (width)
 
-  if (is.null(directory)) directory <- file.path(getwd(), "imgs")
+  if (is.null(directory)) directory <- .genflow_default_dir("imgs")
   if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
 
   final_prompt <- if (!is.null(add)) paste(prompt, add) else prompt

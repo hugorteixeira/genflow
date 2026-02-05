@@ -72,6 +72,37 @@ result <- gen_txt(
 gen_view(result)
 ```
 
+### Speech To Text
+
+```r
+# Transcribe an audio file (requires provider API key)
+stt <- gen_stt(
+  audio = "audio.ogg",
+  service = "replicate",
+  model = "openai/whisper"
+)
+
+stt$response_value
+```
+
+Tested model: `openai/whisper` via Replicate. Other services/models are not tested yet.
+
+### Text To Speech
+
+```r
+# Synthesize speech from text (requires provider API key)
+tts <- gen_tts(
+  text = "Welcome to genflow.",
+  service = "replicate",
+  model = "qwen/qwen3-tts",
+  voice = "Aiden"
+)
+
+tts$response_value
+```
+
+Tested model: `qwen/qwen3-tts` via Replicate. Other services/models are not tested yet.
+
 ### Reusable Agents & Content (New!)
 
 ```r
@@ -202,6 +233,8 @@ graph TD
 |---------|-------------|
 | `gen_txt()` | Generate human-quality text with multimodal support |
 | `gen_img()` | Create stunning images from text prompts |
+| `gen_stt()` | Speech-to-text (tested: Replicate `openai/whisper`; other services/models not tested yet) |
+| `gen_tts()` | Text-to-speech (tested: Replicate `qwen/qwen3-tts`; other services/models not tested yet) |
 | `gen_batch()` | Execute parallel generation campaigns |
 | `gen_view()` | Visualize and explore generation results |
 | `gen_stats()` | Analyze performance and usage metrics |

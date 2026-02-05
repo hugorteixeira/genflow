@@ -562,13 +562,15 @@
 #'   to `tools::R_user_dir("agent_models", which = "data")` when `NULL`.
 #' @param label Optional character; label for the saved response. Defaults to a
 #'   sanitized derivation of `context`.
-#' @param service Character; provider identifier (e.g. `"openai"`,,
+#' @param service Character; provider identifier (e.g. `"openai"`,
 #'   `"openrouter"`, `"hf"`, etc.).
 #' @param model Character; model identifier for the chosen `service`.
 #' @param temp Optional numeric; sampling temperature. If `NULL`, defaults to 0.7.
 #' @param reasoning One of low, medium, high or minimal. Also known as just go with high.
 #' @param tools Logical; whether to enable tool/function calling for providers
 #'   that support it.
+#' @param plugins Optional list or JSON string describing provider-specific
+#'   plugins/extensions to include in the request.
 #' @param my_tools Function; your function with tools definitions.
 #' @param timeout_api Numeric; request timeout (seconds) passed to the provider
 #'   call.
@@ -630,7 +632,7 @@ gen_txt.default <- function(
 
   # Ensure output directory exists
   if (is.null(directory) || is.na(directory)) {
-    directory <- tools::R_user_dir("agent_models", which = "data")
+    directory <- .genflow_default_dir("texts")
   }
 
   # Normalize inputs possibly coming as lists/vectors

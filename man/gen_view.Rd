@@ -8,7 +8,8 @@ gen_view(
   ...,
   results_generated = NULL,
   grouped = TRUE,
-  stats = c("console", "viewer", "hide")
+  stats = c("console", "viewer", "hide"),
+  debug = FALSE
 )
 }
 \arguments{
@@ -24,6 +25,8 @@ display. Mixed inputs are flattened automatically.}
 (default) to print stats in the console while hiding them in the Viewer,
 \code{"viewer"} to render them inside the Viewer only, or \code{"hide"} to suppress
 stats entirely.}
+
+\item{debug}{Logical; when TRUE, prints extra diagnostics for rendering media.}
 }
 \value{
 Invisibly returns NULL. Opens the Viewer or prints to console.

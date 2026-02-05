@@ -13,6 +13,31 @@
   sanitized <- gsub("\\s+", "_", sanitized)
   substr(tolower(sanitized), 1, 100)
 }
+
+#' Default base directory for genflow outputs (internal)
+#'
+#' @return Path to ~/.genflow
+#' @keywords internal
+#' @noRd
+.genflow_base_dir <- function() {
+  base <- path.expand("~/.genflow")
+  if (!dir.exists(base)) dir.create(base, recursive = TRUE, showWarnings = FALSE)
+  base
+}
+
+#' Default output directory by type (internal)
+#'
+#' @param kind Optional subdirectory name (e.g., "texts", "imgs", "audios").
+#' @return Path to ~/.genflow[/kind]
+#' @keywords internal
+#' @noRd
+.genflow_default_dir <- function(kind = NULL) {
+  base <- .genflow_base_dir()
+  if (is.null(kind) || !nzchar(kind)) return(base)
+  out <- file.path(base, kind)
+  if (!dir.exists(out)) dir.create(out, recursive = TRUE, showWarnings = FALSE)
+  out
+}
 #' Fallback infix operator: x %||% y (internal)
 #'
 #' Returns `x` if not NULL, otherwise returns `y`.

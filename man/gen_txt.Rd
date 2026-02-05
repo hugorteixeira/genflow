@@ -20,6 +20,7 @@ gen_txt(context, ...)
   temp = 1,
   reasoning = NULL,
   tools = FALSE,
+  plugins = NULL,
   my_tools = NULL,
   timeout_api = 240,
   null_repeat = TRUE,
@@ -49,7 +50,7 @@ to \code{tools::R_user_dir("agent_models", which = "data")} when \code{NULL}.}
 \item{label}{Optional character; label for the saved response. Defaults to a
 sanitized derivation of \code{context}.}
 
-\item{service}{Character; provider identifier (e.g. \code{"openai"},,
+\item{service}{Character; provider identifier (e.g. \code{"openai"},
 \code{"openrouter"}, \code{"hf"}, etc.).}
 
 \item{model}{Character; model identifier for the chosen \code{service}.}
@@ -60,6 +61,9 @@ sanitized derivation of \code{context}.}
 
 \item{tools}{Logical; whether to enable tool/function calling for providers
 that support it.}
+
+\item{plugins}{Optional list or JSON string describing provider-specific
+plugins/extensions to include in the request.}
 
 \item{my_tools}{Function; your function with tools definitions.}
 

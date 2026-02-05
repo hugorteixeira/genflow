@@ -523,6 +523,14 @@
               selectizeInput("setup_type", "Type", choices = NULL, options = list(create = TRUE)),
               numericInput("setup_temp", "Temperature", value = 1, min = 0, max = 5, step = 0.1)
             ),
+            conditionalPanel(
+              condition = "input.setup_service === 'openrouter'",
+              div(
+                class = "gf-field-card",
+                h4("Online / web search"),
+                checkboxInput("setup_openrouter_online", "Add :online to model name", value = FALSE)
+              )
+            ),
             tags$hr(),
             div(
               class = "gf-section-header",
@@ -1236,7 +1244,9 @@ server <- function(input, output, session) {
     draft_name = NULL,
     draft_summary = NULL,
     draft_source = NULL,
-    skip_service_event = FALSE
+    skip_service_event = FALSE,
+    openrouter_online = FALSE,
+    openrouter_model_base = NULL
   )
 
   content_state <- reactiveValues(
@@ -1318,7 +1328,7 @@ server <- function(input, output, session) {
     if (!length(parts)) {
       "No items processed."
     } else {
-      paste(parts, collapse = " • ")
+      paste(parts, collapse = " | ")
     }
   }
 
@@ -1635,6 +1645,22 @@ server <- function(input, output, session) {
         return()
       }
       svc <- input$setup_service %||% ""
+      svc_lower <- tolower(svc)
+      current_model_input <- isolate(input$setup_model) %||% ""
+      if (!identical(svc_lower, "openrouter")) {
+        if (isTRUE(setup_state$openrouter_online) || isTRUE(isolate(input$setup_openrouter_online))) {
+          setup_state$openrouter_online <- FALSE
+          updateCheckboxInput(session, "setup_openrouter_online", value = FALSE)
+        }
+        setup_state$openrouter_model_base <- NULL
+      } else {
+        base_model <- sub(":online$", "", current_model_input)
+        setup_state$openrouter_model_base <- if (nzchar(base_model)) base_model else NULL
+        desired_checkbox <- isTRUE(setup_state$openrouter_online)
+        if (!identical(isTRUE(isolate(input$setup_openrouter_online)), desired_checkbox)) {
+          updateCheckboxInput(session, "setup_openrouter_online", value = desired_checkbox)
+        }
+      }
       catalog <- models_state$catalog
       current_model <- isolate(input$setup_model) %||% ""
       preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
@@ -1670,9 +1696,55 @@ server <- function(input, output, session) {
         if (!nzchar(setup_state$desired_model)) setup_state$desired_model <- NULL
         if (!nzchar(setup_state$desired_type)) setup_state$desired_type <- NULL
       }
-    },
-    priority = 5
-  )
+  },
+  priority = 5
+)
+
+  observeEvent(input$setup_openrouter_online, {
+    if (isTRUE(setup_state$loading)) return()
+    svc <- tolower(input$setup_service %||% "")
+    if (!identical(svc, "openrouter")) {
+      return()
+    }
+    enabled <- isTRUE(input$setup_openrouter_online)
+    setup_state$openrouter_online <- enabled
+    current_model <- input$setup_model %||% ""
+    base_model <- setup_state$openrouter_model_base %||% sub(":online$", "", current_model)
+    if (!nzchar(base_model)) {
+      base_model <- ""
+    }
+    setup_state$openrouter_model_base <- if (nzchar(base_model)) base_model else NULL
+    new_model <- if (enabled && nzchar(base_model)) paste0(base_model, ":online") else if (enabled) current_model else base_model
+    if (!identical(current_model, new_model)) {
+      setup_state$desired_model <- new_model
+      updateSelectizeInput(session, "setup_model", selected = new_model, server = TRUE)
+    } else {
+      setup_state$desired_model <- current_model
+    }
+  })
+
+  observeEvent(input$setup_model, {
+    if (isTRUE(setup_state$loading)) return()
+    svc <- tolower(input$setup_service %||% "")
+    if (!identical(svc, "openrouter")) {
+      setup_state$openrouter_model_base <- NULL
+      return()
+    }
+    value <- input$setup_model %||% ""
+    base_value <- sub(":online$", "", value)
+    setup_state$openrouter_model_base <- if (nzchar(base_value)) base_value else NULL
+    if (isTRUE(setup_state$openrouter_online)) {
+      desired_value <- if (nzchar(base_value)) paste0(base_value, ":online") else value
+      if (!identical(value, desired_value)) {
+        setup_state$desired_model <- desired_value
+        updateSelectizeInput(session, "setup_model", selected = desired_value, server = TRUE)
+      } else {
+        setup_state$desired_model <- value
+      }
+    } else {
+      setup_state$desired_model <- value
+    }
+  }, ignoreNULL = FALSE)
 
   observeEvent(models_state$catalog, {
     update_agent_service_choices()
@@ -2596,8 +2668,11 @@ server <- function(input, output, session) {
     setup_state$extras <- list()
     setup_state$thinking_enabled <- FALSE
     setup_state$thinking_level <- .DEFAULT_THINKING_LEVEL
+    setup_state$openrouter_online <- FALSE
+    setup_state$openrouter_model_base <- NULL
     updateCheckboxInput(session, "setup_thinking_enabled", value = FALSE)
     updateSelectInput(session, "setup_thinking_level", selected = .DEFAULT_THINKING_LEVEL)
+    updateCheckboxInput(session, "setup_openrouter_online", value = FALSE)
     output$setup_extra_fields <- renderUI(.render_kv_fields(setup_state$extras, "setup_extra", input, session))
   }
 
@@ -2632,10 +2707,28 @@ server <- function(input, output, session) {
     service_value <- setup$service %||% ""
     model_value <- setup$model %||% ""
     type_value <- setup$type %||% ""
+    online_enabled <- FALSE
+    base_model_value <- model_value %||% ""
+    if (identical(tolower(service_value), "openrouter") && nzchar(model_value)) {
+      if (grepl(":online$", model_value, fixed = TRUE)) {
+        online_enabled <- TRUE
+        base_model_value <- sub(":online$", "", model_value)
+      }
+    }
+    if (!nzchar(base_model_value)) {
+      base_model_value <- ""
+    }
     setup_state$desired_service <- service_value
-    setup_state$desired_model <- model_value
+    setup_state$desired_model <- if (online_enabled && nzchar(base_model_value)) {
+      paste0(base_model_value, ":online")
+    } else {
+      model_value
+    }
     setup_state$desired_type <- type_value
+    setup_state$openrouter_online <- online_enabled
+    setup_state$openrouter_model_base <- if (identical(tolower(service_value), "openrouter") && nzchar(base_model_value)) base_model_value else NULL
     setup_state$skip_service_event <- TRUE
+    updateCheckboxInput(session, "setup_openrouter_online", value = online_enabled)
     update_setup_service_choices()
     update_setup_model_choices()
     update_setup_type_choices()
@@ -2798,6 +2891,27 @@ server <- function(input, output, session) {
     model <- resolved$model
     type <- resolved$type
     if (!nzchar(type)) type <- NULL
+
+    if (identical(tolower(service), "openrouter")) {
+      has_suffix <- grepl(":online$", model, fixed = TRUE)
+      base_model <- if (has_suffix) sub(":online$", "", model) else model
+      if (isTRUE(input$setup_openrouter_online)) {
+        model <- if (has_suffix) model else paste0(base_model, ":online")
+      } else {
+        model <- base_model
+      }
+      setup_state$openrouter_online <- isTRUE(input$setup_openrouter_online)
+      setup_state$openrouter_model_base <- if (nzchar(base_model)) base_model else NULL
+      setup_state$desired_model <- model
+      updateSelectizeInput(session, "setup_model", selected = model, server = TRUE)
+      updateCheckboxInput(session, "setup_openrouter_online", value = setup_state$openrouter_online)
+    } else {
+      setup_state$openrouter_online <- FALSE
+      setup_state$openrouter_model_base <- NULL
+      if (isTRUE(isolate(input$setup_openrouter_online))) {
+        updateCheckboxInput(session, "setup_openrouter_online", value = FALSE)
+      }
+    }
 
     extras <- list()
     reserved_setup_names <- tolower(c("sname", "service", "model", "temp", "type", "thinking", "thinking_budget", "thinking_level", "reasoning", "reasoning_effort"))

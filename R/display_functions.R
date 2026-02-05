@@ -29,6 +29,9 @@
          "wav"  = "audio/wav",
          "aac"  = "audio/aac",
          "oga"  = "audio/ogg",
+         "m4a"  = "audio/mp4",
+         "flac" = "audio/flac",
+         "opus" = "audio/opus",
          # text/Outros
          "txt"  = "text/plain",
          "csv"  = "text/csv",
@@ -37,6 +40,22 @@
          # Default
          "application/octet-stream"
   )
+}
+
+#' Encode a file as data URI (internal)
+#'
+#' @keywords internal
+#' @noRd
+.encode_data_uri <- function(filepath, mime_type) {
+  if (!is.character(filepath) || length(filepath) != 1 || !nzchar(filepath)) {
+    stop("Invalid filepath for data URI encoding.")
+  }
+  if (requireNamespace("base64enc", quietly = TRUE)) {
+    return(base64enc::dataURI(file = filepath, mime = mime_type))
+  }
+  raw <- readBin(filepath, what = "raw", n = file.info(filepath)$size)
+  b64 <- jsonlite::base64_enc(raw)
+  paste0("data:", mime_type, ";base64,", b64)
 }
 #' Render plain text or object as HTML (internal)
 #'
@@ -50,7 +69,7 @@
   } else if (is.character(value)) {
     # If it's a file path not recognized as media, show the path
     is_potential_path <- length(value) == 1 && grepl("\\.", value) && !grepl("^data:", value) # Evita tratar data URI como path
-    if (is_potential_path && file.exists(value) && !grepl("\\.(png|jpe?g|gif|webp|svg|mp4|webm|ogg|mov|avi|mp3|wav|aac)$", value, ignore.case = TRUE)) {
+    if (is_potential_path && file.exists(value) && !grepl("\\.(png|jpe?g|gif|webp|svg|mp4|webm|ogg|mov|avi|mp3|wav|aac|oga|m4a|flac|opus)$", value, ignore.case = TRUE)) {
       content_html <- paste0("<p><i>File (text/Other):</i><br/><code>", htmltools::htmlEscape(value), "</code></p>")
     } else {
       # Otherwise, treat as normal text
@@ -173,6 +192,8 @@
 #' @keywords internal
 #' @noRd
 .gen_view_audio <- function(filepath) {
+  debug <- isTRUE(getOption("genflow_view_debug", FALSE))
+  dbg <- function(...) if (debug) message(...)
   #-----------------------------------------------------
   # 1) Unwrap list(file) or objects with $saved_file
   #-----------------------------------------------------
@@ -192,6 +213,7 @@
   #-----------------------------------------------------
   # 2) # 2) Basic path validation
   #-----------------------------------------------------
+  dbg("gen_view_audio: raw filepath = ", paste(filepath, collapse = " "))
   if (!is.character(filepath) ||
       length(filepath) != 1 ||
       !nzchar(filepath)) {
@@ -201,6 +223,7 @@
     normalizePath(filepath, winslash = "/", mustWork = FALSE),
     error = function(e) filepath
   )
+  dbg("gen_view_audio: normalized = ", caminho_norm)
   if (!file.exists(caminho_norm)) {
     return(paste0(
       "<p class='error-message'>Audio file not found:</p>",
@@ -212,6 +235,7 @@
   # 3) MIME???type
   #-----------------------------------------------------
   mime_type <- .get_mime_type(caminho_norm)
+  dbg("gen_view_audio: mime = ", mime_type)
   # we accept audio/* or video/ogg (which is audio)
   if (!grepl("^audio/", mime_type) && mime_type != "video/ogg") {
     return(paste0(
@@ -222,28 +246,81 @@
   if (mime_type == "video/ogg") mime_type <- "audio/ogg"
 
   #-----------------------------------------------------
-  # 4) Converter p/ Base64 (fallback file:///)
+  # 4) Build src. Prefer copying to viewer dir for reliable loading.
   #-----------------------------------------------------
-  audio_src <- tryCatch(
-    base64enc::dataURI(file = caminho_norm, mime = mime_type),
-    error = function(e) {
-      warning(".gen_view_audio: falha ao codificar Base64, usando file:///: ", e$message)
-      paste0("file:///", caminho_norm)
+  assets_dir <- getOption("genflow_viewer_assets_dir", NULL)
+  dbg("gen_view_audio: assets_dir = ", assets_dir %||% "<NULL>")
+  audio_src <- NULL
+  audio_src_is_relative <- FALSE
+
+  # Prefer inline data URI for small files to avoid Viewer file:// restrictions
+  max_inline_bytes <- 1024 * 1024  # 1MB
+  file_size <- tryCatch(file.info(caminho_norm)$size, error = function(e) NA)
+  dbg("gen_view_audio: file_size = ", file_size)
+  inline_ok <- !is.na(file_size) && file_size <= max_inline_bytes
+  if (inline_ok) {
+    audio_src <- tryCatch(
+      .encode_data_uri(caminho_norm, mime_type),
+      error = function(e) {
+        warning(".gen_view_audio: falha ao codificar Base64, usando file:///: ", e$message)
+        NULL
+      }
+    )
+    if (!is.null(audio_src)) {
+      dbg("gen_view_audio: using data URI")
     }
-  )
+  }
+
+  # If not inlined, copy into viewer assets dir and use relative path
+  if (is.null(audio_src) && !is.null(assets_dir) && dir.exists(assets_dir)) {
+    ext <- tools::file_ext(caminho_norm)
+    if (!nzchar(ext)) ext <- "mp3"
+    dest <- tempfile("genflow_audio_", tmpdir = assets_dir, fileext = paste0(".", ext))
+    ok <- file.copy(caminho_norm, dest, overwrite = TRUE)
+    dbg("gen_view_audio: copy to assets = ", ok, " -> ", dest)
+    if (ok && file.exists(dest)) {
+      audio_src <- basename(dest)
+      audio_src_is_relative <- TRUE
+    }
+  }
+
+  # Final fallback: file://
+  if (is.null(audio_src)) {
+    audio_src <- paste0("file:///", utils::URLencode(caminho_norm, reserved = TRUE))
+  }
+  dbg("gen_view_audio: audio_src = ", ifelse(nzchar(audio_src), substr(audio_src, 1, 120), "<empty>"))
 
   #-----------------------------------------------------
   # 5) Montar a tag <audio>
   #-----------------------------------------------------
   style <- "max-width:100%;height:auto;display:block;margin-top:5px;"
-  content_html <- paste0(
-    "<audio controls style=\"", style, "\"",
-    " title=\"", htmltools::htmlEscape(basename(caminho_norm)), "\">",
-    "<source src=\"", htmltools::htmlEscape(audio_src), "\"",
-    " type=\"", htmltools::htmlEscape(mime_type), "\">",
-    "Your browser does not support the audio element or failed to load it.",
-    "</audio>"
-  )
+  if (isTRUE(audio_src_is_relative)) {
+    audio_src <- paste0("./", audio_src)
+  }
+  if (debug) {
+    dbg("gen_view_audio: audio_src final = ", audio_src)
+  }
+  use_video_tag <- isTRUE(getOption("genflow_view_in_rstudio", FALSE))
+  if (use_video_tag) {
+    # RStudio Viewer sometimes suppresses <audio>; using <video> is more reliable.
+    content_html <- paste0(
+      "<video controls style=\"max-width:100%;height:48px;display:block;margin-top:5px;\"",
+      " title=\"", htmltools::htmlEscape(basename(caminho_norm)), "\">",
+      "<source src=\"", htmltools::htmlEscape(audio_src), "\"",
+      " type=\"", htmltools::htmlEscape(mime_type), "\">",
+      "Your browser does not support the video element or failed to load it.",
+      "</video>"
+    )
+  } else {
+    content_html <- paste0(
+      "<audio controls style=\"", style, "\"",
+      " title=\"", htmltools::htmlEscape(basename(caminho_norm)), "\">",
+      "<source src=\"", htmltools::htmlEscape(audio_src), "\"",
+      " type=\"", htmltools::htmlEscape(mime_type), "\">",
+      "Your browser does not support the audio element or failed to load it.",
+      "</audio>"
+    )
+  }
 
   #-----------------------------------------------------
   # 6) Detectar se vem de dentro de gen_view()
@@ -604,6 +681,7 @@
 #' @param results_generated Optional legacy argument accepting a list of results
 #'   (such as the return value from `gen_batch()`). Used when `...` is empty.
 #' @param grouped Logical; when TRUE (default) results and statistics are grouped by result type.
+#' @param debug Logical; when TRUE, prints extra diagnostics for rendering media.
 #' @param stats Character; choose where statistics are displayed. Use `"console"`
 #'   (default) to print stats in the console while hiding them in the Viewer,
 #'   `"viewer"` to render them inside the Viewer only, or `"hide"` to suppress
@@ -615,13 +693,16 @@
 #'
 #' @export
 gen_view <- function(..., results_generated = NULL, grouped = TRUE,
-                     stats = c("console", "viewer", "hide")) {
+                     stats = c("console", "viewer", "hide"), debug = FALSE) {
 
   call <- match.call(expand.dots = FALSE)
   dots_expr <- call$...
   expr_list <- if (is.null(dots_expr)) list() else as.list(dots_expr)
   expr_names <- if (is.null(dots_expr)) character(0) else names(dots_expr)
   stats <- match.arg(stats)
+  prev_debug <- getOption("genflow_view_debug", FALSE)
+  options(genflow_view_debug = isTRUE(debug))
+  on.exit(options(genflow_view_debug = prev_debug), add = TRUE)
 
   args <- list(...)
   if (!missing(results_generated)) {
@@ -731,6 +812,47 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     NULL
   }
 
+  resolve_file_path <- function(value, depth = 0L) {
+    if (depth > 4) return(NULL)
+    if (is.null(value)) return(NULL)
+    if (is.character(value) && length(value) >= 1) {
+      for (cand in value) {
+        if (!nzchar(cand)) next
+        if (grepl("^data:", cand)) next
+        if (grepl("^https?://", cand)) next
+        path <- cand
+        if (grepl("^file://", path)) {
+          path <- sub("^file://+", "/", path)
+          path <- utils::URLdecode(path)
+        }
+        path <- path.expand(path)
+        path_norm <- tryCatch(normalizePath(path, winslash = "/", mustWork = FALSE), error = function(e) path)
+        if (file.exists(path_norm)) return(path_norm)
+      }
+      return(NULL)
+    }
+    if (is.list(value)) {
+      candidates <- list(
+        value$saved_file,
+        value$response_value,
+        value$audio,
+        value$path,
+        value$file,
+        value$filepath,
+        value$output,
+        value$url
+      )
+      for (cand in candidates) {
+        res <- resolve_file_path(cand, depth + 1L)
+        if (!is.null(res)) return(res)
+      }
+      if (length(value) == 1) {
+        return(resolve_file_path(value[[1]], depth + 1L))
+      }
+    }
+    NULL
+  }
+
   resolve_type_hint <- function(...) {
     hints <- list(...)
     for (hint in hints) {
@@ -748,7 +870,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       hint <- resolve_type_hint(item$content_type, item$type, item$response_type, item$output_type)
       if (grepl("image", hint, fixed = TRUE)) return("image")
       if (grepl("video", hint, fixed = TRUE) || grepl("mp4", hint, fixed = TRUE) || grepl("webm", hint, fixed = TRUE)) return("video")
-      if (grepl("audio", hint, fixed = TRUE) || grepl("mp3", hint, fixed = TRUE) || grepl("wav", hint, fixed = TRUE)) return("audio")
+      if (grepl("audio", hint, fixed = TRUE) || grepl("mp3", hint, fixed = TRUE) || grepl("wav", hint, fixed = TRUE) || grepl("m4a", hint, fixed = TRUE) || grepl("flac", hint, fixed = TRUE) || grepl("opus", hint, fixed = TRUE)) return("audio")
       if (grepl("text", hint, fixed = TRUE) || grepl("json", hint, fixed = TRUE) || grepl("markdown", hint, fixed = TRUE) || grepl("html", hint, fixed = TRUE)) {
         return("text")
       }
@@ -759,7 +881,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
         lower_val <- tolower(path_candidate)
         if (grepl("\\.(png|jpe?g|gif|webp|svg)$", lower_val)) return("image")
         if (grepl("\\.(mp4|webm|ogg|mov|avi)$", lower_val)) return("video")
-        if (grepl("\\.(mp3|wav|aac|oga)$", lower_val)) return("audio")
+        if (grepl("\\.(mp3|wav|aac|oga|m4a|flac|opus)$", lower_val)) return("audio")
       }
 
       if (is.character(value)) return("text")
@@ -773,7 +895,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       lower_val <- tolower(item[[1]])
       if (grepl("\\.(png|jpe?g|gif|webp|svg)$", lower_val)) return("image")
       if (grepl("\\.(mp4|webm|ogg|mov|avi)$", lower_val)) return("video")
-      if (grepl("\\.(mp3|wav|aac|oga)$", lower_val)) return("audio")
+      if (grepl("\\.(mp3|wav|aac|oga|m4a|flac|opus)$", lower_val)) return("audio")
       return("text")
     }
 
@@ -786,7 +908,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     character(0)
   }
 
-  primary_types <- c("text", "image", "video")
+  primary_types <- c("text", "image", "video", "audio")
   base_types <- if (length(content_types) > 0) content_types else character(0)
   base_types[!(base_types %in% primary_types)] <- "other"
   is_batch_vec <- if (length(base_types) > 0) (!is.na(batch_ids) & nzchar(batch_ids)) else logical(0)
@@ -795,6 +917,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
   final_categories[is_batch_vec & base_types == "text"] <- "batch_text"
   final_categories[is_batch_vec & base_types == "image"] <- "batch_image"
   final_categories[is_batch_vec & base_types == "video"] <- "batch_video"
+  final_categories[is_batch_vec & base_types == "audio"] <- "batch_audio"
 
   if (length(batch_meta) > 0) {
     for (bid in names(batch_meta)) {
@@ -821,9 +944,11 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     batch_text = "Text Batches",
     batch_image = "Image Batches",
     batch_video = "Video Batches",
+    batch_audio = "Audio Batches",
     text = "Texts",
     image = "Images",
     video = "Videos",
+    audio = "Audios",
     other = "Other"
   )
 
@@ -862,8 +987,21 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
   viewer_available <- interactive() &&
     requireNamespace("rstudioapi", quietly = TRUE) &&
     rstudioapi::isAvailable() &&
-    requireNamespace("htmltools", quietly = TRUE) &&
-    requireNamespace("base64enc", quietly = TRUE)
+    requireNamespace("htmltools", quietly = TRUE)
+
+  # Prepare viewer assets directory for media (audio/video) so relative paths resolve.
+  assets_root <- .genflow_default_dir("viewer_assets")
+  viewer_assets_dir <- file.path(assets_root, paste0("view_", format(Sys.time(), "%Y%m%d_%H%M%S"), "_", paste(sample(c(letters, 0:9), 6, replace = TRUE), collapse = "")))
+  dir.create(viewer_assets_dir, recursive = TRUE, showWarnings = FALSE)
+  options(genflow_viewer_assets_dir = viewer_assets_dir)
+  options(genflow_view_in_rstudio = viewer_available)
+  on.exit({
+    options(genflow_viewer_assets_dir = NULL)
+    options(genflow_view_in_rstudio = NULL)
+  }, add = TRUE)
+  if (isTRUE(getOption("genflow_view_debug", FALSE))) {
+    message("gen_view: assets dir = ", viewer_assets_dir)
+  }
 
   modal_html <- '
       <div id="imageModal" class="modal-overlay">
@@ -913,6 +1051,36 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
               closeModal();
             }
           });
+
+          const positionTooltip = (tooltip) => {
+            if (!tooltip) return;
+            const pad = 8;
+            tooltip.style.top = '50%';
+            tooltip.style.left = 'auto';
+            tooltip.style.right = 'calc(100% + 8px)';
+            tooltip.style.setProperty('--tooltip-shift', '0px');
+            let rect = tooltip.getBoundingClientRect();
+
+            if (rect.left < pad) {
+              tooltip.style.right = 'auto';
+              tooltip.style.left = 'calc(100% + 8px)';
+              tooltip.style.setProperty('--tooltip-shift', '0px');
+              rect = tooltip.getBoundingClientRect();
+            }
+            if (rect.right > window.innerWidth - pad) {
+              const shift = rect.right - (window.innerWidth - pad);
+              tooltip.style.setProperty('--tooltip-shift', '-' + shift + 'px');
+            }
+          };
+
+          document.querySelectorAll('.info-wrapper').forEach(function(wrapper) {
+            const tooltip = wrapper.querySelector('.info-tooltip');
+            if (!tooltip) return;
+            const handler = function() { positionTooltip(tooltip); };
+            wrapper.addEventListener('mouseenter', handler);
+            wrapper.addEventListener('focusin', handler);
+            window.addEventListener('resize', handler);
+          });
         });
       </script>
     "
@@ -942,15 +1110,15 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
         model_raw <- res_item$model %||% "?"
         if (grepl("/", model_raw)) model_info_short <- sub(".*/", "", model_raw) else model_info_short <- model_raw
         time_info <- paste0(round(res_item$duration %||% NA, 1), "s")
-        if (!is.null(res_item$response_value) && is.character(res_item$response_value) && length(res_item$response_value) == 1) {
-          path <- res_item$response_value
+        path <- res_item$response_value %||% res_item$saved_file %||% res_item$audio %||% res_item$path %||% res_item$file
+        if (!is.null(path) && is.character(path) && length(path) == 1) {
           if (grepl("\\.(png|jpe?g|gif|webp|svg)$", path, ignore.case = TRUE)) {
             content_type_info <- "Image"
             fsize <- tryCatch(file.info(path)$size, error = function(e) NA)
             if (!is.na(fsize)) extra_info <- paste0(" (", .format_file_size(fsize), ")")
           } else if (grepl("\\.(mp4|webm|ogg|mov|avi)$", path, ignore.case = TRUE)) {
             content_type_info <- "Video"
-          } else if (grepl("\\.(mp3|wav|aac|oga)$", path, ignore.case = TRUE)) {
+          } else if (grepl("\\.(mp3|wav|aac|oga|m4a|flac|opus)$", path, ignore.case = TRUE)) {
             content_type_info <- "Audio"
           } else if (grepl("\\.(txt|csv|json|html)$", path, ignore.case = TRUE)) {
             content_type_info <- "text/Doc"
@@ -1214,8 +1382,17 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
   }
 
   css <- sprintf(
-      "\n      body { font-family: 'Segoe UI', sans-serif; background-color: #f4f6fb; margin: 0; padding: 12px; color: #1f2937; }\n      h2 { text-align: center; margin-bottom: 20px; color: #111827; font-weight: 600; }\n      #results-grid, .results-grid { display: grid; grid-template-columns: repeat(%d, minmax(240px, 1fr)); gap: 8px; align-items: stretch; }\n      .result-item { background: #ffffff; border: 1px solid #dbe1ea; border-radius: 10px; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08); padding: 14px; display: flex; flex-direction: column; transition: transform 0.18s ease, box-shadow 0.18s ease; min-height: 0; }\n      .result-item:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12); }\n      .result-item.result-from-batch { border-color: #c3d4f7; background: linear-gradient(135deg, rgba(223, 232, 255, 0.65), rgba(255, 255, 255, 0.95)); }\n      .result-item .item-header { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 10px; }\n      .item-label { font-weight: 600; color: #0f172a; flex: 1 1 auto; min-width: 0; margin-right: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\n      .item-metadata { font-size: 0.8em; color: #4b5563; flex: 0 1 34%%; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .item-header > .item-metadata { margin-left: 6px; }\n      .item-content { flex: 1; border-top: 1px solid #e5e9f2; padding-top: 9px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }\n      .item-content-body { position: relative; flex: 1; max-height: 16em; overflow-y: auto; overflow-x: auto; padding-right: 6px; }\n      .item-content-body.item-kind-text { overflow-x: hidden; }\n      .item-content-body.item-kind-media { max-height: 18em; }\n      .item-content-body.item-kind-image { max-height: none; overflow-y: hidden; overflow-x: auto; padding-right: 0; }\n      .item-content-body.item-kind-video { overflow-x: hidden; }\n      .item-content-body.item-kind-audio { overflow-x: hidden; }\n      .item-content-body::-webkit-scrollbar { width: 6px; height: 6px; }\n      .item-content-body::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.55); border-radius: 8px; }\n      .item-content-body::-webkit-scrollbar-track { background: transparent; }\n      .item-content-body pre { background-color: #f3f4f6; padding: 10px; border-radius: 8px; overflow-x: auto; overflow-y: visible; white-space: pre-wrap; word-break: break-word; font-size: 0.85em; margin: 0; }\n      .item-content-body code { background-color: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-size: 0.85em; color: #1f2937; }\n      .media-scroll { position: relative; max-width: 100%%; }\n      .media-scroll-image { overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; }\n      .media-scroll-image img { display: block; max-height: 26em; width: auto; height: auto !important; max-width: none !important; }\n      .media-scroll-video, .media-scroll-audio { overflow-x: hidden; }\n      .status-dot { width: 9px; height: 9px; border-radius: 50%%; display: inline-block; margin-right: 4px; }\n      .status-success { background-color: #22c55e; }\n      .status-error { background-color: #ef4444; }\n      .status-invalid { background-color: #9ca3af; }\n      .status-info { background-color: #3b82f6; }\n      .error-message { color: #ef4444; font-style: italic; font-size: 0.85em; word-wrap: break-word; margin: 0; }\n\n      .group-section { margin-bottom: 26px; }\n      .group-header { margin: 0 0 12px; color: #0f172a; font-size: 1.25em; font-weight: 600; display: flex; align-items: center; gap: 6px; }\n      .group-header::after { content: \"\"; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(148, 163, 184, 0.4), rgba(148, 163, 184, 0)); }\n      .group-items { margin-bottom: 16px; }\n\n      #stats-section { background: transparent; padding: 0; border: none; }\n      .stats-collection { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }\n      .stats-collection.with-title { margin-top: 25px; }\n      .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 9px; margin-top: 0; justify-items: stretch; }\n      #stats-section h3 { margin: 0 0 12px; color: #1f2937; text-align: left; font-size: 1em; font-weight: 600; }\n      .stats-header { margin: 0 0 6px; font-size: 0.9em; color: #1f2937; font-weight: 600; letter-spacing: 0.01em; }\n      .stats-card { background: linear-gradient(145deg, #ffffff, #f5f7fb); border: 1px solid #d2d9e5; border-radius: 10px; padding: 12px 14px; box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06); display: flex; flex-direction: column; gap: 8px; min-height: 0; }\n      .stats-card-header { font-weight: 600; font-size: 0.95em; color: #0f172a; display: flex; align-items: center; gap: 6px; }\n      .stats-card-header::before { content: \"\"; width: 9px; height: 9px; border-radius: 50%%; background: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15); }\n      .stats-card-body { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; font-size: 0.8em; color: #1f2937; }\n      .stats-card-body dt { font-weight: 600; color: #4b5563; text-transform: capitalize; }\n      .stats-card-body dd { margin: 0; color: #111827; }\n\n      .modal-overlay { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%%; height: 100%%; overflow: auto; background-color: rgba(15, 23, 42, 0.88); justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; }\n      .modal-content { margin: auto; display: block; max-width: 92%%; max-height: 92vh; object-fit: contain; animation-name: zoomIn; animation-duration: 0.3s; border-radius: 10px; box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35); }\n      .modal-close { position: absolute; top: 16px; right: 28px; color: #f9fafb; font-size: 34px; font-weight: bold; transition: 0.3s; cursor: pointer; }\n      .modal-close:hover, .modal-close:focus { color: #d1d5db; text-decoration: none; cursor: pointer; }\n      @keyframes zoomIn { from { transform: scale(0.82); opacity: 0; } to { transform: scale(1); opacity: 1; } }\n    ", num_cols)
+      "\n      body { font-family: 'Segoe UI', sans-serif; background-color: #f4f6fb; margin: 0; padding: 12px; color: #1f2937; }\n      h2 { text-align: center; margin-bottom: 20px; color: #111827; font-weight: 600; }\n      #results-grid, .results-grid { display: grid; grid-template-columns: repeat(%d, minmax(240px, 1fr)); gap: 8px; align-items: stretch; }\n      .result-item { background: #ffffff; border: 1px solid #dbe1ea; border-radius: 10px; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08); padding: 14px; display: flex; flex-direction: column; transition: transform 0.18s ease, box-shadow 0.18s ease; min-height: 0; }\n      .result-item:hover { transform: translateY(-2px); box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12); }\n      .result-item.result-from-batch { border-color: #c3d4f7; background: linear-gradient(135deg, rgba(223, 232, 255, 0.65), rgba(255, 255, 255, 0.95)); }\n      .result-item .item-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .item-label { font-weight: 600; color: #0f172a; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .info-wrapper { position: relative; display: inline-flex; align-items: center; margin-left: auto; }
+      .info-icon { width: 18px; height: 18px; border-radius: 50%%; background: #e2e8f0; color: #1f2937; font-size: 0.72em; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; cursor: default; border: 1px solid #cbd5f5; }
+      .info-icon:focus { outline: 2px solid rgba(59, 130, 246, 0.5); outline-offset: 2px; }
+      .info-tooltip { position: absolute; right: calc(100%% + 8px); top: 50%%; transform: translateY(-50%%) translateX(var(--tooltip-shift, 0px)); background: #0f172a; color: #f8fafc; padding: 8px 10px; border-radius: 8px; font-size: 0.75em; line-height: 1.4; box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35); min-width: 360px; max-width: 90vw; z-index: 10; opacity: 0; visibility: hidden; transition: opacity 0.15s ease; }
+      .info-line { display: flex; align-items: baseline; gap: 6px; }
+      .info-tooltip strong { color: #e2e8f0; font-weight: 600; }
+      .info-tooltip code { background: rgba(148, 163, 184, 0.2); color: #f8fafc; padding: 2px 4px; border-radius: 4px; font-size: 0.95em; word-break: break-word; white-space: pre-wrap; }
+      .info-wrapper:hover .info-tooltip, .info-wrapper:focus-within .info-tooltip { opacity: 1; visibility: visible; }
+      .item-content { flex: 1; border-top: 1px solid #e5e9f2; padding-top: 9px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }\n      .item-content-body { position: relative; flex: 1; max-height: 16em; overflow-y: auto; overflow-x: auto; padding-right: 6px; }\n      .item-content-body.item-kind-text { overflow-x: hidden; }\n      .item-content-body.item-kind-media { max-height: 18em; }\n      .item-content-body.item-kind-image { max-height: none; overflow-y: hidden; overflow-x: auto; padding-right: 0; }\n      .item-content-body.item-kind-video { overflow-x: hidden; }\n      .item-content-body.item-kind-audio { overflow-x: hidden; }\n      .item-content-body::-webkit-scrollbar { width: 6px; height: 6px; }\n      .item-content-body::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.55); border-radius: 8px; }\n      .item-content-body::-webkit-scrollbar-track { background: transparent; }\n      .item-content-body pre { background-color: #f3f4f6; padding: 10px; border-radius: 8px; overflow-x: auto; overflow-y: visible; white-space: pre-wrap; word-break: break-word; font-size: 0.85em; margin: 0; }\n      .item-content-body code { background-color: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-size: 0.85em; color: #1f2937; }\n      .media-scroll { position: relative; max-width: 100%%; }\n      .media-scroll-image { overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; }\n      .media-scroll-image img { display: block; max-height: 26em; width: auto; height: auto !important; max-width: none !important; }\n      .media-scroll-video, .media-scroll-audio { overflow-x: hidden; }\n      .status-dot { width: 9px; height: 9px; border-radius: 50%%; display: inline-block; margin-right: 4px; }\n      .status-success { background-color: #22c55e; }\n      .status-error { background-color: #ef4444; }\n      .status-invalid { background-color: #9ca3af; }\n      .status-info { background-color: #3b82f6; }\n      .error-message { color: #ef4444; font-style: italic; font-size: 0.85em; word-wrap: break-word; margin: 0; }\n\n      .group-section { margin-bottom: 26px; }\n      .group-header { margin: 0 0 12px; color: #0f172a; font-size: 1.25em; font-weight: 600; display: flex; align-items: center; gap: 6px; }\n      .group-header::after { content: \"\"; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(148, 163, 184, 0.4), rgba(148, 163, 184, 0)); }\n      .group-items { margin-bottom: 16px; }\n\n      #stats-section { background: transparent; padding: 0; border: none; }\n      .stats-collection { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }\n      .stats-collection.with-title { margin-top: 25px; }\n      .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 9px; margin-top: 0; justify-items: stretch; }\n      #stats-section h3 { margin: 0 0 12px; color: #1f2937; text-align: left; font-size: 1em; font-weight: 600; }\n      .stats-header { margin: 0 0 6px; font-size: 0.9em; color: #1f2937; font-weight: 600; letter-spacing: 0.01em; }\n      .stats-card { background: linear-gradient(145deg, #ffffff, #f5f7fb); border: 1px solid #d2d9e5; border-radius: 10px; padding: 12px 14px; box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06); display: flex; flex-direction: column; gap: 8px; min-height: 0; }\n      .stats-card-header { font-weight: 600; font-size: 0.95em; color: #0f172a; display: flex; align-items: center; gap: 6px; }\n      .stats-card-header::before { content: \"\"; width: 9px; height: 9px; border-radius: 50%%; background: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15); }\n      .stats-card-body { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; font-size: 0.8em; color: #1f2937; }\n      .stats-card-body dt { font-weight: 600; color: #4b5563; text-transform: capitalize; }\n      .stats-card-body dd { margin: 0; color: #111827; }\n\n      .modal-overlay { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%%; height: 100%%; overflow: auto; background-color: rgba(15, 23, 42, 0.88); justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; }\n      .modal-content { margin: auto; display: block; max-width: 92%%; max-height: 92vh; object-fit: contain; animation-name: zoomIn; animation-duration: 0.3s; border-radius: 10px; box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35); }\n      .modal-close { position: absolute; top: 16px; right: 28px; color: #f9fafb; font-size: 34px; font-weight: bold; transition: 0.3s; cursor: pointer; }\n      .modal-close:hover, .modal-close:focus { color: #d1d5db; text-decoration: none; cursor: pointer; }\n      @keyframes zoomIn { from { transform: scale(0.82); opacity: 0; } to { transform: scale(1); opacity: 1; } }\n    ", num_cols)
 
   item_infos <- vector("list", length(indices_results))
 
@@ -1251,7 +1428,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       metadata_tooltip <- metadata_html
 
       if (status_api_val == "SUCCESS") {
-        value <- res_item$response_value
+        value <- res_item$response_value %||% res_item$saved_file %||% res_item$audio %||% res_item$path %||% res_item$file
         if (!is.null(value) && is.character(value) && length(value) == 1 && nzchar(value)) {
           path <- value
           if (grepl("\\.(png|jpe?g|gif|webp|svg)$", path, ignore.case = TRUE)) {
@@ -1265,7 +1442,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
             content_html <- .gen_view_video(path)
             content_type_info <- "Video"
             content_kind <- "video"
-          } else if (grepl("\\.(mp3|wav|aac|oga)$", path, ignore.case = TRUE)) {
+          } else if (grepl("\\.(mp3|wav|aac|oga|m4a|flac|opus)$", path, ignore.case = TRUE)) {
             content_html <- .gen_view_audio(path)
             content_type_info <- "Audio"
             content_kind <- "audio"
@@ -1347,6 +1524,56 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       content_html <- paste0("<div class='media-scroll media-scroll-audio'>", content_html, "</div>")
     }
 
+    file_path <- resolve_file_path(res_item)
+    file_path_label <- if (!is.null(file_path)) file_path else "Not saved to disk"
+    info_entries <- character(0)
+    add_info_line <- function(label, value, code = FALSE) {
+      if (is.null(value)) return()
+      if (length(value) == 1 && is.na(value)) return()
+      if (length(value) > 1) value <- paste(value, collapse = ", ")
+      if (is.numeric(value)) {
+        if (all(is.na(value))) return()
+        value <- format(value, digits = 4, trim = TRUE)
+      }
+      value <- trimws(as.character(value))
+      if (!nzchar(value)) return()
+      value_html <- htmltools::htmlEscape(value)
+      if (isTRUE(code)) {
+        value_html <- paste0("<code>", value_html, "</code>")
+      }
+      info_entries <<- c(info_entries, paste0(
+        "<div class='info-line'><strong>", htmltools::htmlEscape(label), ":</strong> ",
+        value_html, "</div>"
+      ))
+    }
+    if (res_is_list) {
+      add_info_line("Title", res_item$label_cat %||% res_item$label)
+      add_info_line("Service", res_item$service)
+      add_info_line("Model", res_item$model)
+      temp_val <- res_item$temp %||% res_item$temperature
+      add_info_line("Temperature", temp_val)
+      add_info_line("Voice", res_item$voice)
+      add_info_line("Format", res_item$format)
+      add_info_line("Dimensoes", res_item$dimensoes)
+      time_val <- if (!is.null(res_item$duration)) paste0(round(res_item$duration, 2), "s") else time_info
+      add_info_line("Time", time_val)
+    } else if (nzchar(time_info) && !identical(time_info, "N/A")) {
+      add_info_line("Time", time_info)
+    }
+    add_info_line("File", file_path_label, code = TRUE)
+    if (length(info_entries) == 0) {
+      info_entries <- "<div class='info-line'><strong>Info:</strong> <span>No details available</span></div>"
+    } else {
+      info_entries <- paste(info_entries, collapse = "")
+    }
+    info_tooltip_html <- paste0("<span class='info-tooltip'>", info_entries, "</span>")
+    info_icon_html <- paste0(
+      "<span class='info-wrapper'>",
+      "<span class='info-icon' tabindex='0' role='button' aria-label='Info'>i</span>",
+      info_tooltip_html,
+      "</span>"
+    )
+
     status_dot_html <- paste0("<span class='status-dot ", status_class, "' title='Status: ", status_class, "'></span>")
     label_tooltip <- if (res_is_list && !is.null(res_item$label) && nchar(res_item$label) > 25) htmltools::htmlEscape(res_item$label) else metadata_tooltip
 
@@ -1354,7 +1581,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       "<div class='item-header'>",
       status_dot_html,
       "<span class='item-label' title='", label_tooltip %||% label_html, "'>", label_html, "</span>",
-      "<span class='item-metadata' title='", metadata_tooltip %||% metadata_html, "'>", metadata_html, "</span>",
+      info_icon_html,
       "</div>"
     )
     content_body_classes <- c("item-content-body", paste0("item-kind-", content_kind))
@@ -1441,7 +1668,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     }
 
     group_sections <- character()
-    batch_category_order <- c("batch_text", "batch_image", "batch_video")
+    batch_category_order <- c("batch_text", "batch_image", "batch_video", "batch_audio")
     for (cat in batch_category_order) {
       idx_cat <- which(item_categories_vec == cat)
       if (length(idx_cat) == 0) next
@@ -1467,7 +1694,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       }
     }
 
-    non_batch_categories <- c("text", "image", "video")
+    non_batch_categories <- c("text", "image", "video", "audio")
     for (cat in non_batch_categories) {
       item_idx <- which(item_categories_vec == cat & (is.na(item_batch_vec) | !nzchar(item_batch_vec)))
       stats_subset <- gather_stats_for(item_idx)
@@ -1501,8 +1728,17 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     html_body_content <- paste(results_grid_html, stats_html, sep = "\n")
   }
 
+  base_path <- tryCatch(normalizePath(viewer_assets_dir, winslash = "/", mustWork = FALSE), error = function(e) viewer_assets_dir)
+  base_path <- gsub("/+$", "", base_path)
+  base_href <- paste0("file://", base_path, "/")
+  base_tag <- paste0("<base href=\"", base_href, "\">")
+  if (isTRUE(getOption("genflow_view_debug", FALSE))) {
+    message("gen_view: base href = ", base_href)
+  }
+
   html_content <- paste(
     "<!DOCTYPE html>", "<html>", "<head>", '<meta charset=\"UTF-8\">',
+    base_tag,
     "<title>Generated Results</title>", "<style>", css, "</style>", "</head>",
     "<body>",
     html_body_content,
@@ -1516,7 +1752,13 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
   writeLines(html_content, con)
   close(con)
   if (viewer_available) {
+    if (isTRUE(getOption("genflow_view_debug", FALSE))) {
+      message("gen_view: viewer_available = TRUE; opening in RStudio Viewer")
+      message("gen_view: html file = ", temp_html_file)
+    }
     rstudioapi::viewer(temp_html_file)
+  } else if (is.function(getOption("viewer"))) {
+    getOption("viewer")(temp_html_file)
   } else {
     warning("RStudio Viewer is not accessible. The HTML file was saved at: ", temp_html_file)
   }
