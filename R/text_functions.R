@@ -295,7 +295,7 @@
   # --------------------------------------------------
 
   # Check whether 'response' is an error string
-  if (is.character(response) && (startsWith(response, "TIMEOUT_ERROR_HTTR:") || startsWith(response, "HTTR_ERROR:"))) {
+  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
     return(response)
   }
 
@@ -307,7 +307,7 @@
     error_msg <- paste("OpenRouter API error:", http_status(response)$reason, "-", error_content)
     warning(error_msg)
     error_details <- tryCatch(fromJSON(error_content)$error$message, error = function(e) error_content)
-    return(paste("API_ERROR:", http_status(response)$reason, "-", error_details)) # Keep API error details
+    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details)) # Keep API error details
   }
   result <- content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
   # ... (rest of processing for result, tool_calls, content, content_filter) ...
@@ -329,9 +329,432 @@
     return("CONTENT_FILTERED: Response blocked by content filter.")
   } else {
     warning("Unexpected OpenRouter API response. Finish reason: ", result$choices[[1]]$finish_reason)
-    return("API_RESPONSE_ERROR: No valid content or tool_calls found.")
+    return("API_RESPONSE_ERRORR: No valid content or tool_calls found.")
   }
 }
+
+#' @keywords internal
+#' @noRd
+.ollama_base_url <- function() {
+  base_url <- Sys.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+  base_url <- trimws(base_url)
+  if (!nzchar(base_url)) {
+    base_url <- "http://127.0.0.1:11434"
+  }
+  sub("/+$", "", base_url)
+}
+
+#' @keywords internal
+#' @noRd
+.ollama_resolve_model <- function(model, timeout_secs = 10) {
+  model_chr <- as.character(model %||% "")[1]
+  model_chr <- trimws(model_chr)
+  if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
+    return(model_chr)
+  }
+
+  model_env <- trimws(Sys.getenv("OLLAMA_MODEL", ""))
+  if (nzchar(model_env)) {
+    return(model_env)
+  }
+
+  discovery_timeout <- if (is.numeric(timeout_secs) && length(timeout_secs) == 1 && !is.na(timeout_secs) && timeout_secs > 0) {
+    min(timeout_secs, 10)
+  } else {
+    10
+  }
+  base_url <- .ollama_base_url()
+
+  discovered_model <- tryCatch(
+    {
+      tags_response <- httr::GET(
+        url = paste0(base_url, "/api/tags"),
+        httr::timeout(discovery_timeout)
+      )
+      if (httr::status_code(tags_response) != 200) {
+        return("")
+      }
+
+      tags_content <- httr::content(tags_response, as = "parsed", type = "application/json", encoding = "UTF-8")
+      models <- tags_content$models
+      model_values <- character()
+      if (is.data.frame(models) && nrow(models) > 0) {
+        model_values <- as.character(models$name %||% models$model %||% "")
+      } else if (is.list(models) && length(models) > 0) {
+        model_values <- vapply(models, function(entry) {
+          if (!is.list(entry)) {
+            return("")
+          }
+          as.character(entry$name %||% entry$model %||% "")
+        }, character(1), USE.NAMES = FALSE)
+      }
+      model_values <- model_values[!is.na(model_values) & nzchar(model_values)]
+      if (length(model_values) == 0) {
+        ""
+      } else {
+        model_values[[1]]
+      }
+    },
+    error = function(e) ""
+  )
+
+  if (nzchar(discovered_model)) discovered_model else "llama3.2"
+}
+
+#' Internal: Ollama chat call
+#'
+#' Calls a local Ollama server (`/api/chat`) and returns textual content
+#' or an error sentinel string.
+#'
+#' @keywords internal
+#' @noRd
+.gen_txt_ollama <- function(prompt,
+                            model,
+                            temp_v,
+                            reasoning,
+                            add_img,
+                            tools = FALSE,
+                            my_tools = NULL,
+                            plugins = NULL,
+                            timeout_secs = 80) {
+  base_url <- .ollama_base_url()
+  model <- .ollama_resolve_model(model, timeout_secs = timeout_secs)
+  api_url <- paste0(base_url, "/api/chat")
+
+  if (!is.null(reasoning)) {
+    warning("`reasoning` is currently ignored for service = 'ollama'.")
+  }
+  if (!is.null(plugins)) {
+    warning("`plugins` is currently ignored for service = 'ollama'.")
+  }
+  if (isTRUE(tools) || !is.null(my_tools)) {
+    warning("`tools` is currently ignored for service = 'ollama'.")
+  }
+
+  message_payload <- list(role = "user", content = prompt)
+  if (!is.null(add_img)) {
+    encoded_img <- tryCatch(
+      .encode_image(add_img),
+      error = function(e) {
+        stop("Failed to encode `add_img` for Ollama: ", conditionMessage(e))
+      }
+    )
+    message_payload$images <- list(encoded_img)
+  }
+
+  body <- list(
+    model = model,
+    messages = list(message_payload),
+    stream = FALSE
+  )
+  if (!is.null(temp_v) && is.numeric(temp_v) && length(temp_v) == 1 && !is.na(temp_v)) {
+    body$options <- list(temperature = temp_v)
+  }
+
+  response <- tryCatch(
+    {
+      httr::POST(
+        url = api_url,
+        httr::add_headers("Content-Type" = "application/json"),
+        body = toJSON(body, auto_unbox = TRUE, null = "null"),
+        encode = "raw",
+        config = httr::timeout(timeout_secs)
+      )
+    },
+    error = function(e) {
+      err_msg <- conditionMessage(e)
+      if (grepl("Timeout was reached|Operation timed out", err_msg, ignore.case = TRUE)) {
+        warning(paste("HTTR timeout in .gen_txt_ollama after", timeout_secs, "seconds:", err_msg))
+        return(paste0("TIMEOUT_ERRORR_HTTR: API call exceeded ", timeout_secs, " seconds."))
+      }
+      warning(paste("HTTR error in .gen_txt_ollama:", err_msg))
+      paste0("HTTR_ERRORR: ", err_msg)
+    }
+  )
+
+  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
+    return(response)
+  }
+
+  if (http_status(response)$category != "Success") {
+    error_content <- content(response, "text", encoding = "UTF-8")
+    error_details <- tryCatch(
+      {
+        parsed <- fromJSON(error_content)
+        parsed$error %||% parsed$message %||% error_content
+      },
+      error = function(e) error_content
+    )
+    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
+  }
+
+  result <- tryCatch(
+    {
+      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
+    },
+    error = function(e) {
+      warning("Failed to parse Ollama response JSON: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (is.null(result)) {
+    return("API_RESPONSE_ERRORR: Invalid JSON returned by Ollama.")
+  }
+
+  if (!is.null(result$error) && nzchar(as.character(result$error))) {
+    return(paste("API_ERRORR:", as.character(result$error)))
+  }
+
+  message_content <- result$message$content %||% result$response
+  if (!is.null(message_content) && nzchar(trimws(paste(message_content, collapse = "")))) {
+    return(message_content)
+  }
+
+  warning("Unexpected Ollama API response; no message content found.")
+  "API_RESPONSE_ERRORR: No valid content found in Ollama response."
+}
+
+#' @keywords internal
+#' @noRd
+.llamacpp_base_url <- function() {
+  base_url <- Sys.getenv("LLAMACPP_BASE_URL", "")
+  if (!nzchar(trimws(base_url))) {
+    base_url <- Sys.getenv("LLAMA_CPP_BASE_URL", "http://127.0.0.1:8080")
+  }
+  base_url <- trimws(base_url)
+  if (!nzchar(base_url)) {
+    base_url <- "http://127.0.0.1:8080"
+  }
+  sub("/+$", "", base_url)
+}
+
+#' @keywords internal
+#' @noRd
+.llamacpp_api_key <- function() {
+  api_key <- trimws(Sys.getenv("LLAMACPP_API_KEY", ""))
+  if (!nzchar(api_key)) {
+    api_key <- trimws(Sys.getenv("LLAMA_CPP_API_KEY", ""))
+  }
+  api_key
+}
+
+#' @keywords internal
+#' @noRd
+.llamacpp_resolve_model <- function(model, timeout_secs = 10) {
+  model_chr <- as.character(model %||% "")[1]
+  model_chr <- trimws(model_chr)
+  if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
+    return(model_chr)
+  }
+
+  model_env <- trimws(Sys.getenv("LLAMACPP_MODEL", ""))
+  if (!nzchar(model_env)) {
+    model_env <- trimws(Sys.getenv("LLAMA_CPP_MODEL", ""))
+  }
+  if (nzchar(model_env)) {
+    return(model_env)
+  }
+
+  discovery_timeout <- if (is.numeric(timeout_secs) && length(timeout_secs) == 1 && !is.na(timeout_secs) && timeout_secs > 0) {
+    min(timeout_secs, 10)
+  } else {
+    10
+  }
+  base_url <- .llamacpp_base_url()
+  api_key <- .llamacpp_api_key()
+
+  header_args <- list("Content-Type" = "application/json")
+  if (nzchar(api_key)) {
+    header_args[["Authorization"]] <- paste("Bearer", api_key)
+  }
+  headers <- do.call(httr::add_headers, header_args)
+
+  discovered_model <- tryCatch(
+    {
+      models_response <- httr::GET(
+        url = paste0(base_url, "/v1/models"),
+        headers,
+        httr::timeout(discovery_timeout)
+      )
+      if (httr::status_code(models_response) != 200) {
+        return("")
+      }
+
+      models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
+      models <- models_content$data %||% models_content$models
+      model_values <- character()
+      if (is.data.frame(models) && nrow(models) > 0) {
+        model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
+      } else if (is.list(models) && length(models) > 0) {
+        model_values <- vapply(models, function(entry) {
+          if (!is.list(entry)) {
+            return("")
+          }
+          as.character(entry$id %||% entry$model %||% entry$name %||% "")
+        }, character(1), USE.NAMES = FALSE)
+      }
+      model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
+      if (length(model_values) == 0) {
+        ""
+      } else {
+        model_values[[1]]
+      }
+    },
+    error = function(e) ""
+  )
+
+  if (nzchar(discovered_model)) discovered_model else "local-model"
+}
+
+#' Internal: llama.cpp OpenAI-compatible chat call
+#'
+#' Calls a local llama.cpp-compatible server (`/v1/chat/completions`) and
+#' returns textual content, tool-call payload, or an error sentinel string.
+#'
+#' @keywords internal
+#' @noRd
+.gen_txt_llamacpp <- function(prompt,
+                              model,
+                              temp_v,
+                              reasoning,
+                              add_img,
+                              tools = FALSE,
+                              my_tools = NULL,
+                              plugins = NULL,
+                              timeout_secs = 80) {
+  base_url <- .llamacpp_base_url()
+  api_key <- .llamacpp_api_key()
+  model <- .llamacpp_resolve_model(model, timeout_secs = timeout_secs)
+  api_url <- paste0(base_url, "/v1/chat/completions")
+
+  if (!is.null(reasoning)) {
+    warning("`reasoning` is currently ignored for service = 'llamacpp'.")
+  }
+  if (!is.null(plugins)) {
+    warning("`plugins` is currently ignored for service = 'llamacpp'.")
+  }
+
+  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
+    list(
+      list(type = "text", text = prompt),
+      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
+    )
+  } else {
+    prompt
+  })
+
+  body <- list(
+    model = model,
+    messages = list(initial_message),
+    temperature = temp_v
+  )
+  if (isTRUE(tools)) {
+    tools_payload <- NULL
+    if (is.function(my_tools)) {
+      tools_payload <- tryCatch(my_tools(), error = function(e) {
+        warning("Error while building tools for llama-cpp: ", conditionMessage(e))
+        NULL
+      })
+    } else if (!is.null(my_tools)) {
+      tools_payload <- my_tools
+    }
+    if (!is.null(tools_payload)) {
+      body$tools <- tools_payload
+      body$tool_choice <- "auto"
+    }
+  }
+
+  header_args <- list("Content-Type" = "application/json")
+  if (nzchar(api_key)) {
+    header_args[["Authorization"]] <- paste("Bearer", api_key)
+  }
+  headers <- do.call(add_headers, header_args)
+
+  response <- tryCatch(
+    {
+      httr::POST(
+        url = api_url,
+        headers,
+        body = toJSON(body, auto_unbox = TRUE, null = "null"),
+        encode = "json",
+        config = httr::timeout(timeout_secs)
+      )
+    },
+    error = function(e) {
+      err_msg <- conditionMessage(e)
+      if (grepl("Timeout was reached|Operation timed out", err_msg, ignore.case = TRUE)) {
+        warning(paste("HTTR timeout in .gen_txt_llamacpp after", timeout_secs, "seconds:", err_msg))
+        return(paste0("TIMEOUT_ERRORR_HTTR: API call exceeded ", timeout_secs, " seconds."))
+      }
+      warning(paste("HTTR error in .gen_txt_llamacpp:", err_msg))
+      paste0("HTTR_ERRORR: ", err_msg)
+    }
+  )
+
+  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
+    return(response)
+  }
+
+  if (http_status(response)$category != "Success") {
+    error_content <- content(response, "text", encoding = "UTF-8")
+    error_details <- tryCatch(
+      {
+        parsed <- fromJSON(error_content)
+        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
+      },
+      error = function(e) error_content
+    )
+    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
+  }
+
+  result <- tryCatch(
+    {
+      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
+    },
+    error = function(e) {
+      warning("Failed to parse llama-cpp response JSON: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (is.null(result)) {
+    return("API_RESPONSE_ERRORR: Invalid JSON returned by llama-cpp server.")
+  }
+
+  first_choice <- NULL
+  if (is.list(result$choices) && length(result$choices) >= 1) {
+    first_choice <- result$choices[[1]]
+  }
+
+  message_content <- first_choice$message %||% result$message
+  function_result <- NULL
+  if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
+    function_result <- result
+  }
+
+  if (!is.null(function_result)) {
+    if (inherits(function_result, "htmlwidget")) {
+      return(as.character(function_result))
+    }
+    return(function_result)
+  }
+
+  response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
+  if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
+    return(response_text)
+  }
+
+  finish_reason <- first_choice$finish_reason %||% ""
+  if (identical(finish_reason, "content_filter")) {
+    warning("Content blocked by filter (llama-cpp/model).")
+    return("CONTENT_FILTERED: Response blocked by content filter.")
+  }
+
+  warning("Unexpected llama-cpp API response. Finish reason: ", finish_reason)
+  "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+}
+
 #' Internal: HuggingFace TGI chat call
 #'
 #' Calls a HuggingFace Inference (TGI) OpenAI-compatible chat endpoint and
@@ -563,7 +986,7 @@
 #' @param label Optional character; label for the saved response. Defaults to a
 #'   sanitized derivation of `context`.
 #' @param service Character; provider identifier (e.g. `"openai"`,
-#'   `"openrouter"`, `"hf"`, etc.).
+#'   `"openrouter"`, `"hf"`, `"ollama"`, `"llamacpp"`).
 #' @param model Character; model identifier for the chosen `service`.
 #' @param temp Optional numeric; sampling temperature. If `NULL`, defaults to 0.7.
 #' @param reasoning One of minimal, low, medium, high, or xhigh.
@@ -637,8 +1060,17 @@ gen_txt.default <- function(
 
   # Normalize inputs possibly coming as lists/vectors
   if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
+  service <- tolower(trimws(as.character(service %||% "")))
+  if (service %in% c("llama-cpp", "llama_cpp")) {
+    service <- "llamacpp"
+  }
   if (is.list(model)) model <- as.character(model$model %||% model$model %||% model[[1]]) else if (is.vector(model)) model <- as.character(model[1])
   if (is.list(temp)) temp <- as.numeric(temp$temperature %||% temp$temp %||% temp[[1]]) else if (is.vector(temp)) temp <- as.numeric(temp[1])
+  if (identical(tolower(service), "ollama")) {
+    model <- .ollama_resolve_model(model, timeout_secs = timeout_api)
+  } else if (identical(tolower(service), "llamacpp")) {
+    model <- .llamacpp_resolve_model(model, timeout_secs = timeout_api)
+  }
   temp_v <- ifelse(is.null(temp) || !is.numeric(temp) || is.na(temp), 0.7, temp)
   reasoning_v <- NULL
   if (!is.null(reasoning)) {
@@ -762,6 +1194,8 @@ gen_txt.default <- function(
       #  "groq"        = gen_txt_groq(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       # "zhipu"       = gen_txt_zhipu(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       "hf" = .gen_txt_hf(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
+      "ollama" = .gen_txt_ollama(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
+      "llamacpp" = .gen_txt_llamacpp(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
       #    "cohere"      = gen_txt_cohere(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #   "grok"        = gen_txt_grok(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
       #  "nebius"      = gen_txt_nebius(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),
@@ -796,7 +1230,7 @@ gen_txt.default <- function(
       message(sprintf("Empty response detected; waiting %ds and trying again...", wait_sec))
       Sys.sleep(wait_sec)
       response_api <- tryCatch(
-        .do_call(service, prompt, model, temp_v, reasoning_v, add_img, tools, my_tools, timeout_api),
+        .do_call(service, prompt, model, temp_v, reasoning_v, add_img, tools_flag, tools_payload, plugins_payload, timeout_api),
         error = function(e) paste("Error during API call execution:", conditionMessage(e))
       )
       if (!(identical(response_api, "EMPTY_OR_NULL_RESPONSE") || is_emptyish(response_api))) {

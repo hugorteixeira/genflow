@@ -691,13 +691,262 @@
   invisible(output_df)
 }
 
+#' Update Ollama models list (internal)
+#'
+#' Connects to a local Ollama server, retrieves installed models and saves a
+#' normalized CSV file named `ollama.csv` in the provided directory.
+#'
+#' @param directory Character path where the CSV will be saved.
+#' @param verbose Logical flag to print progress messages.
+#' @return Invisibly returns a data frame with the processed models.
+#' @keywords internal
+#' @noRd
+.update_models_ollama <- function(directory = NULL, verbose = TRUE) {
+  base_url <- Sys.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+  base_url <- trimws(base_url)
+  if (!nzchar(base_url)) {
+    base_url <- "http://127.0.0.1:11434"
+  }
+  base_url <- sub("/+$", "", base_url)
+  api_url <- paste0(base_url, "/api/tags")
+
+  if (verbose) message("Connecting to the Ollama API...")
+  response <- tryCatch(
+    {
+      httr::GET(url = api_url, httr::timeout(30))
+    },
+    error = function(e) {
+      stop("Error connecting to the Ollama API: ", e$message)
+    }
+  )
+
+  if (httr::status_code(response) != 200) {
+    error_content <- httr::content(response, "text", encoding = "UTF-8")
+    stop("Ollama API Error (Status: ", httr::status_code(response), "): ", error_content)
+  }
+
+  parsed_content <- tryCatch(
+    {
+      jsonlite::fromJSON(rawToChar(httr::content(response, "raw")), simplifyVector = TRUE)
+    },
+    error = function(e) {
+      stop("Error processing JSON from Ollama API: ", e$message)
+    }
+  )
+
+  models <- parsed_content$models
+  if (is.null(models) || !is.data.frame(models) || nrow(models) == 0) {
+    if (verbose) message("No Ollama models were returned by /api/tags.")
+    models <- data.frame(name = character(), stringsAsFactors = FALSE)
+  }
+
+  infer_type <- function(model_name, details_family = NULL) {
+    text <- tolower(paste(model_name %||% "", details_family %||% "", collapse = " "))
+    if (grepl("vision|llava|bakllava|minicpm|moondream|vl|qwen2\\.5-vl|gemma3", text, perl = TRUE)) {
+      return("Vision")
+    }
+    "Chat"
+  }
+
+  if (nrow(models) == 0) {
+    output_df <- tibble::tibble(
+      service = character(),
+      model = character(),
+      type = character(),
+      pricing = character(),
+      description = character()
+    )
+  } else {
+    output_df <- purrr::map_df(seq_len(nrow(models)), function(i) {
+      model_info <- models[i, , drop = FALSE]
+      model_name <- as.character(model_info$name %||% model_info$model %||% paste0("unknown_", i))
+      details <- if ("details" %in% names(model_info)) model_info$details[[1]] else NULL
+
+      family <- ""
+      parameter_size <- ""
+      quant_level <- ""
+      if (is.list(details)) {
+        family <- as.character(details$family %||% "")
+        parameter_size <- as.character(details$parameter_size %||% "")
+        quant_level <- as.character(details$quantization_level %||% "")
+      }
+
+      desc_parts <- c(
+        if (nzchar(family)) paste0("family=", family) else NULL,
+        if (nzchar(parameter_size)) paste0("params=", parameter_size) else NULL,
+        if (nzchar(quant_level)) paste0("quant=", quant_level) else NULL
+      )
+      desc <- paste(desc_parts, collapse = "; ")
+
+      tibble::tibble(
+        service = "ollama",
+        model = model_name,
+        type = infer_type(model_name, family),
+        pricing = sprintf('"%s"', ""),
+        description = sprintf('"%s"', gsub('"', "'", desc, fixed = TRUE))
+      )
+    })
+  }
+
+  if (!dir.exists(directory)) {
+    if (verbose) message("Creating directory: ", directory)
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
+  }
+
+  file_path <- file.path(directory, "ollama.csv")
+  if (verbose) message("\nSaving ", nrow(output_df), " Ollama models to: ", file_path)
+  tryCatch({
+    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
+                row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8")
+  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
+
+  if (verbose) message("File 'ollama.csv' updated successfully.")
+  invisible(output_df)
+}
+
+#' Update llama.cpp models list (internal)
+#'
+#' Connects to a local llama.cpp-compatible server, retrieves models from
+#' `/v1/models` and saves a normalized CSV file named `llamacpp.csv`.
+#'
+#' @param directory Character path where the CSV will be saved.
+#' @param verbose Logical flag to print progress messages.
+#' @return Invisibly returns a data frame with the processed models.
+#' @keywords internal
+#' @noRd
+.update_models_llamacpp <- function(directory = NULL, verbose = TRUE) {
+  base_url <- .llamacpp_base_url()
+  api_key <- .llamacpp_api_key()
+  api_url <- paste0(base_url, "/v1/models")
+
+  header_args <- list("Content-Type" = "application/json")
+  if (nzchar(api_key)) {
+    header_args[["Authorization"]] <- paste("Bearer", api_key)
+  }
+  headers <- do.call(httr::add_headers, header_args)
+
+  if (verbose) message("Connecting to the llama-cpp API...")
+  response <- tryCatch(
+    {
+      httr::GET(url = api_url, headers, httr::timeout(30))
+    },
+    error = function(e) {
+      stop("Error connecting to the llama-cpp API: ", e$message)
+    }
+  )
+
+  if (httr::status_code(response) != 200) {
+    error_content <- httr::content(response, "text", encoding = "UTF-8")
+    stop("llama-cpp API Error (Status: ", httr::status_code(response), "): ", error_content)
+  }
+
+  parsed_content <- tryCatch(
+    {
+      httr::content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
+    },
+    error = function(e) {
+      stop("Error processing JSON from llama-cpp API: ", e$message)
+    }
+  )
+
+  models <- parsed_content$data %||% parsed_content$models
+  if (is.null(models)) {
+    if (verbose) message("No llama-cpp models were returned by /v1/models.")
+    models <- data.frame(id = character(), stringsAsFactors = FALSE)
+  }
+
+  infer_type <- function(model_name) {
+    text <- tolower(model_name %||% "")
+    if (grepl("vision|vl|llava|minicpm|moondream|qwen2\\.5-vl|gemma3", text, perl = TRUE)) {
+      return("Vision")
+    }
+    "Chat"
+  }
+
+  extract_rows <- function(models_obj) {
+    if (is.data.frame(models_obj)) {
+      if (nrow(models_obj) == 0) return(list())
+      return(split(models_obj, seq_len(nrow(models_obj))))
+    }
+    if (is.list(models_obj) && length(models_obj) > 0) {
+      return(models_obj)
+    }
+    list()
+  }
+  model_rows <- extract_rows(models)
+
+  if (length(model_rows) == 0) {
+    output_df <- tibble::tibble(
+      service = character(),
+      model = character(),
+      type = character(),
+      pricing = character(),
+      description = character()
+    )
+  } else {
+    output_df <- purrr::map_df(seq_along(model_rows), function(i) {
+      model_info <- model_rows[[i]]
+      if (is.data.frame(model_info)) {
+        model_info <- as.list(model_info[1, , drop = FALSE])
+      }
+      if (!is.list(model_info)) {
+        model_info <- list()
+      }
+
+      model_name <- as.character(model_info$id %||% model_info$model %||% model_info$name %||% paste0("unknown_", i))
+      model_name <- trimws(model_name[1] %||% "")
+      if (!nzchar(model_name)) {
+        model_name <- paste0("unknown_", i)
+      }
+
+      owner <- as.character(model_info$owned_by %||% model_info$owner %||% "")
+      created <- model_info$created %||% NA
+      created_txt <- ""
+      if (!is.null(created) && length(created) == 1 && is.finite(suppressWarnings(as.numeric(created)))) {
+        created_txt <- format(as.POSIXct(as.numeric(created), origin = "1970-01-01", tz = "UTC"), "%Y-%m-%d")
+      }
+
+      desc_parts <- c(
+        if (nzchar(owner[1] %||% "")) paste0("owner=", owner[1]) else NULL,
+        if (nzchar(created_txt)) paste0("created=", created_txt) else NULL
+      )
+      desc <- paste(desc_parts, collapse = "; ")
+
+      tibble::tibble(
+        service = "llamacpp",
+        model = model_name,
+        type = infer_type(model_name),
+        pricing = sprintf('"%s"', ""),
+        description = sprintf('"%s"', gsub('"', "'", desc, fixed = TRUE))
+      )
+    })
+  }
+
+  if (!dir.exists(directory)) {
+    if (verbose) message("Creating directory: ", directory)
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
+  }
+
+  file_path <- file.path(directory, "llamacpp.csv")
+  if (verbose) message("\nSaving ", nrow(output_df), " llama-cpp models to: ", file_path)
+  tryCatch({
+    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
+                row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8")
+  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
+
+  if (verbose) message("File 'llamacpp.csv' updated successfully.")
+  invisible(output_df)
+}
+
 #' Update provider model lists and write CSVs
 #'
 #' High-level convenience function to update model lists from one or several
 #' providers and write normalized CSV files to a directory.
 #'
 #' @param provider Optional character scalar. If NULL, updates all supported providers.
-#'        Otherwise one of: "openrouter", "openai", "gemini", "fal", "replicate".
+#'        Otherwise one of: "openrouter", "openai", "gemini", "fal", "replicate", "ollama", "llamacpp".
 #' @param directory Character path where CSVs will be saved. Defaults to working dir.
 #' @param verbose Logical flag to print progress messages.
 #'
@@ -723,7 +972,7 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
   }
 
   # Define all available providers
-  all_providers <- c("openrouter", "openai", "gemini", "fal", "replicate")
+  all_providers <- c("openrouter", "openai", "gemini", "fal", "replicate", "ollama", "llamacpp")
 
   # Determine which providers to update
   if (is.null(provider)) {
@@ -731,6 +980,7 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
     if (verbose) message("Updating all models...")
   } else {
     provider <- tolower(provider)
+    provider[provider %in% c("llama-cpp", "llama_cpp")] <- "llamacpp"
     invalid_providers <- setdiff(provider, all_providers)
     if (length(invalid_providers) > 0) {
       stop("Invalid provider(s): ", paste(invalid_providers, collapse = ", "),
@@ -746,7 +996,9 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
     "openai"     = list(func = ".update_models_openai",     name = "OpenAI"),
     "gemini"     = list(func = ".update_models_gemini",     name = "Gemini"),
     "fal"        = list(func = ".update_models_fal",        name = "Fal"),
-    "replicate"  = list(func = ".update_models_replicate",  name = "Replicate")
+    "replicate"  = list(func = ".update_models_replicate",  name = "Replicate"),
+    "ollama"     = list(func = ".update_models_ollama",     name = "Ollama"),
+    "llamacpp"   = list(func = ".update_models_llamacpp",   name = "llama-cpp")
   )
 
   # Track progress

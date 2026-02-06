@@ -815,17 +815,43 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
   resolve_file_path <- function(value, depth = 0L) {
     if (depth > 4) return(NULL)
     if (is.null(value)) return(NULL)
+    is_likely_path <- function(text) {
+      if (!is.character(text) || length(text) != 1 || !nzchar(text)) return(FALSE)
+      text <- trimws(text)
+      # Guard against sending large free-form model outputs into path.expand().
+      if (nchar(text, type = "bytes") > 1024L) return(FALSE)
+      if (grepl("[\r\n\t]", text)) return(FALSE)
+      if (startsWith(text, "data:") || grepl("^https?://", text)) return(FALSE)
+
+      basename_text <- basename(text)
+      has_file_ext <- grepl("\\.[A-Za-z0-9]{1,8}$", basename_text)
+      has_path_markers <- startsWith(text, "~") ||
+        startsWith(text, "/") ||
+        startsWith(text, "./") ||
+        startsWith(text, "../") ||
+        grepl("^[A-Za-z]:[/\\\\]", text) ||
+        grepl("[/\\\\]", text)
+
+      isTRUE(has_file_ext || has_path_markers)
+    }
     if (is.character(value) && length(value) >= 1) {
       for (cand in value) {
         if (!nzchar(cand)) next
         if (grepl("^data:", cand)) next
         if (grepl("^https?://", cand)) next
+        if (!is_likely_path(cand)) next
         path <- cand
         if (grepl("^file://", path)) {
           path <- sub("^file://+", "/", path)
           path <- utils::URLdecode(path)
         }
-        path <- path.expand(path)
+        path <- tryCatch(
+          withCallingHandlers(
+            path.expand(path),
+            warning = function(w) invokeRestart("muffleWarning")
+          ),
+          error = function(e) path
+        )
         path_norm <- tryCatch(normalizePath(path, winslash = "/", mustWork = FALSE), error = function(e) path)
         if (file.exists(path_norm)) return(path_norm)
       }

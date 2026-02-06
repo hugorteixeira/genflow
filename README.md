@@ -8,13 +8,14 @@
 
 > **Easy generative AI inference for R**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
 
-Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Hugging Face, Replicate, and FAL.
+Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Hugging Face, Replicate, and FAL, and now supports **local inference** with **Ollama (beta)** and **llama-cpp (beta)**.
 
 ## ✨ Why genflow?
 
 - 🚀 **Fast Integration**: Connect to multiple AI providers in seconds, not hours
 - 🎯 **Intentional Design**: Built specifically for R workflows and data science pipelines
 - 🌐 **Popular Provider Support**: OpenAI, OpenRouter, Hugging Face, Replicate, FAL, and more
+- 🏠 **Local AI Mode (Beta)**: Run `gen_txt()` against Ollama and llama-cpp on your own machine
 - 📝 **Multi-Modal Inference**: Text generation, image creation, audio processing, and beyond
 - ⚡ **Optimized Performance**: Batch processing and parallel execution for faster tasks
 - 📊 **Smart Analytics**: Built-in tracking, logging, and performance metrics
@@ -32,9 +33,9 @@ Dive into AI-powered R programming with **genflow** — an intuitive, powerful t
 devtools::install_github("hugorteixeira/genflow")
 ```
 
-### Setup API Keys
+### Setup Provider Credentials (Cloud + Local Beta)
 
-Configure your AI provider credentials in your `.Renviron` file:
+Configure your provider credentials in your `.Renviron` file:
 
 ```r
 # Add to your .Renviron file
@@ -43,6 +44,14 @@ OPENROUTER_API_KEY=your_openrouter_api_key_here
 HUGGINGFACE_API_TOKEN=your_huggingface_token_here
 REPLICATE_API_TOKEN=your_replicate_token_here
 FAL_API_KEY=your_fal_api_key_here
+
+# Local providers (beta)
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=llama3.2
+LLAMACPP_BASE_URL=http://127.0.0.1:8080
+LLAMACPP_MODEL=local-model
+# Optional if your llama-cpp server requires auth
+LLAMACPP_API_KEY=optional_token_here
 ```
 
 You can edit your `.Renviron` file by running:
@@ -71,6 +80,30 @@ result <- gen_txt(
 # Instantly visualize your results
 gen_view(result)
 ```
+
+### Local Inference (Beta): Ollama + llama-cpp
+
+```r
+library(genflow)
+
+# Ollama (beta)
+local_ollama <- gen_txt(
+  context = "Summarize this earnings report in 3 bullet points.",
+  service = "ollama",
+  model = "llama3.2"
+)
+
+# llama-cpp (beta) - accepts "llamacpp", "llama-cpp", or "llama_cpp"
+local_llamacpp <- gen_txt(
+  context = "Rewrite this in a more formal tone.",
+  service = "llamacpp",
+  model = "local-model"
+)
+
+gen_view(local_ollama, local_llamacpp)
+```
+
+Both local providers are currently in **beta** and evolving quickly.
 
 ### Speech To Text
 
@@ -231,7 +264,7 @@ graph TD
 
 | Function | Purpose |
 |---------|-------------|
-| `gen_txt()` | Generate human-quality text with multimodal support |
+| `gen_txt()` | Generate text with cloud and local providers (including **Ollama beta** and **llama-cpp beta**) |
 | `gen_img()` | Create stunning images from text prompts |
 | `gen_stt()` | Speech-to-text (tested: Replicate `openai/whisper`; other services/models not tested yet) |
 | `gen_tts()` | Text-to-speech (tested: Replicate `qwen/qwen3-tts`; other services/models not tested yet) |
@@ -239,7 +272,7 @@ graph TD
 | `gen_view()` | Visualize and explore generation results |
 | `gen_stats()` | Analyze performance and usage metrics |
 | `gen_stats_rm()` | Clean and manage statistics data |
-| `gen_update_models()` | Refresh available models from all providers |
+| `gen_update_models()` | Refresh available models from supported providers (including local catalogs) |
 | `gen_show_models()` | Browse and filter available models |
 | `set_setup()` / `get_setup()` / `list_setups()` | Persist provider configurations for reuse |
 | `set_content()` / `get_content()` / `list_content()` | Store briefs, context, and other payloads |

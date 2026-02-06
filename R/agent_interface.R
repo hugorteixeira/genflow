@@ -5,7 +5,9 @@
   openrouter = "OpenRouter",
   gemini = "Gemini",
   fal = "FAL",
-  replicate = "Replicate"
+  replicate = "Replicate",
+  ollama = "Ollama",
+  llamacpp = "llama-cpp"
 )
 
 .MODEL_SPECIAL_LABELS <- c(
