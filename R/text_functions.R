@@ -566,7 +566,7 @@
 #'   `"openrouter"`, `"hf"`, etc.).
 #' @param model Character; model identifier for the chosen `service`.
 #' @param temp Optional numeric; sampling temperature. If `NULL`, defaults to 0.7.
-#' @param reasoning One of low, medium, high or minimal. Also known as just go with high.
+#' @param reasoning One of minimal, low, medium, high, or xhigh.
 #' @param tools Logical; whether to enable tool/function calling for providers
 #'   that support it.
 #' @param plugins Optional list or JSON string describing provider-specific
@@ -648,9 +648,9 @@ gen_txt.default <- function(
     }
     reasoning_value <- as.character(reasoning_value)[1]
     reasoning_value <- tolower(trimws(reasoning_value))
-    valid_reasoning <- c("minimal", "low", "medium", "high")
+    valid_reasoning <- c("minimal", "low", "medium", "high", "xhigh")
     if (is.na(reasoning_value) || !nzchar(reasoning_value) || !(reasoning_value %in% valid_reasoning)) {
-      stop("Invalid `reasoning` value. Choose one of: minimal, low, medium, high.")
+      stop("Invalid `reasoning` value. Choose one of: minimal, low, medium, high, xhigh.")
     }
     reasoning_v <- reasoning_value
   }

@@ -57,7 +57,7 @@ sanitized derivation of \code{context}.}
 
 \item{temp}{Optional numeric; sampling temperature. If \code{NULL}, defaults to 0.7.}
 
-\item{reasoning}{One of low, medium, high or minimal. Also known as just go with high.}
+\item{reasoning}{One of minimal, low, medium, high, or xhigh.}
 
 \item{tools}{Logical; whether to enable tool/function calling for providers
 that support it.}
