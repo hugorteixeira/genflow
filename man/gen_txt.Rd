@@ -52,9 +52,9 @@ sanitized derivation of \code{context}.}
 
 \item{service}{Character; provider identifier (e.g. \code{"openai"},
 \code{"openrouter"}, \code{"anthropic"}, \code{"groq"}, \code{"cerebras"}, \code{"together"},
-\code{"sambanova"}, \code{"nebius"}, \code{"deepseek"}, \code{"perplexity"},
-\code{"fireworks"}, \code{"deepinfra"}, \code{"hyperbolic"}, \code{"hf"},
-\code{"ollama"}, \code{"llamacpp"}).}
+\code{"sambanova"}, \code{"nebius"}, \code{"deepseek"}, \code{"perplexity"}, \code{"fireworks"},
+\code{"deepinfra"}, \code{"hyperbolic"}, \code{"hf"}, \code{"ollama"}, \code{"llamacpp"}), or a
+custom id configured with \code{\link[=set_provider_openai_compat]{set_provider_openai_compat()}}.}
 
 \item{model}{Character; model identifier for the chosen \code{service}.}
 

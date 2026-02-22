@@ -35,6 +35,28 @@
 .DEFAULT_THINKING_LEVEL <- "medium"
 .THINKING_LEVEL_CHOICES <- c("minimal", "low", "medium", "high")
 
+.model_provider_labels <- function() {
+  labels <- .MODEL_PROVIDER_LABELS
+  custom_labels <- tryCatch(
+    {
+      if (exists(".genflow_custom_provider_labels", mode = "function", inherits = TRUE)) {
+        .genflow_custom_provider_labels()
+      } else {
+        character()
+      }
+    },
+    error = function(e) character()
+  )
+  if (length(custom_labels)) {
+    labels <- c(labels, custom_labels[setdiff(names(custom_labels), names(labels))])
+  }
+  labels
+}
+
+.model_provider_ids <- function() {
+  names(.model_provider_labels())
+}
+
 .default_models_dir <- function() {
   tools::R_user_dir("agent_models", which = "data")
 }
@@ -143,7 +165,7 @@
     return(character())
   }
   svc <- tolower(service)
-  label_lookup <- c(.MODEL_PROVIDER_LABELS, .MODEL_SPECIAL_LABELS)
+  label_lookup <- c(.model_provider_labels(), .MODEL_SPECIAL_LABELS)
   labels <- label_lookup[svc]
   defaults <- tools::toTitleCase(service)
   labels[is.na(labels)] <- defaults[is.na(labels)]
@@ -763,12 +785,31 @@
             selectInput(
               "models_update_provider",
               "Update single provider",
-              choices = setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS)),
+              choices = setNames(.model_provider_ids(), .model_label(.model_provider_ids())),
               selected = .DEFAULT_MODEL_SERVICE
             ),
             actionButton("models_update_selected", "Update selected provider", icon = icon("download")),
             tags$hr(),
             verbatimTextOutput("models_status", placeholder = TRUE)
+          ),
+          div(
+            class = "gf-panel",
+            div(class = "gf-section-header", h3("Custom providers")),
+            selectInput(
+              "models_custom_provider",
+              "Registered custom providers",
+              choices = setNames(character(), character()),
+              selected = ""
+            ),
+            div(
+              class = "gf-btn-row",
+              actionButton("models_custom_add", "Add", icon = icon("plus")),
+              actionButton("models_custom_edit", "Edit", icon = icon("pen")),
+              actionButton("models_custom_remove", "Remove", icon = icon("trash"), class = "btn-danger")
+            ),
+            actionButton("models_custom_test", "Test provider", icon = icon("plug")),
+            tags$hr(),
+            verbatimTextOutput("models_custom_status", placeholder = TRUE)
           )
         ),
         column(
@@ -783,7 +824,7 @@
                 NULL,
                 choices = c(
                   setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)),
-                  setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
+                  setNames(.model_provider_ids(), .model_label(.model_provider_ids()))
                 ),
                 selected = .DEFAULT_MODEL_SERVICE
               )
@@ -1302,7 +1343,13 @@ server <- function(input, output, session) {
     catalog = initial_catalog,
     favorites = initial_favorites,
     favorites_present = nrow(initial_favorites) > 0,
-    status = ""
+    status = "",
+    custom_status = ""
+  )
+
+  custom_provider_state <- reactiveValues(
+    mode = "add",
+    edit_id = NULL
   )
 
   transfer_state <- reactiveValues(
@@ -1345,13 +1392,231 @@ server <- function(input, output, session) {
     }
   }
 
+  parse_multi_values <- function(text) {
+    value <- as.character(text %||% "")[1]
+    if (!nzchar(trimws(value))) {
+      return(character())
+    }
+    parts <- unlist(strsplit(value, "[,;\\n\\r]+", perl = TRUE), use.names = FALSE)
+    parts <- trimws(parts)
+    unique(parts[nzchar(parts)])
+  }
+
+  format_header_lines <- function(headers) {
+    if (is.null(headers) || !length(headers)) {
+      return("")
+    }
+    header_names <- names(headers)
+    if (is.null(header_names)) {
+      return("")
+    }
+    lines <- character()
+    for (nm in header_names) {
+      key <- trimws(as.character(nm %||% "")[1])
+      value <- trimws(as.character(headers[[nm]] %||% "")[1])
+      if (!nzchar(key) || !nzchar(value)) {
+        next
+      }
+      lines <- c(lines, paste0(key, ": ", value))
+    }
+    paste(lines, collapse = "\n")
+  }
+
+  parse_header_lines <- function(text) {
+    value <- as.character(text %||% "")[1]
+    if (!nzchar(trimws(value))) {
+      return(list())
+    }
+    lines <- unlist(strsplit(value, "\n", fixed = TRUE), use.names = FALSE)
+    headers <- list()
+    for (line in lines) {
+      line <- trimws(line)
+      if (!nzchar(line)) {
+        next
+      }
+      delim <- regexpr(":", line, fixed = TRUE)[1]
+      if (is.na(delim) || delim < 1) {
+        delim <- regexpr("=", line, fixed = TRUE)[1]
+      }
+      if (is.na(delim) || delim < 1) {
+        stop("Invalid header line: '", line, "'. Use `Header: value`.", call. = FALSE)
+      }
+      key <- trimws(substr(line, 1, delim - 1))
+      val <- trimws(substr(line, delim + 1, nchar(line)))
+      if (!nzchar(key) || !nzchar(val)) {
+        stop("Invalid header line: '", line, "'.", call. = FALSE)
+      }
+      headers[[key]] <- val
+    }
+    headers
+  }
+
+  custom_provider_choices <- function() {
+    providers <- .genflow_list_custom_provider_configs()
+    if (!length(providers)) {
+      return(setNames(character(), character()))
+    }
+    ids <- names(providers)
+    labels <- vapply(providers, function(cfg) {
+      label <- trimws(as.character(cfg$label %||% cfg$id)[1])
+      if (!nzchar(label)) {
+        label <- cfg$id
+      }
+      sprintf("%s (%s)", label, cfg$id)
+    }, character(1))
+    stats::setNames(ids, labels)
+  }
+
+  refresh_provider_selectors <- function(preferred_custom = NULL) {
+    provider_ids <- .model_provider_ids()
+    base_choices <- setNames(provider_ids, .model_label(provider_ids))
+    provider_choices_view <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_choices)
+    if (models_state$favorites_present) {
+      provider_choices_view <- c(setNames("favorites", .model_label("favorites")), provider_choices_view)
+    }
+
+    current_view <- isolate(input$models_view_provider)
+    if (is.null(current_view) || !current_view %in% provider_choices_view) {
+      if (models_state$favorites_present) {
+        current_view <- "favorites"
+      } else if (.DEFAULT_MODEL_SERVICE %in% provider_ids) {
+        current_view <- .DEFAULT_MODEL_SERVICE
+      } else {
+        current_view <- .MODEL_ALL_OPTION
+      }
+    }
+    updateSelectInput(session, "models_view_provider", choices = provider_choices_view, selected = current_view)
+
+    current_update <- isolate(input$models_update_provider)
+    if (is.null(current_update) || !current_update %in% base_choices) {
+      if (.DEFAULT_MODEL_SERVICE %in% provider_ids) {
+        current_update <- .DEFAULT_MODEL_SERVICE
+      } else if (length(provider_ids)) {
+        current_update <- provider_ids[[1]]
+      } else {
+        current_update <- ""
+      }
+    }
+    updateSelectInput(session, "models_update_provider", choices = base_choices, selected = current_update)
+
+    custom_choices <- custom_provider_choices()
+    current_custom <- preferred_custom %||% isolate(input$models_custom_provider) %||% ""
+    if (!length(custom_choices)) {
+      current_custom <- ""
+    } else if (!nzchar(current_custom) || !current_custom %in% custom_choices) {
+      current_custom <- unname(custom_choices[[1]])
+    }
+    updateSelectInput(session, "models_custom_provider", choices = custom_choices, selected = current_custom)
+
+    update_setup_service_choices()
+    update_agent_service_choices()
+  }
+
+  format_custom_provider_test <- function(test_result) {
+    provider_id <- as.character(test_result$provider_id %||% "")[1]
+    if (is.na(provider_id)) provider_id <- ""
+    provider_label <- as.character(test_result$provider_label %||% provider_id)[1]
+    if (is.na(provider_label)) provider_label <- provider_id
+    status_api <- as.character(test_result$status_api %||% "ERROR")[1]
+    if (is.na(status_api)) status_api <- "ERROR"
+    status_msg <- as.character(test_result$status_msg %||% "")[1]
+    if (is.na(status_msg)) status_msg <- ""
+    endpoint <- as.character(test_result$endpoint %||% "")[1]
+    if (is.na(endpoint)) endpoint <- ""
+    model_count <- as.integer(test_result$model_count %||% 0L)
+    models <- as.character(test_result$models %||% character())
+    attempts <- as.character(test_result$attempted_endpoints %||% character())
+    attempts <- attempts[nzchar(attempts)]
+    attempts <- utils::head(attempts, 8)
+
+    lines <- c(
+      sprintf("Provider: %s (%s)", provider_label, provider_id),
+      paste0("Status: ", status_api),
+      paste0("Message: ", status_msg)
+    )
+    if (nzchar(endpoint)) {
+      lines <- c(lines, paste0("Endpoint: ", endpoint))
+    }
+    lines <- c(lines, paste0("Model count: ", model_count))
+    if (length(models)) {
+      lines <- c(lines, paste0("Sample models: ", paste(models, collapse = ", ")))
+    }
+    if (length(attempts)) {
+      lines <- c(lines, paste0("Tried: ", paste(attempts, collapse = " | ")))
+    }
+    paste(lines, collapse = "\n")
+  }
+
+  show_custom_provider_modal <- function(mode = c("add", "edit"), cfg = NULL) {
+    mode <- match.arg(mode)
+    cfg <- cfg %||% list()
+    custom_provider_state$mode <- mode
+    custom_provider_state$edit_id <- if (identical(mode, "edit")) trimws(as.character(cfg$id %||% "")[1]) else NULL
+
+    id_value <- trimws(as.character(cfg$id %||% "")[1])
+    label_value <- trimws(as.character(cfg$label %||% "")[1])
+    base_urls_value <- paste(as.character(cfg$base_urls %||% character()), collapse = "\n")
+    api_key_env_value <- trimws(as.character(cfg$api_key_env %||% "")[1])
+    model_env_value <- trimws(as.character(cfg$model_env %||% "")[1])
+    default_model_value <- trimws(as.character(cfg$default_model %||% "local-model")[1])
+    chat_paths_value <- paste(as.character(cfg$chat_paths %||% c("/v1/chat/completions", "/chat/completions")), collapse = "\n")
+    model_paths_value <- paste(as.character(cfg$model_paths %||% c("/v1/models", "/models")), collapse = "\n")
+    auth_header_value <- as.character(cfg$auth_header %||% "Authorization")[1]
+    auth_prefix_value <- as.character(cfg$auth_prefix %||% "Bearer")[1]
+    extra_headers_value <- format_header_lines(cfg$extra_headers %||% list())
+    api_key_required_value <- if (is.null(cfg$api_key_required)) nzchar(api_key_env_value) else isTRUE(cfg$api_key_required)
+    supports_tools_value <- if (is.null(cfg$supports_tools)) TRUE else isTRUE(cfg$supports_tools)
+    supports_vision_value <- if (is.null(cfg$supports_vision)) TRUE else isTRUE(cfg$supports_vision)
+    supports_reasoning_value <- if (is.null(cfg$supports_reasoning)) FALSE else isTRUE(cfg$supports_reasoning)
+    supports_plugins_value <- if (is.null(cfg$supports_plugins)) FALSE else isTRUE(cfg$supports_plugins)
+    reasoning_field_value <- as.character(cfg$reasoning_field %||% "")[1]
+    plugins_field_value <- as.character(cfg$plugins_field %||% "")[1]
+    max_tokens_value <- if (is.null(cfg$max_tokens) || is.na(cfg$max_tokens)) "" else as.character(cfg$max_tokens)
+
+    showModal(modalDialog(
+      title = if (identical(mode, "add")) "Add custom provider" else sprintf("Edit custom provider: %s", id_value),
+      div(
+        class = "gf-form-grid",
+        textInput("models_custom_id", "Provider id", value = id_value, placeholder = "myprovider"),
+        textInput("models_custom_label", "Label", value = label_value, placeholder = "My Provider"),
+        textInput("models_custom_api_key_env", "API key env var", value = api_key_env_value, placeholder = "MYPROVIDER_API_KEY"),
+        textInput("models_custom_model_env", "Default model env var", value = model_env_value, placeholder = "MYPROVIDER_MODEL"),
+        textInput("models_custom_default_model", "Fallback model", value = default_model_value),
+        textInput("models_custom_auth_header", "Auth header", value = auth_header_value, placeholder = "Authorization"),
+        textInput("models_custom_auth_prefix", "Auth prefix", value = auth_prefix_value, placeholder = "Bearer"),
+        textInput("models_custom_reasoning_field", "Reasoning field (optional)", value = reasoning_field_value, placeholder = "reasoning"),
+        textInput("models_custom_plugins_field", "Plugins field (optional)", value = plugins_field_value, placeholder = "plugins"),
+        textInput("models_custom_max_tokens", "Max tokens (optional)", value = max_tokens_value, placeholder = "8192")
+      ),
+      tags$hr(),
+      textAreaInput("models_custom_base_urls", "Base URLs (one per line)", value = base_urls_value, rows = 3, resize = "vertical"),
+      textAreaInput("models_custom_chat_paths", "Chat endpoints (one per line)", value = chat_paths_value, rows = 2, resize = "vertical"),
+      textAreaInput("models_custom_model_paths", "Model endpoints (one per line)", value = model_paths_value, rows = 2, resize = "vertical"),
+      textAreaInput("models_custom_extra_headers", "Extra headers (Header: value per line)", value = extra_headers_value, rows = 3, resize = "vertical"),
+      div(
+        class = "gf-btn-row",
+        checkboxInput("models_custom_api_key_required", "Require API key", value = api_key_required_value),
+        checkboxInput("models_custom_supports_tools", "Supports tools", value = supports_tools_value),
+        checkboxInput("models_custom_supports_vision", "Supports vision", value = supports_vision_value),
+        checkboxInput("models_custom_supports_reasoning", "Supports reasoning", value = supports_reasoning_value),
+        checkboxInput("models_custom_supports_plugins", "Supports plugins", value = supports_plugins_value)
+      ),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("models_custom_save", "Save provider", class = "btn-primary")
+      ),
+      size = "l",
+      easyClose = TRUE
+    ))
+  }
+
   update_setup_service_choices <- function() {
     catalog <- models_state$catalog
     current_raw <- isolate(input$setup_service)
     desired_raw <- setup_state$desired_service
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
-    choices <- .model_service_choices(catalog, include = c(current, desired))
+    choices <- .model_service_choices(catalog, include = c(current, desired, .model_provider_ids()))
     choices <- choices[choices != "favorites"]
     if (nrow(models_state$favorites) > 0) {
       choices <- c(setNames("favorites", "Favorites"), choices)
@@ -1496,7 +1761,7 @@ server <- function(input, output, session) {
     desired_raw <- agent_state$custom_desired_service
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
-    choices <- .model_service_choices(catalog, include = c(current, desired))
+    choices <- .model_service_choices(catalog, include = c(current, desired, .model_provider_ids()))
     choices <- choices[choices != "favorites"]
     if (nrow(models_state$favorites) > 0) {
       choices <- c(setNames("favorites", "Favorites"), choices)
@@ -1778,7 +2043,8 @@ server <- function(input, output, session) {
     prev_has <- isolate(models_state$favorites_present)
     has_favs <- nrow(favs) > 0
     models_state$favorites_present <- has_favs
-    base_provider_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
+    provider_ids <- .model_provider_ids()
+    base_provider_choices <- setNames(provider_ids, .model_label(provider_ids))
     view_choices <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_provider_choices)
     if (has_favs) {
       view_choices <- c(setNames("favorites", .model_label("favorites")), view_choices)
@@ -1996,6 +2262,13 @@ server <- function(input, output, session) {
   observeEvent(TRUE,
     {
       updateTextInput(session, "models_directory", value = models_state$directory)
+      refresh_provider_selectors()
+      custom_count <- length(custom_provider_choices())
+      if (custom_count > 0L) {
+        models_state$custom_status <- sprintf("Custom providers registered: %d", custom_count)
+      } else {
+        models_state$custom_status <- "No custom providers registered."
+      }
     },
     once = TRUE
   )
@@ -2007,23 +2280,7 @@ server <- function(input, output, session) {
       .save_favorites(normalized_favs, models_state$directory)
     }
     models_state$favorites_present <- nrow(models_state$favorites) > 0
-    base_choices <- setNames(.MODEL_PROVIDERS, .model_label(.MODEL_PROVIDERS))
-    provider_choices_view <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_choices)
-    if (models_state$favorites_present) {
-      provider_choices_view <- c(setNames("favorites", .model_label("favorites")), provider_choices_view)
-    }
-    provider_choices_update <- base_choices
-    current_view <- input$models_view_provider
-    if (is.null(current_view) || !current_view %in% provider_choices_view) {
-      current_view <- if (models_state$favorites_present) "favorites" else .DEFAULT_MODEL_SERVICE
-    }
-    updateSelectInput(session, "models_view_provider", choices = provider_choices_view, selected = current_view)
-    current_update <- input$models_update_provider
-    if (is.null(current_update) || !current_update %in% provider_choices_update) {
-      updateSelectInput(session, "models_update_provider", choices = provider_choices_update, selected = .DEFAULT_MODEL_SERVICE)
-    } else {
-      updateSelectInput(session, "models_update_provider", choices = provider_choices_update, selected = current_update)
-    }
+    refresh_provider_selectors()
   })
 
   observeEvent(input$models_directory, {
@@ -2118,8 +2375,258 @@ server <- function(input, output, session) {
     })
   })
 
+  observeEvent(input$models_custom_add, {
+    show_custom_provider_modal("add", cfg = list(default_model = "local-model"))
+  })
+
+  observeEvent(input$models_custom_edit, {
+    provider_id <- trimws(as.character(input$models_custom_provider %||% "")[1])
+    if (!nzchar(provider_id)) {
+      showNotification("Select a custom provider to edit.", type = "warning")
+      return()
+    }
+    provider_cfg <- .genflow_get_custom_provider(provider_id)
+    if (is.null(provider_cfg)) {
+      showNotification("Selected custom provider was not found.", type = "error")
+      refresh_provider_selectors()
+      return()
+    }
+    show_custom_provider_modal("edit", cfg = provider_cfg)
+  })
+
+  observeEvent(input$models_custom_save, {
+    mode <- as.character(custom_provider_state$mode %||% "add")[1]
+    edit_id <- trimws(as.character(custom_provider_state$edit_id %||% "")[1])
+
+    provider_id <- trimws(as.character(input$models_custom_id %||% "")[1])
+    provider_label <- trimws(as.character(input$models_custom_label %||% "")[1])
+    base_urls <- parse_multi_values(input$models_custom_base_urls)
+    api_key_env <- trimws(as.character(input$models_custom_api_key_env %||% "")[1])
+    model_env <- trimws(as.character(input$models_custom_model_env %||% "")[1])
+    default_model <- trimws(as.character(input$models_custom_default_model %||% "local-model")[1])
+    chat_paths <- parse_multi_values(input$models_custom_chat_paths)
+    model_paths <- parse_multi_values(input$models_custom_model_paths)
+    auth_header <- as.character(input$models_custom_auth_header %||% "Authorization")[1]
+    auth_prefix <- as.character(input$models_custom_auth_prefix %||% "Bearer")[1]
+    extra_headers <- tryCatch(
+      parse_header_lines(input$models_custom_extra_headers),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(extra_headers)) {
+      return()
+    }
+
+    reasoning_field <- trimws(as.character(input$models_custom_reasoning_field %||% "")[1])
+    plugins_field <- trimws(as.character(input$models_custom_plugins_field %||% "")[1])
+    max_tokens_raw <- trimws(as.character(input$models_custom_max_tokens %||% "")[1])
+    max_tokens <- NULL
+    if (nzchar(max_tokens_raw)) {
+      max_tokens_num <- suppressWarnings(as.numeric(max_tokens_raw)[1])
+      if (!is.finite(max_tokens_num) || max_tokens_num <= 0) {
+        showNotification("`max_tokens` must be a positive number.", type = "error")
+        return()
+      }
+      max_tokens <- as.integer(max_tokens_num)
+    }
+
+    if (!nzchar(default_model)) {
+      default_model <- "local-model"
+    }
+    if (!length(base_urls)) {
+      showNotification("Provide at least one base URL.", type = "warning")
+      return()
+    }
+
+    rename_provider <- identical(mode, "edit") && nzchar(edit_id) && !identical(provider_id, edit_id)
+    if (identical(mode, "add") && !is.null(.genflow_get_custom_provider(provider_id))) {
+      showNotification(sprintf("Custom provider '%s' already exists.", provider_id), type = "error")
+      return()
+    }
+    if (isTRUE(rename_provider) && !is.null(.genflow_get_custom_provider(provider_id))) {
+      showNotification(sprintf("Custom provider '%s' already exists.", provider_id), type = "error")
+      return()
+    }
+
+    result <- tryCatch(
+      {
+        set_provider_openai_compat(
+          id = provider_id,
+          label = if (nzchar(provider_label)) provider_label else NULL,
+          base_urls = base_urls,
+          api_key_env = if (nzchar(api_key_env)) api_key_env else NULL,
+          model_env = if (nzchar(model_env)) model_env else NULL,
+          default_model = default_model,
+          chat_paths = chat_paths,
+          model_paths = model_paths,
+          auth_header = auth_header,
+          auth_prefix = auth_prefix,
+          extra_headers = extra_headers,
+          api_key_required = isTRUE(input$models_custom_api_key_required),
+          supports_tools = isTRUE(input$models_custom_supports_tools),
+          supports_vision = isTRUE(input$models_custom_supports_vision),
+          supports_reasoning = isTRUE(input$models_custom_supports_reasoning),
+          supports_plugins = isTRUE(input$models_custom_supports_plugins),
+          reasoning_field = if (nzchar(reasoning_field)) reasoning_field else NULL,
+          plugins_field = if (nzchar(plugins_field)) plugins_field else NULL,
+          max_tokens = max_tokens,
+          overwrite = TRUE
+        )
+        if (isTRUE(rename_provider)) {
+          rm_provider(edit_id, missing_ok = TRUE)
+        }
+        list(ok = TRUE, error = NULL)
+      },
+      error = function(e) {
+        list(ok = FALSE, error = conditionMessage(e))
+      }
+    )
+
+    if (!isTRUE(result$ok)) {
+      showNotification(result$error %||% "Failed to save custom provider.", type = "error")
+      return()
+    }
+
+    removeModal()
+    refresh_provider_selectors(preferred_custom = provider_id)
+    custom_count <- length(custom_provider_choices())
+    status_msg <- if (identical(mode, "add")) {
+      sprintf("Custom provider '%s' created.", provider_id)
+    } else {
+      sprintf("Custom provider '%s' updated.", provider_id)
+    }
+    models_state$custom_status <- paste0(status_msg, "\nCustom providers registered: ", custom_count)
+    models_state$status <- status_msg
+    showNotification(status_msg, type = "message")
+  })
+
+  observeEvent(input$models_custom_remove, {
+    provider_id <- trimws(as.character(input$models_custom_provider %||% "")[1])
+    if (!nzchar(provider_id)) {
+      showNotification("Select a custom provider to remove.", type = "warning")
+      return()
+    }
+
+    provider_cfg <- .genflow_get_custom_provider(provider_id)
+    provider_label <- if (is.null(provider_cfg)) provider_id else (provider_cfg$label %||% provider_id)
+    showModal(modalDialog(
+      title = "Remove custom provider",
+      paste0("Remove provider '", provider_label, "' (", provider_id, ")?"),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("confirm_models_custom_remove", "Remove", class = "btn-danger")
+      )
+    ))
+  })
+
+  observeEvent(input$confirm_models_custom_remove, {
+    provider_id <- trimws(as.character(isolate(input$models_custom_provider) %||% "")[1])
+    removeModal()
+    if (!nzchar(provider_id)) {
+      return()
+    }
+
+    removed <- tryCatch(
+      {
+        rm_provider(provider_id, missing_ok = TRUE)
+      },
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        FALSE
+      }
+    )
+    if (!isTRUE(removed)) {
+      return()
+    }
+
+    refresh_provider_selectors()
+    custom_count <- length(custom_provider_choices())
+    status_msg <- sprintf("Custom provider '%s' removed.", provider_id)
+    models_state$custom_status <- paste0(status_msg, "\nCustom providers registered: ", custom_count)
+    models_state$status <- status_msg
+    showNotification(status_msg, type = "message")
+  })
+
+  observeEvent(input$models_custom_test, {
+    provider_id <- trimws(as.character(input$models_custom_provider %||% "")[1])
+    if (!nzchar(provider_id)) {
+      showNotification("Select a custom provider to test.", type = "warning")
+      return()
+    }
+    dir <- trimws(input$models_directory %||% "")
+    if (!nzchar(dir)) {
+      dir <- current_models_dir()
+    }
+
+    withProgress(message = paste0("Testing custom provider ", provider_id, "..."), value = 0, {
+      test_result <- tryCatch(
+        test_provider(provider_id, timeout = 20, max_models = 12),
+        error = function(e) {
+          list(
+            provider_id = provider_id,
+            provider_label = provider_id,
+            status_api = "ERROR",
+            status_msg = conditionMessage(e),
+            endpoint = "",
+            model_count = 0L,
+            models = character(),
+            attempted_endpoints = character()
+          )
+        }
+      )
+      incProgress(0.5)
+
+      models_state$custom_status <- format_custom_provider_test(test_result)
+      if (identical(as.character(test_result$status_api %||% "ERROR")[1], "SUCCESS")) {
+        incProgress(0.2, detail = paste0("Updating ", provider_id, " models..."))
+        update_ok <- tryCatch(
+          {
+            gen_update_models(provider = provider_id, directory = dir, verbose = TRUE)
+            new_catalog <- .load_models_catalog(dir)
+            new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+            models_state$directory <- dir
+            models_state$catalog <- new_catalog
+            models_state$favorites <- new_favorites
+            models_state$favorites_present <- nrow(new_favorites) > 0
+            .save_favorites(new_favorites, dir)
+            updateTextInput(session, "models_directory", value = dir)
+            models_state$status <- paste0("Tested and updated ", .model_label(provider_id), " at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+            TRUE
+          },
+          error = function(e) {
+            models_state$status <- paste("Update after test failed:", conditionMessage(e))
+            models_state$custom_status <- paste0(
+              models_state$custom_status,
+              "\nUpdate error: ",
+              conditionMessage(e)
+            )
+            showNotification(conditionMessage(e), type = "error")
+            FALSE
+          }
+        )
+        incProgress(0.3)
+        if (isTRUE(update_ok)) {
+          models_state$custom_status <- paste0(
+            models_state$custom_status,
+            "\nUpdate: OK"
+          )
+          showNotification(sprintf("Provider '%s' test passed and models were updated.", provider_id), type = "message")
+        }
+      } else {
+        incProgress(0.5)
+        showNotification(as.character(test_result$status_msg %||% "Provider test failed.")[1], type = "error")
+      }
+    })
+  })
+
   output$models_status <- renderText({
     models_state$status
+  })
+
+  output$models_custom_status <- renderText({
+    models_state$custom_status
   })
 
   output$models_summary <- renderText({

@@ -1288,10 +1288,13 @@
                                          api_key = "",
                                          default_model = "local-model",
                                          base_url,
+                                         base_urls = NULL,
                                          model_paths = c("/v1/models", "/models"),
                                          auth_header = "Authorization",
                                          auth_prefix = "Bearer",
-                                         extra_headers = NULL) {
+                                         extra_headers = NULL,
+                                         api_key_required = TRUE,
+                                         discover_model = TRUE) {
   model_chr <- as.character(model %||% "")[1]
   model_chr <- trimws(model_chr)
   if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
@@ -1308,7 +1311,11 @@
     }
   }
 
-  if (!nzchar(api_key)) {
+  if (isTRUE(api_key_required) && !nzchar(api_key)) {
+    return(default_model)
+  }
+
+  if (!isTRUE(discover_model)) {
     return(default_model)
   }
 
@@ -1322,58 +1329,75 @@
   if (!is.null(extra_headers) && length(extra_headers) > 0) {
     header_args <- c(header_args, extra_headers)
   }
-  auth_value <- if (nzchar(auth_prefix)) paste(auth_prefix, api_key) else api_key
-  header_args[[auth_header]] <- auth_value
+  if (nzchar(auth_header) && nzchar(api_key)) {
+    auth_value <- if (nzchar(auth_prefix)) paste(auth_prefix, api_key) else api_key
+    header_args[[auth_header]] <- auth_value
+  }
   headers <- do.call(httr::add_headers, header_args)
+
+  base_url_candidates <- c(base_url, base_urls %||% character())
+  base_url_candidates <- as.character(base_url_candidates)
+  base_url_candidates <- trimws(base_url_candidates)
+  base_url_candidates <- sub("/+$", "", base_url_candidates)
+  base_url_candidates <- base_url_candidates[nzchar(base_url_candidates)]
+  if (!length(base_url_candidates)) {
+    return(default_model)
+  }
+  base_url_candidates <- unique(base_url_candidates)
 
   model_paths <- unique(as.character(model_paths))
   discovered_model <- ""
-  for (model_path in model_paths) {
-    if (!nzchar(model_path)) {
-      next
+  for (base_candidate in base_url_candidates) {
+    for (model_path in model_paths) {
+      if (!nzchar(model_path)) {
+        next
+      }
+      model_url <- if (grepl("^https?://", model_path, ignore.case = TRUE)) {
+        model_path
+      } else {
+        paste0(base_candidate, model_path)
+      }
+
+      candidate <- tryCatch(
+        {
+          models_response <- httr::GET(
+            url = model_url,
+            headers,
+            httr::timeout(discovery_timeout)
+          )
+          if (httr::status_code(models_response) != 200) {
+            return("")
+          }
+
+          models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
+          models <- models_content$data %||% models_content$models %||% models_content$result
+          model_values <- character()
+          if (is.data.frame(models) && nrow(models) > 0) {
+            model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
+          } else if (is.list(models) && length(models) > 0) {
+            model_values <- vapply(models, function(entry) {
+              if (!is.list(entry)) {
+                return("")
+              }
+              as.character(entry$id %||% entry$model %||% entry$name %||% "")
+            }, character(1), USE.NAMES = FALSE)
+          }
+          model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
+          if (length(model_values) == 0) {
+            ""
+          } else {
+            model_values[[1]]
+          }
+        },
+        error = function(e) ""
+      )
+
+      if (nzchar(candidate)) {
+        discovered_model <- candidate
+        break
+      }
     }
-    model_url <- if (grepl("^https?://", model_path, ignore.case = TRUE)) {
-      model_path
-    } else {
-      paste0(base_url, model_path)
-    }
-
-    candidate <- tryCatch(
-      {
-        models_response <- httr::GET(
-          url = model_url,
-          headers,
-          httr::timeout(discovery_timeout)
-        )
-        if (httr::status_code(models_response) != 200) {
-          return("")
-        }
-
-        models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
-        models <- models_content$data %||% models_content$models %||% models_content$result
-        model_values <- character()
-        if (is.data.frame(models) && nrow(models) > 0) {
-          model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
-        } else if (is.list(models) && length(models) > 0) {
-          model_values <- vapply(models, function(entry) {
-            if (!is.list(entry)) {
-              return("")
-            }
-            as.character(entry$id %||% entry$model %||% entry$name %||% "")
-          }, character(1), USE.NAMES = FALSE)
-        }
-        model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
-        if (length(model_values) == 0) {
-          ""
-        } else {
-          model_values[[1]]
-        }
-      },
-      error = function(e) ""
-    )
-
-    if (nzchar(candidate)) {
-      discovered_model <- candidate
+    if (nzchar(discovered_model)) {
       break
     }
   }
@@ -1399,15 +1423,20 @@
                                        auth_header = "Authorization",
                                        auth_prefix = "Bearer",
                                        extra_headers = NULL,
-                                       max_tokens = NULL) {
-  if (!nzchar(api_key)) {
+                                       max_tokens = NULL,
+                                       api_key_required = TRUE,
+                                       warn_ignored_reasoning = TRUE,
+                                       warn_ignored_plugins = TRUE,
+                                       reasoning_field = NULL,
+                                       plugins_field = NULL) {
+  if (isTRUE(api_key_required) && !nzchar(api_key)) {
     stop("Environment variable for ", provider_label, " API key not set.")
   }
 
-  if (!is.null(reasoning)) {
+  if (!is.null(reasoning) && is.null(reasoning_field) && isTRUE(warn_ignored_reasoning)) {
     warning("`reasoning` is currently ignored for service = '", tolower(provider_label), "'.")
   }
-  if (!is.null(plugins)) {
+  if (!is.null(plugins) && is.null(plugins_field) && isTRUE(warn_ignored_plugins)) {
     warning("`plugins` is currently ignored for service = '", tolower(provider_label), "'.")
   }
 
@@ -1434,6 +1463,12 @@
   if (!is.null(max_tokens) && length(max_tokens) == 1 && is.finite(suppressWarnings(as.numeric(max_tokens)))) {
     body$max_tokens <- as.integer(max_tokens)
   }
+  if (!is.null(reasoning) && !is.null(reasoning_field) && nzchar(reasoning_field)) {
+    body[[reasoning_field]] <- reasoning
+  }
+  if (!is.null(plugins) && !is.null(plugins_field) && nzchar(plugins_field)) {
+    body[[plugins_field]] <- plugins
+  }
   if (isTRUE(tools)) {
     tools_payload <- NULL
     if (is.function(my_tools)) {
@@ -1454,8 +1489,10 @@
   if (!is.null(extra_headers) && length(extra_headers) > 0) {
     header_args <- c(header_args, extra_headers)
   }
-  auth_value <- if (nzchar(auth_prefix)) paste(auth_prefix, api_key) else api_key
-  header_args[[auth_header]] <- auth_value
+  if (nzchar(auth_header) && nzchar(api_key)) {
+    auth_value <- if (nzchar(auth_prefix)) paste(auth_prefix, api_key) else api_key
+    header_args[[auth_header]] <- auth_value
+  }
   headers <- do.call(httr::add_headers, header_args)
 
   response <- tryCatch(
@@ -1540,6 +1577,146 @@
 
   warning("Unexpected ", provider_label, " API response. Finish reason: ", finish_reason)
   "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+}
+
+#' @keywords internal
+#' @noRd
+.custom_openai_provider_resolve_model <- function(provider_cfg, model, timeout_secs = 10) {
+  model_env_vars <- character()
+  if (nzchar(as.character(provider_cfg$model_env %||% "")[1])) {
+    model_env_vars <- as.character(provider_cfg$model_env)[1]
+  }
+  api_key <- ""
+  api_key_env <- as.character(provider_cfg$api_key_env %||% "")[1]
+  if (nzchar(api_key_env)) {
+    api_key <- trimws(Sys.getenv(api_key_env, ""))
+  }
+  base_urls <- as.character(provider_cfg$base_urls %||% character())
+  base_url <- if (length(base_urls)) base_urls[[1]] else ""
+  .openai_compat_resolve_model(
+    model = model,
+    timeout_secs = timeout_secs,
+    model_env_vars = model_env_vars,
+    api_key = api_key,
+    default_model = as.character(provider_cfg$default_model %||% "local-model")[1],
+    base_url = base_url,
+    base_urls = base_urls,
+    model_paths = provider_cfg$model_paths %||% c("/v1/models", "/models"),
+    auth_header = as.character(provider_cfg$auth_header %||% "Authorization")[1],
+    auth_prefix = as.character(provider_cfg$auth_prefix %||% "Bearer")[1],
+    extra_headers = provider_cfg$extra_headers %||% list(),
+    api_key_required = isTRUE(provider_cfg$api_key_required),
+    discover_model = FALSE
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.gen_txt_custom_openai_provider <- function(provider_cfg,
+                                            prompt,
+                                            model,
+                                            temp_v,
+                                            reasoning,
+                                            add_img,
+                                            tools = FALSE,
+                                            my_tools = NULL,
+                                            plugins = NULL,
+                                            timeout_secs = 80) {
+  provider_id <- as.character(provider_cfg$id %||% "")[1]
+  provider_label <- as.character(provider_cfg$label %||% provider_id %||% "Custom")[1]
+
+  api_key <- ""
+  api_key_env <- as.character(provider_cfg$api_key_env %||% "")[1]
+  if (nzchar(api_key_env)) {
+    api_key <- trimws(Sys.getenv(api_key_env, ""))
+  }
+
+  supports_tools <- isTRUE(provider_cfg$supports_tools)
+  supports_vision <- isTRUE(provider_cfg$supports_vision)
+  supports_reasoning <- isTRUE(provider_cfg$supports_reasoning)
+  supports_plugins <- isTRUE(provider_cfg$supports_plugins)
+
+  reasoning_field <- as.character(provider_cfg$reasoning_field %||% "")[1]
+  plugins_field <- as.character(provider_cfg$plugins_field %||% "")[1]
+  if (!nzchar(reasoning_field)) {
+    reasoning_field <- NULL
+  }
+  if (!nzchar(plugins_field)) {
+    plugins_field <- NULL
+  }
+
+  if (!supports_vision && !is.null(add_img)) {
+    warning("`add_img` is not supported for service = '", provider_id, "'. Ignoring image input.")
+    add_img <- NULL
+  }
+  if (!supports_tools && (isTRUE(tools) || !is.null(my_tools))) {
+    warning("`tools` is not supported for service = '", provider_id, "'. Ignoring tools.")
+    tools <- FALSE
+    my_tools <- NULL
+  }
+  if (!supports_reasoning && !is.null(reasoning)) {
+    warning("`reasoning` is not supported for service = '", provider_id, "'. Ignoring reasoning.")
+    reasoning <- NULL
+  }
+  if (!supports_plugins && !is.null(plugins)) {
+    warning("`plugins` is not supported for service = '", provider_id, "'. Ignoring plugins.")
+    plugins <- NULL
+  }
+
+  model <- .custom_openai_provider_resolve_model(provider_cfg, model, timeout_secs = timeout_secs)
+
+  base_urls <- as.character(provider_cfg$base_urls %||% character())
+  if (!length(base_urls)) {
+    return("API_ERRORR: Custom provider has no base URL configured.")
+  }
+  chat_paths <- as.character(provider_cfg$chat_paths %||% c("/v1/chat/completions"))
+  chat_paths <- chat_paths[nzchar(chat_paths)]
+  if (!length(chat_paths)) {
+    chat_paths <- c("/v1/chat/completions")
+  }
+
+  last_error <- paste0("API_ERRORR: Unable to get a valid response from custom provider '", provider_id, "'.")
+  for (base_url in base_urls) {
+    for (chat_path in chat_paths) {
+      response <- .gen_txt_openai_compatible(
+        provider_label = provider_label,
+        prompt = prompt,
+        model = model,
+        temp_v = temp_v,
+        reasoning = reasoning,
+        add_img = add_img,
+        tools = tools,
+        my_tools = my_tools,
+        plugins = plugins,
+        timeout_secs = timeout_secs,
+        base_url = base_url,
+        api_key = api_key,
+        chat_path = chat_path,
+        auth_header = as.character(provider_cfg$auth_header %||% "Authorization")[1],
+        auth_prefix = as.character(provider_cfg$auth_prefix %||% "Bearer")[1],
+        extra_headers = provider_cfg$extra_headers %||% list(),
+        max_tokens = provider_cfg$max_tokens %||% NULL,
+        api_key_required = isTRUE(provider_cfg$api_key_required),
+        warn_ignored_reasoning = !supports_reasoning,
+        warn_ignored_plugins = !supports_plugins,
+        reasoning_field = reasoning_field,
+        plugins_field = plugins_field
+      )
+
+      if (is.character(response) && (
+        startsWith(response, "API_ERRORR:") ||
+          startsWith(response, "HTTR_ERRORR:") ||
+          startsWith(response, "TIMEOUT_ERRORR_HTTR:") ||
+          startsWith(response, "API_RESPONSE_ERRORR:")
+      )) {
+        last_error <- response
+        next
+      }
+      return(response)
+    }
+  }
+
+  last_error
 }
 
 #' @keywords internal
@@ -2957,7 +3134,8 @@
 #' @param service Character; provider identifier (e.g. `"openai"`,
 #'   `"openrouter"`, `"anthropic"`, `"groq"`, `"cerebras"`, `"together"`,
 #'   `"sambanova"`, `"nebius"`, `"deepseek"`, `"perplexity"`, `"fireworks"`,
-#'   `"deepinfra"`, `"hyperbolic"`, `"hf"`, `"ollama"`, `"llamacpp"`).
+#'   `"deepinfra"`, `"hyperbolic"`, `"hf"`, `"ollama"`, `"llamacpp"`), or a
+#'   custom id configured with [set_provider_openai_compat()].
 #' @param model Character; model identifier for the chosen `service`.
 #' @param temp Optional numeric; sampling temperature. If `NULL`, defaults to 0.7.
 #' @param reasoning One of minimal, low, medium, high, or xhigh.
@@ -3057,9 +3235,13 @@ gen_txt.default <- function(
     service <- "anthropic"
   }
 
+  custom_provider_cfg <- .genflow_get_custom_provider(service)
+
   if (is.list(model)) model <- as.character(model$model %||% model$model %||% model[[1]]) else if (is.vector(model)) model <- as.character(model[1])
   if (is.list(temp)) temp <- as.numeric(temp$temperature %||% temp$temp %||% temp[[1]]) else if (is.vector(temp)) temp <- as.numeric(temp[1])
-  if (identical(tolower(service), "anthropic")) {
+  if (!is.null(custom_provider_cfg)) {
+    model <- .custom_openai_provider_resolve_model(custom_provider_cfg, model, timeout_secs = timeout_api)
+  } else if (identical(tolower(service), "anthropic")) {
     model <- .anthropic_resolve_model(model, timeout_secs = timeout_api)
   } else if (identical(tolower(service), "nebius")) {
     model <- .nebius_resolve_model(model, timeout_secs = timeout_api)
@@ -3196,6 +3378,21 @@ gen_txt.default <- function(
 
   # Wrapper that dispatches to provider-specific functions (kept consistent and fixes 'fal' call)
   .do_call <- function(service, prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_api) {
+    custom_cfg <- .genflow_get_custom_provider(service)
+    if (!is.null(custom_cfg)) {
+      return(.gen_txt_custom_openai_provider(
+        provider_cfg = custom_cfg,
+        prompt = prompt,
+        model = model,
+        temp_v = temp_v,
+        reasoning = reasoning,
+        add_img = add_img,
+        tools = tools,
+        my_tools = my_tools,
+        plugins = plugins,
+        timeout_secs = timeout_api
+      ))
+    }
     switch(tolower(service),
       "openai" = .gen_txt_openai(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
       #  "gemini"      = .gen_txt_gemini(prompt, model, temp_v, add_img, tools = tools, timeout_secs = timeout_api),

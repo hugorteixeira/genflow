@@ -8,14 +8,14 @@
 
 > **Easy generative AI inference for R**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
 
-Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, and FAL, and now supports **local inference** with **Ollama (beta)** and **llama-cpp (beta)**.
+Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, and FAL, and now supports **local inference** with **Ollama** and **llama-cpp**.
 
 ## ✨ Why genflow?
 
 - 🚀 **Fast Integration**: Connect to multiple AI providers in seconds, not hours
 - 🎯 **Intentional Design**: Built specifically for R workflows and data science pipelines
 - 🌐 **Popular Provider Support**: OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, FAL, and more
-- 🏠 **Local AI Mode (Beta)**: Run `gen_txt()` against Ollama and llama-cpp on your own machine
+- 🏠 **Local AI Mode**: Run `gen_txt()` against Ollama and llama-cpp on your own machine
 - 📝 **Multi-Modal Inference**: Text generation, image creation, audio processing, and beyond
 - ⚡ **Optimized Performance**: Batch processing and parallel execution for faster tasks
 - 📊 **Smart Analytics**: Built-in tracking, logging, and performance metrics
@@ -33,62 +33,24 @@ Dive into AI-powered R programming with **genflow** — an intuitive, powerful t
 devtools::install_github("hugorteixeira/genflow")
 ```
 
-### Setup Provider Credentials (Cloud + Local Beta)
+### Setup Provider Credentials (Cloud + Local)
 
 Configure your provider credentials in your `.Renviron` file:
 
 ```r
 # Add to your .Renviron file
 OPENAI_API_KEY=your_openai_api_key_here
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-GROQ_API_KEY=your_groq_api_key_here
-CEREBRAS_API_KEY=your_cerebras_api_key_here
-TOGETHER_API_KEY=your_together_api_key_here
-SAMBANOVA_API_KEY=your_sambanova_api_key_here
-HUGGINGFACE_API_TOKEN=your_huggingface_token_here
-REPLICATE_API_TOKEN=your_replicate_token_here
-FAL_API_KEY=your_fal_api_key_here
-NEBIUS_API_KEY=your_nebius_api_key_here
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-PERPLEXITY_API_KEY=your_perplexity_api_key_here
-FIREWORKS_API_KEY=your_fireworks_api_key_here
-DEEPINFRA_API_KEY=your_deepinfra_api_key_here
-HYPERBOLIC_API_KEY=your_hyperbolic_api_key_here
+OPENAI_MODEL=gpt-5-mini
 
-# Local providers (beta)
+# Local provider: Ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.2
-LLAMACPP_BASE_URL=http://127.0.0.1:8080
-LLAMACPP_MODEL=local-model
-# Optional if your llama-cpp server requires auth
-LLAMACPP_API_KEY=optional_token_here
-# If your llama-cpp server is on another port (common: 8081), set LLAMACPP_BASE_URL accordingly.
-# Optional Groq defaults
-GROQ_MODEL=llama-3.3-70b-versatile
-# Optional Cerebras defaults
-CEREBRAS_MODEL=llama-3.3-70b
-# Optional Together defaults
-TOGETHER_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
-# Optional SambaNova defaults
-SAMBANOVA_MODEL=Meta-Llama-3.1-8B-Instruct
-# Optional Anthropic defaults
-ANTHROPIC_MODEL=claude-3-5-sonnet-latest
-# Optional Nebius defaults
-NEBIUS_MODEL=meta-llama/Meta-Llama-3.1-70B-Instruct
-# Optional DeepSeek defaults
-DEEPSEEK_MODEL=deepseek-chat
-# Optional Perplexity defaults
-PERPLEXITY_MODEL=sonar
-# Optional Fireworks defaults
-FIREWORKS_MODEL=accounts/fireworks/models/llama-v3p1-8b-instruct
-# Optional DeepInfra defaults
-DEEPINFRA_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
-# Optional Hyperbolic defaults
-HYPERBOLIC_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
-```
 
-**Experimental providers**: Anthropic, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, and Hyperbolic are currently experimental integrations and may change.
+# Local provider: llama-cpp
+LLAMACPP_BASE_URL=http://127.0.0.1:8080
+LLAMACPP_MODEL=optional-local-model
+LLAMACPP_API_KEY=optional_token_here
+```
 
 You can edit your `.Renviron` file by running:
 
@@ -97,6 +59,15 @@ usethis::edit_r_environ()
 ```
 
 After adding your keys, restart your R session for the changes to take effect.
+
+### Setup OpenAI-compatible Providers (Optional)
+
+You can configure custom OpenAI-compatible providers directly in the RStudio
+addin.
+
+In the `genflow` addin, the **Models** tab now includes a **Custom providers**
+panel where you can add, edit, remove, and test OpenAI-compatible providers
+(including a live connection/model-list check).
 
 ## 💡 Examples
 
@@ -117,21 +88,21 @@ result <- gen_txt(
 gen_view(result)
 ```
 
-### Local Inference (Beta): Ollama + llama-cpp
+### Text Generation (Local Inference: Ollama or llama-cpp)
 
 ```r
 library(genflow)
 
-# Ollama (beta)
+# Ollama
 local_ollama <- gen_txt(
-  context = "Summarize this earnings report in 3 bullet points.",
+  context = "Tell me a ultra nasty joke to irritate the most people possible.",
   service = "ollama",
   model = "llama3.2"
 )
 
-# llama-cpp (beta) - accepts "llamacpp", "llama-cpp", or "llama_cpp"
+# llama-cpp - accepts "llamacpp", "llama-cpp", or "llama_cpp"
 local_llamacpp <- gen_txt(
-  context = "Rewrite this in a more formal tone.",
+  context = "Rewrite this as if you are Ricky Gervais in a stand-up.",
   service = "llamacpp",
   model = "local-model"
 )
@@ -139,7 +110,25 @@ local_llamacpp <- gen_txt(
 gen_view(local_ollama, local_llamacpp)
 ```
 
-Both local providers are currently in **beta** and evolving quickly.
+Both local providers are supported for local inference workflows.
+
+### Image Generation
+
+```r
+# Bring your ideas to visual life
+image_result <- gen_img(
+  prompt = "An image of existence if existence didn't exist and even thinking about existence would make it exist.",
+  service = "hf",  # Hugging Face
+  model = "black-forest-labs/FLUX.1-schnell",
+  h = 1024,
+  y = 1024
+)
+
+# View your generated masterpiece
+gen_view(image_result)
+```
+
+
 
 ### Speech To Text
 
@@ -153,8 +142,6 @@ stt <- gen_stt(
 
 stt$response_value
 ```
-
-Tested model: `openai/whisper` via Replicate. Other services/models are not tested yet.
 
 ### Text To Speech
 
@@ -172,7 +159,7 @@ tts$response_value
 
 Tested model: `qwen/qwen3-tts` via Replicate. Other services/models are not tested yet.
 
-### Reusable Agents & Content (New!)
+### Reusable Agents & Content
 
 ```r
 # Capture a reusable setup
@@ -224,22 +211,6 @@ gen_interface()
 
 You’ll also find a “Launch Genflow Agent Interface” entry under the RStudio Addins menu for one-click access.
 
-### Image Generation
-
-```r
-# Bring your ideas to visual life
-image_result <- gen_img(
-  prompt = "An image of existence if existence didn't exist and even thinking about existence would make it exist.",
-  service = "hf",  # Hugging Face
-  model = "black-forest-labs/FLUX.1-schnell",
-  h = 1024,
-  y = 1024
-)
-
-# View your generated masterpiece
-gen_view(image_result)
-```
-
 ### Easy Object Visualization
 
 ![Just use function gen_view(object1,object2,object3,etc)](./gen_view.png)
@@ -252,9 +223,9 @@ agent <- get_agent("creative_writer")
 
 # Optional per-item data
 one_item_each <- list(
-  list(topic = "Healthcare analytics", tone = "optimistic"),
-  list(topic = "Retail analytics", tone = "boring"),
-  list(topic = "Financial forecasting", tone = "cynical")
+  list(topic = "Healthcare Price Markupper", tone = "optimistic"),
+  list(topic = "Retail Master of Boredom", tone = "boring"),
+  list(topic = "Financial Fortune Teller", tone = "cynical")
 )
 
 # Run a batch in parallel – temporary agents are created and cleaned up automatically
@@ -300,7 +271,7 @@ graph TD
 
 | Function | Purpose |
 |---------|-------------|
-| `gen_txt()` | Generate text with cloud and local providers (including **Ollama beta** and **llama-cpp beta**) |
+| `gen_txt()` | Generate text with cloud and local providers (including **Ollama** and **llama-cpp**) |
 | `gen_img()` | Create stunning images from text prompts |
 | `gen_stt()` | Speech-to-text (tested: Replicate `openai/whisper`; other services/models not tested yet) |
 | `gen_tts()` | Text-to-speech (tested: Replicate `qwen/qwen3-tts`; other services/models not tested yet) |

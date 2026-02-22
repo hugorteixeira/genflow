@@ -859,17 +859,23 @@
                                          provider_name,
                                          api_key,
                                          base_url,
+                                         base_urls = NULL,
                                          model_paths = c("/v1/models", "/models"),
                                          auth_header = "Authorization",
                                          auth_prefix = "Bearer",
-                                         extra_headers = NULL) {
-  if (!nzchar(api_key)) {
+                                         extra_headers = NULL,
+                                         api_key_required = TRUE) {
+  if (isTRUE(api_key_required) && !nzchar(api_key)) {
     stop("Error: API key not set for provider '", provider_id, "'.")
   }
 
-  base_url <- trimws(base_url %||% "")
-  base_url <- sub("/+$", "", base_url)
-  if (!nzchar(base_url)) {
+  base_url_candidates <- c(base_url, base_urls %||% character())
+  base_url_candidates <- as.character(base_url_candidates)
+  base_url_candidates <- trimws(base_url_candidates)
+  base_url_candidates <- sub("/+$", "", base_url_candidates)
+  base_url_candidates <- base_url_candidates[nzchar(base_url_candidates)]
+  base_url_candidates <- unique(base_url_candidates)
+  if (!length(base_url_candidates)) {
     stop("Error: Base URL is empty for provider '", provider_id, "'.")
   }
 
@@ -877,43 +883,54 @@
   if (!is.null(extra_headers) && length(extra_headers) > 0) {
     header_args <- c(header_args, extra_headers)
   }
-  auth_value <- if (nzchar(auth_prefix)) paste(auth_prefix, api_key) else api_key
-  header_args[[auth_header]] <- auth_value
+  if (nzchar(auth_header) && nzchar(api_key)) {
+    auth_value <- if (nzchar(auth_prefix)) paste(auth_prefix, api_key) else api_key
+    header_args[[auth_header]] <- auth_value
+  }
   headers <- do.call(httr::add_headers, header_args)
 
   model_paths <- unique(as.character(model_paths))
-  response <- NULL
+  parsed_content <- NULL
   api_url_used <- ""
-  for (model_path in model_paths) {
-    if (!nzchar(model_path)) {
-      next
-    }
-    api_url <- if (grepl("^https?://", model_path, ignore.case = TRUE)) {
-      model_path
-    } else {
-      paste0(base_url, model_path)
-    }
+  for (base_candidate in base_url_candidates) {
+    for (model_path in model_paths) {
+      if (!nzchar(model_path)) {
+        next
+      }
+      api_url <- if (grepl("^https?://", model_path, ignore.case = TRUE)) {
+        model_path
+      } else {
+        paste0(base_candidate, model_path)
+      }
 
-    if (verbose) message("Connecting to the ", provider_name, " API at ", api_url, " ...")
-    response_try <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
-      error = function(e) NULL
-    )
-    if (!is.null(response_try) && httr::status_code(response_try) == 200) {
-      response <- response_try
+      if (verbose) message("Connecting to the ", provider_name, " API at ", api_url, " ...")
+      response_try <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
+        error = function(e) NULL
+      )
+      if (is.null(response_try) || httr::status_code(response_try) != 200) {
+        next
+      }
+
+      parsed_try <- tryCatch({
+        raw_content <- httr::content(response_try, "raw")
+        jsonlite::fromJSON(rawToChar(raw_content), simplifyVector = TRUE)
+      }, error = function(e) NULL)
+      if (is.null(parsed_try) || !is.list(parsed_try)) {
+        next
+      }
+
+      parsed_content <- parsed_try
       api_url_used <- api_url
       break
     }
+    if (!is.null(parsed_content)) break
   }
 
-  if (is.null(response)) {
+  if (is.null(parsed_content)) {
     stop(provider_name, " API Error: unable to fetch models from candidate endpoints.")
   }
 
   if (verbose) message("Processing JSON response from ", api_url_used, " ...")
-  raw_content <- httr::content(response, "raw")
-  parsed_content <- tryCatch({ jsonlite::fromJSON(rawToChar(raw_content), simplifyVector = TRUE) },
-    error = function(e) stop("Error processing JSON from ", provider_name, " API: ", e$message)
-  )
 
   models_list <- NULL
   if (!is.null(parsed_content) && is.list(parsed_content) && "data" %in% names(parsed_content)) {
@@ -1113,6 +1130,39 @@
     api_key = api_key,
     base_url = base_url,
     model_paths = c("/v1/models", "/models")
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.update_models_custom_openai_compat <- function(provider_id, directory = NULL, verbose = TRUE) {
+  provider_cfg <- .genflow_get_custom_provider(provider_id)
+  if (is.null(provider_cfg)) {
+    stop("Custom provider '", provider_id, "' was not found.")
+  }
+
+  api_key <- ""
+  api_key_env <- as.character(provider_cfg$api_key_env %||% "")[1]
+  if (nzchar(api_key_env)) {
+    api_key <- trimws(Sys.getenv(api_key_env, ""))
+  }
+
+  base_urls <- as.character(provider_cfg$base_urls %||% character())
+  base_url <- if (length(base_urls)) base_urls[[1]] else ""
+
+  .update_models_openai_compat(
+    directory = directory,
+    verbose = verbose,
+    provider_id = provider_cfg$id %||% provider_id,
+    provider_name = provider_cfg$label %||% provider_id,
+    api_key = api_key,
+    base_url = base_url,
+    base_urls = base_urls,
+    model_paths = provider_cfg$model_paths %||% c("/v1/models", "/models"),
+    auth_header = as.character(provider_cfg$auth_header %||% "Authorization")[1],
+    auth_prefix = as.character(provider_cfg$auth_prefix %||% "Bearer")[1],
+    extra_headers = provider_cfg$extra_headers %||% list(),
+    api_key_required = isTRUE(provider_cfg$api_key_required)
   )
 }
 
@@ -1788,7 +1838,11 @@
 #' providers and write normalized CSV files to a directory.
 #'
 #' @param provider Optional character scalar. If NULL, updates all supported providers.
-#'        Otherwise one of: "openrouter", "openai", "anthropic", "groq", "cerebras", "together", "sambanova", "nebius", "deepseek", "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini", "fal", "replicate", "ollama", "llamacpp".
+#'        Otherwise one of the built-ins ("openrouter", "openai", "anthropic",
+#'        "groq", "cerebras", "together", "sambanova", "nebius", "deepseek",
+#'        "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini",
+#'        "fal", "replicate", "ollama", "llamacpp") or a custom provider id
+#'        configured with [set_provider_openai_compat()].
 #' @param directory Character path where CSVs will be saved. Defaults to working dir.
 #' @param verbose Logical flag to print progress messages.
 #'
@@ -1813,12 +1867,15 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
     dir.create(directory, recursive = TRUE, showWarnings = FALSE)
   }
 
-  # Define all available providers
-  all_providers <- c(
+  # Define all available built-in providers
+  builtin_providers <- c(
     "openrouter", "openai", "anthropic", "groq", "cerebras", "together", "sambanova",
     "nebius", "deepseek", "perplexity", "fireworks", "deepinfra", "hyperbolic",
     "gemini", "fal", "replicate", "ollama", "llamacpp"
   )
+  custom_provider_cfgs <- .genflow_list_custom_provider_configs()
+  custom_providers <- names(custom_provider_cfgs)
+  all_providers <- unique(c(builtin_providers, custom_providers))
 
   # Determine which providers to update
   if (is.null(provider)) {
@@ -1872,12 +1929,24 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
   # Update each selected provider
   for (prov in providers_to_update) {
     current_provider <- current_provider + 1
-    update_info <- update_functions[[prov]]
-    if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, update_info$name))
+    if (prov %in% names(update_functions)) {
+      update_info <- update_functions[[prov]]
+      if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, update_info$name))
+      tryCatch({
+        do.call(update_info$func, list(directory = directory, verbose = verbose))
+      }, error = function(e) {
+        if (verbose) warning("Failed to update ", update_info$name, ": ", e$message)
+      })
+      next
+    }
+
+    custom_cfg <- custom_provider_cfgs[[prov]]
+    custom_name <- custom_cfg$label %||% prov
+    if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, custom_name))
     tryCatch({
-      do.call(update_info$func, list(directory = directory, verbose = verbose))
+      .update_models_custom_openai_compat(provider_id = prov, directory = directory, verbose = verbose)
     }, error = function(e) {
-      if (verbose) warning("Failed to update ", update_info$name, ": ", e$message)
+      if (verbose) warning("Failed to update ", custom_name, ": ", e$message)
     })
   }
 
