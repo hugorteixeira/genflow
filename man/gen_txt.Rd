@@ -51,7 +51,10 @@ to \code{tools::R_user_dir("agent_models", which = "data")} when \code{NULL}.}
 sanitized derivation of \code{context}.}
 
 \item{service}{Character; provider identifier (e.g. \code{"openai"},
-\code{"openrouter"}, \code{"hf"}, \code{"ollama"}, \code{"llamacpp"}).}
+\code{"openrouter"}, \code{"anthropic"}, \code{"groq"}, \code{"cerebras"}, \code{"together"},
+\code{"sambanova"}, \code{"nebius"}, \code{"deepseek"}, \code{"perplexity"},
+\code{"fireworks"}, \code{"deepinfra"}, \code{"hyperbolic"}, \code{"hf"},
+\code{"ollama"}, \code{"llamacpp"}).}
 
 \item{model}{Character; model identifier for the chosen \code{service}.}
 

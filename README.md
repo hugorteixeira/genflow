@@ -8,13 +8,13 @@
 
 > **Easy generative AI inference for R**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
 
-Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Hugging Face, Replicate, and FAL, and now supports **local inference** with **Ollama (beta)** and **llama-cpp (beta)**.
+Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, and FAL, and now supports **local inference** with **Ollama (beta)** and **llama-cpp (beta)**.
 
 ## ✨ Why genflow?
 
 - 🚀 **Fast Integration**: Connect to multiple AI providers in seconds, not hours
 - 🎯 **Intentional Design**: Built specifically for R workflows and data science pipelines
-- 🌐 **Popular Provider Support**: OpenAI, OpenRouter, Hugging Face, Replicate, FAL, and more
+- 🌐 **Popular Provider Support**: OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, FAL, and more
 - 🏠 **Local AI Mode (Beta)**: Run `gen_txt()` against Ollama and llama-cpp on your own machine
 - 📝 **Multi-Modal Inference**: Text generation, image creation, audio processing, and beyond
 - ⚡ **Optimized Performance**: Batch processing and parallel execution for faster tasks
@@ -41,9 +41,20 @@ Configure your provider credentials in your `.Renviron` file:
 # Add to your .Renviron file
 OPENAI_API_KEY=your_openai_api_key_here
 OPENROUTER_API_KEY=your_openrouter_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
+CEREBRAS_API_KEY=your_cerebras_api_key_here
+TOGETHER_API_KEY=your_together_api_key_here
+SAMBANOVA_API_KEY=your_sambanova_api_key_here
 HUGGINGFACE_API_TOKEN=your_huggingface_token_here
 REPLICATE_API_TOKEN=your_replicate_token_here
 FAL_API_KEY=your_fal_api_key_here
+NEBIUS_API_KEY=your_nebius_api_key_here
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
+PERPLEXITY_API_KEY=your_perplexity_api_key_here
+FIREWORKS_API_KEY=your_fireworks_api_key_here
+DEEPINFRA_API_KEY=your_deepinfra_api_key_here
+HYPERBOLIC_API_KEY=your_hyperbolic_api_key_here
 
 # Local providers (beta)
 OLLAMA_BASE_URL=http://127.0.0.1:11434
@@ -52,7 +63,32 @@ LLAMACPP_BASE_URL=http://127.0.0.1:8080
 LLAMACPP_MODEL=local-model
 # Optional if your llama-cpp server requires auth
 LLAMACPP_API_KEY=optional_token_here
+# If your llama-cpp server is on another port (common: 8081), set LLAMACPP_BASE_URL accordingly.
+# Optional Groq defaults
+GROQ_MODEL=llama-3.3-70b-versatile
+# Optional Cerebras defaults
+CEREBRAS_MODEL=llama-3.3-70b
+# Optional Together defaults
+TOGETHER_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+# Optional SambaNova defaults
+SAMBANOVA_MODEL=Meta-Llama-3.1-8B-Instruct
+# Optional Anthropic defaults
+ANTHROPIC_MODEL=claude-3-5-sonnet-latest
+# Optional Nebius defaults
+NEBIUS_MODEL=meta-llama/Meta-Llama-3.1-70B-Instruct
+# Optional DeepSeek defaults
+DEEPSEEK_MODEL=deepseek-chat
+# Optional Perplexity defaults
+PERPLEXITY_MODEL=sonar
+# Optional Fireworks defaults
+FIREWORKS_MODEL=accounts/fireworks/models/llama-v3p1-8b-instruct
+# Optional DeepInfra defaults
+DEEPINFRA_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
+# Optional Hyperbolic defaults
+HYPERBOLIC_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
+
+**Experimental providers**: Anthropic, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, and Hyperbolic are currently experimental integrations and may change.
 
 You can edit your `.Renviron` file by running:
 

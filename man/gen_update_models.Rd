@@ -8,7 +8,7 @@ gen_update_models(provider = NULL, directory = NULL, verbose = TRUE)
 }
 \arguments{
 \item{provider}{Optional character scalar. If NULL, updates all supported providers.
-Otherwise one of: "openrouter", "openai", "gemini", "fal", "replicate", "ollama", "llamacpp".}
+Otherwise one of: "openrouter", "openai", "anthropic", "groq", "cerebras", "together", "sambanova", "nebius", "deepseek", "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini", "fal", "replicate", "ollama", "llamacpp".}
 
 \item{directory}{Character path where CSVs will be saved. Defaults to working dir.}
 
