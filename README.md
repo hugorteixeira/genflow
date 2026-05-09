@@ -35,30 +35,48 @@ devtools::install_github("hugorteixeira/genflow")
 
 ### Setup Provider Credentials (Cloud + Local)
 
-Configure your provider credentials in your `.Renviron` file:
+The RStudio addin can manage provider credentials from the **Models >
+Credentials** panel:
+
+```r
+gen_interface()
+```
+
+Use that panel to add, edit, import, or delete API keys. It writes credentials
+to your user `.Renviron`, loads them into the current R session immediately, and
+backs up the existing `.Renviron` before changing it. The import action scans
+the current R session, user `.Renviron`, project `.Renviron`, project `.env`,
+`~/.bashrc`, and `~/.zshrc` for simple `KEY=value` assignments and shows masked
+values before importing. Base URL fields show genflow's built-in defaults when
+available; save them only if you want to override the default endpoint.
+
+You can still configure credentials manually in `.Renviron`:
 
 ```r
 # Add to your .Renviron file
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=gpt-5-mini
 
 # Local provider: Ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=llama3.2
 
 # Local provider: llama-cpp
 LLAMACPP_BASE_URL=http://127.0.0.1:8080
-LLAMACPP_MODEL=optional-local-model
 LLAMACPP_API_KEY=optional_token_here
 ```
 
-You can edit your `.Renviron` file by running:
+You can edit `.Renviron` manually by running:
 
 ```r
 usethis::edit_r_environ()
 ```
 
-After adding your keys, restart your R session for the changes to take effect.
+After manual edits, restart your R session or call `readRenviron("~/.Renviron")`
+for the changes to take effect.
+
+The credentials panel does not manage model choices or `*_MODEL` variables.
+Set the credential first, update the provider catalog, then choose the model in
+the setup/agent controls. See `docs/credential-and-model-catalog-workflow.md`
+for the detailed workflow.
 
 ### Setup OpenAI-compatible Providers (Optional)
 
@@ -248,6 +266,11 @@ gen_update_models()
 # Discover the perfect model for your task
 gen_show_models(provider = "openai", type = "chat")
 ```
+
+In the interface, model updates run a credential preflight first. If a provider
+needs a missing key, genflow opens the credential dialog before attempting the
+API request instead of reporting a false success. Model selection stays in the
+setup/agent flow after the provider catalog has been updated.
 
 
 ## 🧭 Example Workflow (Mermaid)

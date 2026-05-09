@@ -1837,6 +1837,10 @@
 #' High-level convenience function to update model lists from one or several
 #' providers and write normalized CSV files to a directory.
 #'
+#' The interactive interface preflights provider credentials before calling this
+#' helper. When calling it directly, use `fail_on_error = TRUE` if provider
+#' failures should stop the call instead of being reported only as warnings.
+#'
 #' @param provider Optional character scalar. If NULL, updates all supported providers.
 #'        Otherwise one of the built-ins ("openrouter", "openai", "anthropic",
 #'        "groq", "cerebras", "together", "sambanova", "nebius", "deepseek",
@@ -1845,8 +1849,9 @@
 #'        configured with [set_provider_openai_compat()].
 #' @param directory Character path where CSVs will be saved. Defaults to working dir.
 #' @param verbose Logical flag to print progress messages.
+#' @param fail_on_error Logical. If TRUE, provider failures are collected and raised as an error after attempted updates.
 #'
-#' @return Invisibly returns a named list of data frames, one per provider updated.
+#' @return Invisibly returns the model directory path with attributes describing updated and failed providers.
 #' @examples
 #' # Update all providers to the default directory
 #' # gen_update_models()
@@ -1855,7 +1860,7 @@
 #' # gen_update_models(provider = "openrouter", directory = tempdir())
 #'
 #' @export
-gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE) {
+gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE, fail_on_error = FALSE) {
   # Set default directory if not provided
   if (is.null(directory) || is.na(directory)) {
     directory <- tools::R_user_dir("agent_models", which = "data")
@@ -1925,6 +1930,8 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
   # Track progress
   total_providers <- length(providers_to_update)
   current_provider <- 0
+  updated_providers <- character()
+  failures <- list()
 
   # Update each selected provider
   for (prov in providers_to_update) {
@@ -1934,7 +1941,9 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
       if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, update_info$name))
       tryCatch({
         do.call(update_info$func, list(directory = directory, verbose = verbose))
+        updated_providers <- c(updated_providers, prov)
       }, error = function(e) {
+        failures[[prov]] <<- e$message
         if (verbose) warning("Failed to update ", update_info$name, ": ", e$message)
       })
       next
@@ -1945,7 +1954,9 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
     if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, custom_name))
     tryCatch({
       .update_models_custom_openai_compat(provider_id = prov, directory = directory, verbose = verbose)
+      updated_providers <- c(updated_providers, prov)
     }, error = function(e) {
+      failures[[prov]] <<- e$message
       if (verbose) warning("Failed to update ", custom_name, ": ", e$message)
     })
   }
@@ -1966,7 +1977,16 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE)
     message("Directory: ", directory)
   }
 
-  invisible(directory)
+  result <- directory
+  attr(result, "updated_providers") <- updated_providers
+  attr(result, "failed_providers") <- names(failures)
+  attr(result, "failures") <- failures
+  if (length(failures) && isTRUE(fail_on_error)) {
+    failure_msg <- paste0(names(failures), ": ", unlist(failures, use.names = FALSE), collapse = "; ")
+    stop("Model update failed for ", failure_msg, call. = FALSE)
+  }
+
+  invisible(result)
 }
 
 #' Normalize `provider` column values (internal)

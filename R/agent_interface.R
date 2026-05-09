@@ -508,6 +508,12 @@
   .gf-preview { font-size: 0.85rem; background: rgba(15, 23, 42, 0.04); padding: 10px 12px; border-radius: 10px; margin-top: 10px; white-space: pre-wrap; max-height: 160px; overflow-y: auto; }
   .gf-section-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
   .gf-section-header h3 { margin: 0; }
+  .gf-secret-row { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: #f8fafc; }
+  .gf-secret-name { font-weight: 600; font-size: 0.86rem; }
+  .gf-secret-meta { color: #64748b; font-size: 0.78rem; margin-top: 2px; word-break: break-word; }
+  .gf-status-ok { color: #047857; font-weight: 600; }
+  .gf-status-missing { color: #b45309; font-weight: 600; }
+  .gf-status-detected { color: #2563eb; font-weight: 600; }
   #main_tabs .nav-link { font-weight: 600; }
   .gf-cell-scroll { max-height: 96px; overflow-y: auto; padding-right: 4px; white-space: normal; word-break: break-word; }
   .gf-cell-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -791,6 +797,29 @@
             actionButton("models_update_selected", "Update selected provider", icon = icon("download")),
             tags$hr(),
             verbatimTextOutput("models_status", placeholder = TRUE)
+          ),
+          div(
+            class = "gf-panel",
+            div(
+              class = "gf-section-header",
+              h3("Credentials"),
+              actionButton("credentials_refresh", label = NULL, icon = icon("rotate"), class = "btn btn-outline-secondary btn-sm")
+            ),
+            selectInput(
+              "credentials_provider",
+              "Provider",
+              choices = setNames(character(), character()),
+              selected = .DEFAULT_MODEL_SERVICE
+            ),
+            uiOutput("credentials_status_ui"),
+            div(
+              class = "gf-btn-row",
+              actionButton("credentials_edit", "Add / edit", icon = icon("key")),
+              actionButton("credentials_import", "Import detected", icon = icon("file-import")),
+              actionButton("credentials_delete", "Delete", icon = icon("trash"), class = "btn-danger")
+            ),
+            tags$hr(),
+            verbatimTextOutput("credentials_status", placeholder = TRUE)
           ),
           div(
             class = "gf-panel",
@@ -1352,6 +1381,16 @@ server <- function(input, output, session) {
     edit_id = NULL
   )
 
+  credentials_state <- reactiveValues(
+    status = "",
+    modal_provider = NULL,
+    import_values = NULL,
+    pending_update_mode = NULL,
+    pending_update_dir = NULL,
+    pending_update_providers = character(),
+    pending_update_missing = NULL
+  )
+
   transfer_state <- reactiveValues(
     export_summary = NULL,
     import_summary = NULL
@@ -1467,6 +1506,279 @@ server <- function(input, output, session) {
     stats::setNames(ids, labels)
   }
 
+  credential_provider_choices <- function() {
+    choices <- .genflow_credential_providers()
+    if (!length(choices)) {
+      return(setNames(character(), character()))
+    }
+    choices
+  }
+
+  refresh_credential_selectors <- function(preferred_provider = NULL) {
+    choices <- credential_provider_choices()
+    current <- preferred_provider %||% isolate(input$credentials_provider) %||% .DEFAULT_MODEL_SERVICE
+    if (!length(choices)) {
+      current <- ""
+    } else if (!nzchar(current) || !current %in% unname(choices)) {
+      current <- unname(choices[[1]])
+    }
+    updateSelectInput(session, "credentials_provider", choices = choices, selected = current)
+  }
+
+  refresh_credentials_status <- function(provider = NULL) {
+    provider <- provider %||% isolate(input$credentials_provider) %||% .DEFAULT_MODEL_SERVICE
+    status <- .genflow_credential_status(provider)
+    active_count <- if (nrow(status)) sum(status$active) else 0L
+    detected_count <- if (nrow(status)) sum(status$detected & !status$active) else 0L
+    credentials_state$status <- paste0(
+      "Store: ",
+      .genflow_credentials_path(),
+      "\nActive variables: ",
+      active_count,
+      "\nDetected but not active: ",
+      detected_count
+    )
+  }
+
+  credential_status_ui <- function(provider) {
+    status <- .genflow_credential_status(provider)
+    if (!nrow(status)) {
+      return(div(class = "gf-empty", "No credential variables registered for this provider."))
+    }
+    tagList(lapply(seq_len(nrow(status)), function(idx) {
+      row <- status[idx, , drop = FALSE]
+      state_tag <- if (isTRUE(row$active)) {
+        span(class = "gf-status-ok", "active")
+      } else if (isTRUE(row$detected)) {
+        span(class = "gf-status-detected", "detected")
+      } else if (identical(row$kind[[1]], "base_url") && nzchar(row$default_value[[1]])) {
+        span(class = "gf-status-detected", "default")
+      } else {
+        span(class = "gf-status-missing", "not set")
+      }
+      source <- if (nzchar(row$source)) {
+        paste0("source: ", row$source)
+      } else if (identical(row$kind[[1]], "base_url") && nzchar(row$default_value[[1]])) {
+        "source: built-in default"
+      } else {
+        "source: none"
+      }
+      value <- if (nzchar(row$masked)) {
+        paste0("value: ", row$masked)
+      } else if (identical(row$kind[[1]], "base_url") && nzchar(row$default_value[[1]])) {
+        paste0("value: ", row$default_value[[1]])
+      } else {
+        "value: empty"
+      }
+      requirement <- if (isTRUE(row$required_for_models)) "required for model update" else row$kind
+      div(
+        class = "gf-secret-row",
+        div(class = "gf-secret-name", row$env, " - ", state_tag),
+        div(class = "gf-secret-meta", row$label, " | ", requirement),
+        div(class = "gf-secret-meta", source, " | ", value)
+      )
+    }))
+  }
+
+  show_credentials_modal <- function(provider) {
+    provider <- tolower(trimws(as.character(provider %||% "")[1]))
+    specs <- .genflow_credential_specs(provider)
+    if (!nrow(specs)) {
+      showNotification("No credential variables are registered for this provider.", type = "warning")
+      return()
+    }
+    credentials_state$modal_provider <- provider
+    provider_label <- specs$provider_label[[1]]
+    fields <- lapply(seq_len(nrow(specs)), function(idx) {
+      spec <- specs[idx, , drop = FALSE]
+      input_id <- paste0("credential_value_", .genflow_sanitize_input_id(spec$env))
+      active_value <- Sys.getenv(spec$env, unset = "")
+      field_value <- active_value
+      if (!nzchar(field_value) && identical(spec$kind[[1]], "base_url")) {
+        field_value <- spec$default_value[[1]]
+      }
+      label <- paste0(spec$label, " (", spec$env, ")")
+      help <- if (isTRUE(spec$sensitive) && nzchar(active_value)) {
+        "Leave blank to keep the current value."
+      } else if (nzchar(spec$default_value) && !nzchar(active_value)) {
+        "Built-in default. Save only if you want to override it."
+      } else {
+        NULL
+      }
+      input <- if (isTRUE(spec$sensitive)) {
+        passwordInput(input_id, label, value = "", placeholder = if (nzchar(active_value)) "Current value is set" else "")
+      } else {
+        textInput(input_id, label, value = field_value, placeholder = spec$default_value)
+      }
+      if (is.null(help)) {
+        input
+      } else {
+        tagList(input, div(class = "gf-secret-meta", help))
+      }
+    })
+    showModal(modalDialog(
+      title = paste("Credentials:", provider_label),
+      div(class = "gf-form-grid", fields),
+      tags$hr(),
+      div(class = "gf-secret-meta", paste("Saved to", .genflow_credentials_path())),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("credentials_save", "Save credentials", class = "btn-primary")
+      ),
+      size = "l",
+      easyClose = TRUE
+    ))
+  }
+
+  show_credentials_import_modal <- function(provider) {
+    provider <- tolower(trimws(as.character(provider %||% "")[1]))
+    detected <- .genflow_detect_credentials(providers = provider, include_values = TRUE)
+    detected <- detected[nzchar(detected$value), , drop = FALSE]
+    if (!nrow(detected)) {
+      showNotification("No simple credential assignments were detected for this provider.", type = "warning")
+      return()
+    }
+    detected <- detected[!duplicated(detected$env), , drop = FALSE]
+    credentials_state$modal_provider <- provider
+    credentials_state$import_values <- stats::setNames(detected$value, detected$env)
+    rows <- lapply(seq_len(nrow(detected)), function(idx) {
+      tags$tr(
+        tags$td(detected$env[[idx]]),
+        tags$td(detected$masked[[idx]]),
+        tags$td(detected$source[[idx]])
+      )
+    })
+    showModal(modalDialog(
+      title = "Import detected credentials",
+      tags$table(
+        class = "table table-sm",
+        tags$thead(tags$tr(tags$th("Variable"), tags$th("Value"), tags$th("Source"))),
+        tags$tbody(rows)
+      ),
+      div(class = "gf-secret-meta", paste("Import target:", .genflow_credentials_path())),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("credentials_import_confirm", "Import", class = "btn-primary")
+      ),
+      size = "m",
+      easyClose = TRUE
+    ))
+  }
+
+  show_credentials_delete_modal <- function(provider) {
+    provider <- tolower(trimws(as.character(provider %||% "")[1]))
+    specs <- .genflow_credential_specs(provider)
+    if (!nrow(specs)) {
+      showNotification("No credential variables are registered for this provider.", type = "warning")
+      return()
+    }
+    credentials_state$modal_provider <- provider
+    vars <- paste(specs$env, collapse = ", ")
+    showModal(modalDialog(
+      title = "Delete credentials",
+      paste0("Remove these variables from ", .genflow_credentials_path(), " and unset them in this R session?"),
+      tags$pre(vars),
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("credentials_delete_confirm", "Delete", class = "btn-danger")
+      ),
+      easyClose = TRUE
+    ))
+  }
+
+  reload_model_state <- function(dir) {
+    new_catalog <- .load_models_catalog(dir)
+    new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+    models_state$directory <- dir
+    models_state$catalog <- new_catalog
+    models_state$favorites <- new_favorites
+    models_state$favorites_present <- nrow(new_favorites) > 0
+    .save_favorites(new_favorites, dir)
+    updateTextInput(session, "models_directory", value = dir)
+    refresh_provider_selectors()
+  }
+
+  run_model_updates <- function(providers, dir, skipped = character(), progress_message = "Updating model providers...") {
+    providers <- unique(tolower(trimws(as.character(providers %||% character()))))
+    providers <- providers[nzchar(providers)]
+    skipped <- unique(tolower(trimws(as.character(skipped %||% character()))))
+    skipped <- skipped[nzchar(skipped)]
+    if (!length(providers)) {
+      models_state$status <- "No model providers were ready to update."
+      showNotification(models_state$status, type = "warning")
+      return(invisible(list(updated = character(), failed = character(), skipped = skipped)))
+    }
+
+    updated <- character()
+    failures <- list()
+    withProgress(message = progress_message, value = 0, {
+      total <- length(providers)
+      for (idx in seq_along(providers)) {
+        prov <- providers[[idx]]
+        incProgress(1 / total, detail = paste0("Updating ", .model_label(prov), "..."))
+        tryCatch(
+          {
+            gen_update_models(provider = prov, directory = dir, verbose = TRUE, fail_on_error = TRUE)
+            updated <- c(updated, prov)
+          },
+          error = function(e) {
+            failures[[prov]] <<- conditionMessage(e)
+          }
+        )
+      }
+      reload_model_state(dir)
+    })
+
+    status_lines <- character()
+    if (length(updated)) {
+      status_lines <- c(status_lines, paste("Updated:", paste(.model_label(updated), collapse = ", ")))
+    }
+    if (length(failures)) {
+      failure_lines <- paste0(.model_label(names(failures)), " (", names(failures), "): ", unlist(failures, use.names = FALSE))
+      status_lines <- c(status_lines, "Failed:", failure_lines)
+    }
+    if (length(skipped)) {
+      status_lines <- c(status_lines, paste("Skipped missing credentials:", paste(.model_label(skipped), collapse = ", ")))
+    }
+    status_lines <- c(status_lines, paste("Finished at", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
+    models_state$status <- paste(status_lines, collapse = "\n")
+    if (length(failures)) {
+      showNotification("Some model providers failed to update. See status details.", type = "error")
+    } else {
+      showNotification("Model providers updated.", type = "message")
+    }
+    invisible(list(updated = updated, failed = names(failures), skipped = skipped))
+  }
+
+  show_missing_credentials_modal <- function(missing, dir, providers, mode = c("selected", "all")) {
+    mode <- match.arg(mode)
+    missing_providers <- unique(missing$provider)
+    labels <- stats::setNames(missing_providers, .model_label(missing_providers))
+    credentials_state$pending_update_mode <- mode
+    credentials_state$pending_update_dir <- dir
+    credentials_state$pending_update_providers <- providers
+    credentials_state$pending_update_missing <- missing
+    footer <- tagList(
+      modalButton("Cancel"),
+      actionButton("missing_credentials_add", "Add credential", class = "btn-primary")
+    )
+    if (identical(mode, "all")) {
+      footer <- tagList(
+        modalButton("Cancel"),
+        actionButton("missing_credentials_update_ready", "Update available providers"),
+        actionButton("missing_credentials_add", "Add credential", class = "btn-primary")
+      )
+    }
+    showModal(modalDialog(
+      title = "Missing credentials",
+      tags$p("These provider updates require credentials before genflow can fetch model data."),
+      tags$pre(.genflow_format_missing_credentials(missing)),
+      selectInput("missing_credentials_provider", "Provider to configure", choices = labels, selected = missing_providers[[1]]),
+      footer = footer,
+      easyClose = TRUE
+    ))
+  }
+
   refresh_provider_selectors <- function(preferred_custom = NULL) {
     provider_ids <- .model_provider_ids()
     base_choices <- setNames(provider_ids, .model_label(provider_ids))
@@ -1507,6 +1819,7 @@ server <- function(input, output, session) {
       current_custom <- unname(custom_choices[[1]])
     }
     updateSelectInput(session, "models_custom_provider", choices = custom_choices, selected = current_custom)
+    refresh_credential_selectors()
 
     update_setup_service_choices()
     update_agent_service_choices()
@@ -2263,6 +2576,7 @@ server <- function(input, output, session) {
     {
       updateTextInput(session, "models_directory", value = models_state$directory)
       refresh_provider_selectors()
+      refresh_credentials_status()
       custom_count <- length(custom_provider_choices())
       if (custom_count > 0L) {
         models_state$custom_status <- sprintf("Custom providers registered: %d", custom_count)
@@ -2300,14 +2614,142 @@ server <- function(input, output, session) {
 
   observeEvent(input$models_refresh, {
     dir <- models_state$directory
-    new_catalog <- .load_models_catalog(dir)
-    new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
-    models_state$catalog <- new_catalog
-    models_state$favorites <- new_favorites
-    models_state$favorites_present <- nrow(new_favorites) > 0
-    .save_favorites(new_favorites, dir)
+    reload_model_state(dir)
     models_state$status <- paste0("Reloaded models from ", dir)
     showNotification("Models reloaded from disk.", type = "message")
+  })
+
+  observeEvent(input$credentials_provider, {
+    refresh_credentials_status(input$credentials_provider)
+  }, ignoreNULL = FALSE)
+
+  observeEvent(input$credentials_refresh, {
+    refresh_credential_selectors(input$credentials_provider)
+    refresh_credentials_status(input$credentials_provider)
+    showNotification("Credential status refreshed.", type = "message")
+  })
+
+  observeEvent(input$credentials_edit, {
+    provider <- input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    show_credentials_modal(provider)
+  })
+
+  observeEvent(input$credentials_import, {
+    provider <- input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    show_credentials_import_modal(provider)
+  })
+
+  observeEvent(input$credentials_delete, {
+    provider <- input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    show_credentials_delete_modal(provider)
+  })
+
+  observeEvent(input$credentials_save, {
+    provider <- credentials_state$modal_provider %||% input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    specs <- .genflow_credential_specs(provider)
+    values <- character()
+    for (idx in seq_len(nrow(specs))) {
+      spec <- specs[idx, , drop = FALSE]
+      input_id <- paste0("credential_value_", .genflow_sanitize_input_id(spec$env))
+      value <- input[[input_id]] %||% ""
+      value <- as.character(value)[1]
+      if (isTRUE(spec$sensitive) && !nzchar(value)) {
+        next
+      }
+      if (!isTRUE(spec$sensitive) && !nzchar(value) && !nzchar(Sys.getenv(spec$env, unset = ""))) {
+        next
+      }
+      if (
+        !isTRUE(spec$sensitive) &&
+          identical(spec$kind[[1]], "base_url") &&
+          !nzchar(Sys.getenv(spec$env, unset = "")) &&
+          nzchar(spec$default_value[[1]]) &&
+          identical(value, spec$default_value[[1]])
+      ) {
+        next
+      }
+      values[[spec$env]] <- value
+    }
+    if (!length(values)) {
+      showNotification("No credential changes to save.", type = "warning")
+      return()
+    }
+    result <- tryCatch(
+      .genflow_save_credentials(values),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(result)) {
+      return()
+    }
+    removeModal()
+    refresh_credentials_status(provider)
+    showNotification("Credentials saved and loaded into this R session.", type = "message")
+  })
+
+  observeEvent(input$credentials_import_confirm, {
+    values <- credentials_state$import_values
+    if (is.null(values) || !length(values)) {
+      showNotification("No detected credential values are available to import.", type = "warning")
+      return()
+    }
+    provider <- credentials_state$modal_provider %||% input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    result <- tryCatch(
+      .genflow_save_credentials(values),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(result)) {
+      return()
+    }
+    removeModal()
+    credentials_state$import_values <- NULL
+    refresh_credentials_status(provider)
+    showNotification("Detected credentials imported and loaded into this R session.", type = "message")
+  })
+
+  observeEvent(input$credentials_delete_confirm, {
+    provider <- credentials_state$modal_provider %||% input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    specs <- .genflow_credential_specs(provider)
+    result <- tryCatch(
+      .genflow_delete_credentials(specs$env),
+      error = function(e) {
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(result)) {
+      return()
+    }
+    removeModal()
+    refresh_credentials_status(provider)
+    showNotification("Credentials deleted from .Renviron and unset in this R session.", type = "message")
+  })
+
+  observeEvent(input$missing_credentials_add, {
+    provider <- input$missing_credentials_provider %||% .DEFAULT_MODEL_SERVICE
+    removeModal()
+    updateSelectInput(session, "credentials_provider", selected = provider)
+    show_credentials_modal(provider)
+  })
+
+  observeEvent(input$missing_credentials_update_ready, {
+    dir <- credentials_state$pending_update_dir %||% current_models_dir()
+    providers <- credentials_state$pending_update_providers
+    missing <- credentials_state$pending_update_missing
+    removeModal()
+    missing_providers <- if (!is.null(missing) && nrow(missing)) unique(missing$provider) else character()
+    ready <- setdiff(providers, missing_providers)
+    run_model_updates(
+      providers = ready,
+      dir = dir,
+      skipped = missing_providers,
+      progress_message = "Updating providers with available credentials..."
+    )
   })
 
   observeEvent(input$models_update_all, {
@@ -2316,28 +2758,13 @@ server <- function(input, output, session) {
       showNotification("Provide a directory for model CSV files.", type = "warning")
       return()
     }
-    withProgress(message = "Updating all model providers...", value = 0, {
-      tryCatch(
-        {
-          gen_update_models(provider = NULL, directory = dir, verbose = TRUE)
-          incProgress(1)
-          new_catalog <- .load_models_catalog(dir)
-          new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
-          models_state$directory <- dir
-          models_state$catalog <- new_catalog
-          models_state$favorites <- new_favorites
-          models_state$favorites_present <- nrow(new_favorites) > 0
-          .save_favorites(new_favorites, dir)
-          models_state$status <- paste0("Updated all providers at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
-          updateTextInput(session, "models_directory", value = dir)
-          showNotification("All model providers updated.", type = "message")
-        },
-        error = function(e) {
-          models_state$status <- paste("Update failed:", conditionMessage(e))
-          showNotification(conditionMessage(e), type = "error")
-        }
-      )
-    })
+    providers <- .model_provider_ids()
+    missing <- .genflow_required_credentials_missing(providers)
+    if (nrow(missing)) {
+      show_missing_credentials_modal(missing, dir, providers, mode = "all")
+      return()
+    }
+    run_model_updates(providers, dir, progress_message = "Updating all model providers...")
   })
 
   observeEvent(input$models_update_selected, {
@@ -2351,28 +2778,12 @@ server <- function(input, output, session) {
       showNotification("Select a provider to update.", type = "warning")
       return()
     }
-    withProgress(message = paste0("Updating ", .model_label(provider), " models..."), value = 0, {
-      tryCatch(
-        {
-          gen_update_models(provider = provider, directory = dir, verbose = TRUE)
-          incProgress(1)
-          new_catalog <- .load_models_catalog(dir)
-          new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
-          models_state$directory <- dir
-          models_state$catalog <- new_catalog
-          models_state$favorites <- new_favorites
-          models_state$favorites_present <- nrow(new_favorites) > 0
-          .save_favorites(new_favorites, dir)
-          models_state$status <- paste0("Updated ", .model_label(provider), " at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
-          updateTextInput(session, "models_directory", value = dir)
-          showNotification(paste(.model_label(provider), "models updated."), type = "message")
-        },
-        error = function(e) {
-          models_state$status <- paste("Update failed:", conditionMessage(e))
-          showNotification(conditionMessage(e), type = "error")
-        }
-      )
-    })
+    missing <- .genflow_required_credentials_missing(provider)
+    if (nrow(missing)) {
+      show_missing_credentials_modal(missing, dir, provider, mode = "selected")
+      return()
+    }
+    run_model_updates(provider, dir, progress_message = paste0("Updating ", .model_label(provider), " models..."))
   })
 
   observeEvent(input$models_custom_add, {
@@ -2583,15 +2994,8 @@ server <- function(input, output, session) {
         incProgress(0.2, detail = paste0("Updating ", provider_id, " models..."))
         update_ok <- tryCatch(
           {
-            gen_update_models(provider = provider_id, directory = dir, verbose = TRUE)
-            new_catalog <- .load_models_catalog(dir)
-            new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
-            models_state$directory <- dir
-            models_state$catalog <- new_catalog
-            models_state$favorites <- new_favorites
-            models_state$favorites_present <- nrow(new_favorites) > 0
-            .save_favorites(new_favorites, dir)
-            updateTextInput(session, "models_directory", value = dir)
+            gen_update_models(provider = provider_id, directory = dir, verbose = TRUE, fail_on_error = TRUE)
+            reload_model_state(dir)
             models_state$status <- paste0("Tested and updated ", .model_label(provider_id), " at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
             TRUE
           },
@@ -2623,6 +3027,14 @@ server <- function(input, output, session) {
 
   output$models_status <- renderText({
     models_state$status
+  })
+
+  output$credentials_status_ui <- renderUI({
+    credential_status_ui(input$credentials_provider %||% .DEFAULT_MODEL_SERVICE)
+  })
+
+  output$credentials_status <- renderText({
+    credentials_state$status
   })
 
   output$models_custom_status <- renderText({

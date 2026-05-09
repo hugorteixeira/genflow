@@ -5,6 +5,13 @@
 #' Shiny application object, making it easy to launch from scripts, the console,
 #' or an RStudio addin.
 #'
+#' The Models tab includes credential management for provider API keys/tokens,
+#' optional base URL overrides, model catalog updates, and custom provider
+#' definitions. Credential edits are written to the user \code{.Renviron},
+#' backed up first, and loaded into the current R session immediately. Model
+#' selection remains part of setup/agent configuration after a provider catalog
+#' is refreshed.
+#'
 #' @param launch.browser Logical; should the interface open in your default web
 #'   browser? Defaults to the value of \code{getOption("shiny.launch.browser")}
 #'   or \code{interactive()} when unset.

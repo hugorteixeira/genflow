@@ -4,7 +4,12 @@
 \alias{gen_update_models}
 \title{Update provider model lists and write CSVs}
 \usage{
-gen_update_models(provider = NULL, directory = NULL, verbose = TRUE)
+gen_update_models(
+  provider = NULL,
+  directory = NULL,
+  verbose = TRUE,
+  fail_on_error = FALSE
+)
 }
 \arguments{
 \item{provider}{Optional character scalar. If NULL, updates all supported providers.
@@ -17,13 +22,19 @@ configured with \code{\link[=set_provider_openai_compat]{set_provider_openai_com
 \item{directory}{Character path where CSVs will be saved. Defaults to working dir.}
 
 \item{verbose}{Logical flag to print progress messages.}
+
+\item{fail_on_error}{Logical. If TRUE, provider failures are collected and raised as an error after attempted updates.}
 }
 \value{
-Invisibly returns a named list of data frames, one per provider updated.
+Invisibly returns the model directory path with attributes describing updated and failed providers.
 }
 \description{
 High-level convenience function to update model lists from one or several
 providers and write normalized CSV files to a directory.
+
+The interactive interface preflights provider credentials before calling this
+helper. When calling it directly, use \code{fail_on_error = TRUE} if provider
+failures should stop the call instead of being reported only as warnings.
 }
 \examples{
 # Update all providers to the default directory
