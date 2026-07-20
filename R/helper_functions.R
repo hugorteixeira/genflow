@@ -57,10 +57,13 @@
                                  add,
                                  one_item_each,
                                  add_img,
+                                 add_img_each = NULL,
+                                 checkpoint_each = NULL,
                                  directory,
                                  directory_img,
                                  append_modes = NULL,
-                                 agent_signature = NULL) {
+                                 agent_signature = NULL,
+                                 persist = TRUE) {
   sanitize_prefix <- function(prefix) {
     cleaned <- gsub("[^A-Za-z0-9_]", "_", prefix %||% "agent")
     if (!nzchar(cleaned)) cleaned <- "agent"
@@ -73,10 +76,13 @@
     add = add,
     one_item_each = one_item_each,
     add_img = add_img,
+    add_img_each = add_img_each,
+    checkpoint_each = checkpoint_each,
     directory = directory,
     directory_img = directory_img,
     append_modes = append_modes,
-    agent_signature = agent_signature
+    agent_signature = agent_signature,
+    persist = persist
   )
   raw_payload <- tryCatch(serialize(payload, NULL, ascii = FALSE), error = function(e) NULL)
   if (is.null(raw_payload) || length(raw_payload) == 0) {
@@ -89,6 +95,27 @@
   max_body_len <- 2000L
   key_body <- if (nchar(hex_string) > max_body_len) substr(hex_string, 1, max_body_len) else hex_string
   paste0("batch_", prefix_clean, "_", key_body, "_", checksum)
+}
+
+.genflow_atomic_save_rds <- function(object, path) {
+  if (is.null(path) || length(path) != 1L || is.na(path) || !nzchar(path)) {
+    return(invisible(FALSE))
+  }
+  parent <- dirname(path)
+  if (!dir.exists(parent)) {
+    dir.create(parent, recursive = TRUE, showWarnings = FALSE)
+  }
+  tmp <- tempfile(pattern = paste0(".", basename(path), "."), tmpdir = parent)
+  on.exit(if (file.exists(tmp)) unlink(tmp), add = TRUE)
+  saveRDS(object, tmp)
+  if (file.exists(path)) unlink(path)
+  if (!file.rename(tmp, path)) {
+    if (!file.copy(tmp, path, overwrite = TRUE)) {
+      stop("Could not save task checkpoint: ", path, call. = FALSE)
+    }
+    unlink(tmp)
+  }
+  invisible(TRUE)
 }
 .batch_cache_get <- function(key) {
   if (is.null(key)) {
@@ -621,28 +648,38 @@
 #'
 #' @keywords internal
 #' @noRd
-.export_cluster_vars <- function(cl, qty, agent_prefix, suffix_type, instructions, add, add_img, append_modes, directory, directory_img, worker_timeout_seconds = NULL) {
-  # base list of variables to export
+.export_cluster_vars <- function(cl,
+                                 qty,
+                                 agent_prefix,
+                                 suffix_type,
+                                 instructions,
+                                 add,
+                                 add_img,
+                                 add_img_each,
+                                 one_item_each,
+                                 append_modes,
+                                 directory,
+                                 directory_img,
+                                 agent = NULL,
+                                 persist = TRUE,
+                                 checkpoint_each = NULL) {
+  # Keep this list limited to values captured by the PSOCK task closure. The
+  # worker function retains its package namespace, so exporting every provider
+  # helper is both unnecessary and fragile when internal names change.
   varlist_base <- c(
-    ".execute_agent_task", ".estimate_tokens", "instructions", "add", "add_img", "append_modes",
-    "directory", "directory_img", "agent_prefix", "suffix_type", ".sanitize_filename",
-    "gen_txt", "gen_img", "%||%", "get", "exists", "processar_add", "toJSON", "gen_txt_hyperbolic",
-    "gen_txt_groq", "gen_txt_gemini", ".gen_txt_openai", ".ollama_base_url", ".ollama_resolve_model", ".gen_txt_ollama", "gen_txt_nebius", ".gen_img_fal",
-    ".llamacpp_base_url", ".llamacpp_api_key", ".llamacpp_resolve_model", ".gen_txt_llamacpp",
-    "gen_txt_claude", "gen_txt_mistral", "gen_txt_cerebras", "gen_txt_sambanova", "gen_img_bfl",
-    "gen_txt_cohere", "gen_txt_zhipu", "get_function_declarations_openai", ".gen_txt_hf", ".encode_image",
-    ".gen_img_replicate", "gen_img_together", ".gen_img_hf", ".gen_txt_openrouter", ".save_response",
-    "system.time", "tryCatch", "conditionMessage", "tolower", "trimws", "paste0", "c", "capture.output", "str", "is.null", "is.list", "length", "letters", "numeric", "character", "Sys.time", "difftime"
+    ".execute_agent_task", "one_item_each", "instructions", "add",
+    "add_img", "add_img_each", "append_modes", "directory",
+    "directory_img", "agent_prefix", "suffix_type", "agent", "persist",
+    "checkpoint_each"
   )
-
-  # Add worker_timeout_seconds if it's provided (for parLapply timeout handling)
-  if (!is.null(worker_timeout_seconds)) {
-    varlist_base <- c(varlist_base, "worker_timeout_seconds")
-  }
 
   parallel::clusterExport(cl, varlist = varlist_base, envir = environment())
 
-  # Export agent configurations from .GlobalEnv (original logic)
+  if (!is.null(agent)) {
+    return(invisible(TRUE))
+  }
+
+  # Export legacy per-task agent configurations from .GlobalEnv.
   config_vars_needed <- sapply(1:qty, function(idx) {
     if (suffix_type == "alphabetic") paste0(agent_prefix, letters[idx]) else paste0(agent_prefix, idx)
   })
@@ -658,9 +695,30 @@
 #'
 #' @keywords internal
 #' @noRd
-.execute_agent_task <- function(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type, append_modes) {
+.execute_agent_task <- function(i,
+                                one_item_each,
+                                instructions,
+                                add,
+                                add_img,
+                                directory,
+                                directory_img,
+                                agent_prefix,
+                                suffix_type,
+                                append_modes,
+                                agent = NULL,
+                                add_img_each = NULL,
+                                persist = TRUE,
+                                checkpoint_each = NULL) {
   inicio_duration <- Sys.time()
   # Signal to downstream generators to skip per-call persistence (avoid parallel write races)
+  previous_skip_log <- Sys.getenv("genflow_SKIP_PERSIST_LOG", unset = NA_character_)
+  on.exit({
+    if (is.na(previous_skip_log)) {
+      Sys.unsetenv("genflow_SKIP_PERSIST_LOG")
+    } else {
+      Sys.setenv(genflow_SKIP_PERSIST_LOG = previous_skip_log)
+    }
+  }, add = TRUE)
   try(Sys.setenv(genflow_SKIP_PERSIST_LOG = "1"), silent = TRUE)
   logs_internos <- c()
   is_missing_field <- function(x) {
@@ -799,6 +857,10 @@
   erro_interno <- NULL
   response_estrutura_api <- NULL
   tipo_agente <- "unknown"
+  task_img <- if (!is.null(add_img_each)) add_img_each[[i]] else add_img
+  task_name <- if (!is.null(add_img_each) && !is.null(names(add_img_each))) names(add_img_each)[i] else NA_character_
+  task_id <- if (!is.na(task_name) && nzchar(task_name)) task_name else as.character(i)
+  checkpoint_path <- if (!is.null(checkpoint_each)) checkpoint_each[[i]] else NULL
 
   # Define label early for logging and agent lookup
   label_agente <- tryCatch(
@@ -817,44 +879,39 @@
   tryCatch(
     {
       # --- 1. Get Agent Configuration ---
-      if (!exists(label_agente, envir = .GlobalEnv)) {
-        stop(paste0("Agent configuration '", label_agente, "' not found in .GlobalEnv."))
+      config_agente <- if (!is.null(agent)) {
+        agent
+      } else {
+        if (!exists(label_agente, envir = .GlobalEnv)) {
+          stop(paste0("Agent configuration '", label_agente, "' not found in .GlobalEnv."))
+        }
+        get(label_agente, envir = .GlobalEnv)
       }
-      config_agente <- get(label_agente, envir = .GlobalEnv)
       if (!is.list(config_agente)) {
         stop(paste0("Invalid configuration '", label_agente, "'. Must be a list."))
       }
-      required_fields <- c("service", "type")
-      missing_required <- setdiff(required_fields, names(config_agente))
-      if (length(missing_required) > 0) {
-        stop(paste0(
-          "Invalid configuration '", label_agente, "'. Missing field(s): ",
-          paste(missing_required, collapse = ", "), "."
-        ))
-      }
-      if (is_missing_field(config_agente$service)) {
+      service_value <- get_config_value(config_agente, "service", "Service")
+      if (is_missing_field(service_value)) {
         stop(paste0("Invalid configuration '", label_agente, "'. Field 'service' cannot be empty."))
       }
-      tipo_agente_raw <- config_agente$type
+      tipo_agente_raw <- get_config_value(config_agente, "type", "Type")
       if (is_missing_field(tipo_agente_raw)) {
         tipo_agente_raw <- "Chat"
       }
       tipo_agente_raw <- as.character(tipo_agente_raw)
       tipo_agente <- tolower(trimws(tipo_agente_raw))
+      model_value <- get_config_value(config_agente, "model", "Model")
       if (tipo_agente %in% c("chat", "vision")) {
-        if (!("model" %in% names(config_agente)) || is_missing_field(config_agente$model)) {
+        if (is_missing_field(model_value)) {
           stop(paste0("Configuration '", label_agente, "' requires a non-empty 'model' for agent type '", tipo_agente_raw, "'."))
         }
       }
-      model_log_value <- if ("model" %in% names(config_agente) && !is_missing_field(config_agente$model)) {
-        config_agente$model
-      } else {
-        "<default>"
-      }
-      temp_log_value <- if (!is_missing_field(config_agente$temp)) config_agente$temp else "<default>"
+      model_log_value <- if (!is_missing_field(model_value)) model_value else "<default>"
+      temp_value <- get_config_value(config_agente, "temp", "Temp")
+      temp_log_value <- if (!is_missing_field(temp_value)) temp_value else "<default>"
       logs_internos <- c(logs_internos, paste0(
         "  -> configuration '", label_agente, "' loaded: ",
-        config_agente$service, "/", model_log_value,
+        service_value, "/", model_log_value,
         " (Type: ", tipo_agente_raw, ", temp: ", temp_log_value, ")\n"
       ))
 
@@ -1092,22 +1149,30 @@
       # --- 4. Main API Call (Chat or Image) ---
       if (tipo_agente %in% c("chat", "vision")) {
         logs_internos <- c(logs_internos, paste0("  -> Calling gen_txt for ", label_agente, "...\n"))
-        # Use the correctly constructed context_final
-        # DO NOT pass 'add' or 'one_item_each' separately here
-        response_estrutura_api <- gen_txt(
-          context = context_final, # Use the processed prompt string
-          res_context = FALSE, # Usually FALSE for parallel tasks unless needed
-          # add = NULL, # Handled
-          # item_especifico = NULL, # Handled
-          add_img = add_img, # Pass image if needed for vision
-          directory = directory, # Chat directory
-          label = label_agente, # Pass the specific agent label
-          service = service_cfg,
-          model = model_cfg,
-          temp = temp_cfg %||% 0.7, # Default temp if missing
-          tools = tools_cfg %||% FALSE, # Optional: Allow tools via config
-          timeout_api = timeout_cfg %||% 120 # Allow config override, default 120
+        runtime_agent <- config_agente
+        runtime_agent$context <- context_final
+        runtime_agent$instructions <- NULL
+        runtime_agent$add <- NULL
+        runtime_agent$service <- service_cfg
+        runtime_agent$model <- model_cfg
+        runtime_agent$temp <- temp_cfg
+        runtime_agent$tools <- tools_cfg
+        runtime_agent$timeout_api <- timeout_cfg
+        class(runtime_agent) <- unique(c("genflow_agent", class(runtime_agent)))
+        runtime_args <- .genflow_prepare_agent_args(
+          agent = runtime_agent,
+          overrides = list(
+            context = context_final,
+            res_context = FALSE,
+            add_img = task_img,
+            directory = directory,
+            label = label_agente,
+            persist = persist
+          ),
+          target_formals = formals(gen_txt.default),
+          required = c("context", "service", "model")
         )
+        response_estrutura_api <- do.call(gen_txt.default, runtime_args, quote = TRUE)
       } else if (tipo_agente == "image") {
         logs_internos <- c(logs_internos, paste0("  -> Calling gen_img for ", label_agente, "...\n"))
         h_img <- if (!is_missing_field(config_agente$h)) config_agente$h else get_formal_default(gen_img, "h")
@@ -1189,6 +1254,25 @@
   fim_duration <- Sys.time()
   duration <- as.numeric(difftime(fim_duration, inicio_duration, units = "secs"))
 
+  if (!is.null(checkpoint_path)) {
+    checkpoint <- list(
+      schema_version = 1L,
+      task_id = task_id,
+      completed_at = format(fim_duration, "%Y-%m-%dT%H:%M:%OS6%z"),
+      response = response_estrutura_api,
+      error = erro_interno,
+      duration_seconds = duration
+    )
+    tryCatch(
+      .genflow_atomic_save_rds(checkpoint, checkpoint_path),
+      error = function(e) {
+        checkpoint_error <- paste0("Could not save task checkpoint: ", conditionMessage(e))
+        erro_interno <<- if (is.null(erro_interno)) checkpoint_error else paste(erro_interno, checkpoint_error, sep = "; ")
+        logs_internos <<- c(logs_internos, paste0("!! CHECKPOINT ERROR: ", checkpoint_error, "\n"))
+      }
+    )
+  }
+
   # Determine final worker status for logging
   status_final_worker <- if (!is.null(erro_interno)) {
     "[Internal Worker Failure]"
@@ -1211,6 +1295,8 @@
   # --- Return the result structure ---
   # Includes the API response (which may itself be an API error) and any internal worker error
   return(list(
+    index = i,
+    task_id = task_id,
     label = label_agente,
     tipo_agente = tipo_agente,
     response = response_estrutura_api, # The LIST returned by gen_txt/gen_img (may have status="ERROR") or NULL/wrong type
@@ -1223,7 +1309,11 @@
 #'
 #' @keywords internal
 #' @noRd
-.process_parallel_results <- function(raw_results, qty, agent_prefix, suffix_type) {
+.process_parallel_results <- function(raw_results,
+                                      qty,
+                                      agent_prefix,
+                                      suffix_type,
+                                      expected_indices = seq_len(qty)) {
   # Initialization
   results_finais <- vector("list", qty) # Will hold the LISTS from workers (or NULLs)
   final_errors <- vector("list", qty) # Stores final error status message for each index
@@ -1236,7 +1326,9 @@
 
   if (n_results_recebidos == 0 && qty > 0) { # Handle no results if qty > 0
     warning("No raw results received from workers.")
-    for (i in 1:qty) final_errors[[i]] <- paste0("Index ", i, ": No result received from worker.")
+    for (i in expected_indices) {
+      final_errors[[i]] <- paste0("Index ", i, ": No result received from worker.")
+    }
     # Return empty/NA structure matching the expected output format
     return(list(
       results = results_finais, erros = final_errors, logs_list = logs_list,
@@ -1282,23 +1374,33 @@
 
     # --- Map Label to Original Index ---
     current_label <- res_item$label
-    if (!is.null(current_label) && is.character(current_label) && nchar(current_label) > 0) {
-      label_suffix <- sub(paste0("^", agent_prefix), "", current_label) # Use ^ for start anchor
-      if (suffix_type == "alphabetic") {
-        original_i <- match(label_suffix, letters)
+    if (!is.null(res_item$index) && length(res_item$index) == 1L) {
+      original_i <- suppressWarnings(as.integer(res_item$index))
+      if (is.na(original_i) || original_i < 1L || original_i > qty) original_i <- NA_integer_
+    }
+    if (is.na(original_i)) {
+      if (!is.null(current_label) && is.character(current_label) && nchar(current_label) > 0) {
+        label_suffix <- if (startsWith(current_label, agent_prefix)) {
+          substring(current_label, nchar(agent_prefix) + 1L)
+        } else {
+          current_label
+        }
+        if (suffix_type == "alphabetic") {
+          original_i <- match(label_suffix, letters)
+        } else {
+          original_i <- suppressWarnings(as.integer(label_suffix))
+        }
+        # Validate the derived index
+        if (is.na(original_i) || original_i < 1 || original_i > qty) {
+          worker_k_error <- paste0("Worker ", k, ": failed to map label '", current_label, "' to a valid index (1-", qty, "). Suffix: '", label_suffix, "'")
+          warning(worker_k_error)
+          original_i <- NA # Invalidate index
+        }
       } else {
-        original_i <- suppressWarnings(as.integer(label_suffix))
-      }
-      # Validate the derived index
-      if (is.na(original_i) || original_i < 1 || original_i > qty) {
-        worker_k_error <- paste0("Worker ", k, ": failed to map label '", current_label, "' to a valid index (1-", qty, "). Suffix: '", label_suffix, "'")
+        worker_k_error <- paste0("Worker ", k, ": Missing task index and valid label in result.")
         warning(worker_k_error)
         original_i <- NA # Invalidate index
       }
-    } else {
-      worker_k_error <- paste0("Worker ", k, ": Missing or invalid label in result.")
-      warning(worker_k_error)
-      original_i <- NA # Invalidate index
     }
 
     # --- Process if Index Mapping was Successful ---
@@ -1313,6 +1415,9 @@
 
       # Extract components from the worker's result list
       response_estrutura_api <- res_item$response # This is the LIST from gen_txt/gen_img (or NULL)
+      if (is.list(response_estrutura_api) && !is.null(res_item$task_id)) {
+        response_estrutura_api$task_id <- res_item$task_id
+      }
       worker_internal_error <- res_item$erro # Error string from worker's tryCatch (or NULL)
       # Keep list indices stable even when the stored value is NULL
       logs_list[original_i] <- list(res_item$logs)
@@ -1363,7 +1468,7 @@
   } # End of loop for k
 
   # --- Post-processing: Check for any indices that were never processed ---
-  indices_nao_processados <- which(!indice_processado[1:qty]) # Check only up to qty
+  indices_nao_processados <- setdiff(expected_indices, which(indice_processado[seq_len(qty)]))
   if (length(indices_nao_processados) > 0) {
     for (i_faltante in indices_nao_processados) {
       if (is.null(final_errors[[i_faltante]])) { # If no specific error was logged yet

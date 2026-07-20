@@ -32,6 +32,31 @@
 
 #' @keywords internal
 #' @noRd
+.genflow_normalize_service_alias <- function(service) {
+  service_id <- tolower(trimws(as.character(service %||% "")[1]))
+  switch(service_id,
+    "claude" = "anthropic",
+    "llama-cpp" = "llamacpp",
+    "llama_cpp" = "llamacpp",
+    "samba-nova" = "sambanova",
+    "samba_nova" = "sambanova",
+    "togetherai" = "together",
+    "together-ai" = "together",
+    "together_ai" = "together",
+    "deep-seek" = "deepseek",
+    "deep_seek" = "deepseek",
+    "deep-infra" = "deepinfra",
+    "deep_infra" = "deepinfra",
+    "fireworks-ai" = "fireworks",
+    "fireworks_ai" = "fireworks",
+    "firework" = "fireworks",
+    "pplx" = "perplexity",
+    service_id
+  )
+}
+
+#' @keywords internal
+#' @noRd
 .genflow_provider_registry_path <- function() {
   option_path <- trimws(as.character(getOption("genflow.providers_path", ""))[1])
   if (nzchar(option_path)) {
@@ -700,7 +725,7 @@ list_providers <- function(include_builtin = TRUE, include_custom = TRUE) {
 #' @return A list describing the provider.
 #' @export
 get_provider <- function(id) {
-  id_norm <- .genflow_normalize_provider_id(id)
+  id_norm <- .genflow_normalize_provider_id(.genflow_normalize_service_alias(id))
   custom_cfg <- .genflow_get_custom_provider(id_norm)
   if (!is.null(custom_cfg)) {
     return(custom_cfg)

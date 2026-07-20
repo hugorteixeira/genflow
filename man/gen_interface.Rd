@@ -25,7 +25,8 @@ This helper starts the interactive agent management interface shipped with
 the package. It simply wraps \code{shiny::runApp()} around the internal
 Shiny application object, making it easy to launch from scripts, the console,
 or an RStudio addin.
-
+}
+\details{
 The Models tab includes credential management for provider API keys/tokens,
 optional base URL overrides, model catalog updates, and custom provider
 definitions. Credential edits are written to the user \code{.Renviron},

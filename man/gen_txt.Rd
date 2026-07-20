@@ -24,6 +24,7 @@ gen_txt(context, ...)
   my_tools = NULL,
   timeout_api = 240,
   null_repeat = TRUE,
+  persist = TRUE,
   ...
 )
 
@@ -58,23 +59,27 @@ custom id configured with \code{\link[=set_provider_openai_compat]{set_provider_
 
 \item{model}{Character; model identifier for the chosen \code{service}.}
 
-\item{temp}{Optional numeric; sampling temperature. If \code{NULL}, defaults to 0.7.}
+\item{temp}{Optional numeric; sampling temperature. If \code{NULL}, defaults to 1.}
 
 \item{reasoning}{One of minimal, low, medium, high, or xhigh.}
 
-\item{tools}{Logical; whether to enable tool/function calling for providers
-that support it.}
+\item{tools}{Logical, list, or JSON object. Use \code{TRUE} with definitions in
+\code{my_tools}, or pass tool definitions directly as a list/JSON object.}
 
 \item{plugins}{Optional list or JSON string describing provider-specific
 plugins/extensions to include in the request.}
 
-\item{my_tools}{Function; your function with tools definitions.}
+\item{my_tools}{Function or list containing tool definitions. Used when
+\code{tools = TRUE}.}
 
 \item{timeout_api}{Numeric; request timeout (seconds) passed to the provider
 call.}
 
 \item{null_repeat}{Logical; if \code{TRUE}, retries on empty responses with
 progressive waits (10s, 60s, 600s).}
+
+\item{persist}{Logical; whether to save the response artifact and generation
+statistics. Set to \code{FALSE} when another package owns result persistence.}
 }
 \value{
 A list with elements: \code{response_value}, \code{label}, \code{label_cat},

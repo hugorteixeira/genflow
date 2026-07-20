@@ -1,7 +1,7 @@
 Package: genflow
 Type: Package
 Title: Generate texts, images and more with multiple AI API providers 
-Version: 0.0.1
+Version: 0.0.3
 Authors@R: person(
     given = "Hugo",
     family = "Rzepian Teixeira",
@@ -28,4 +28,6 @@ Imports:
     shiny,
     tibble
 Suggests: 
-    base64enc
+    base64enc,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

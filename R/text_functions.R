@@ -3137,17 +3137,20 @@
 #'   `"deepinfra"`, `"hyperbolic"`, `"hf"`, `"ollama"`, `"llamacpp"`), or a
 #'   custom id configured with [set_provider_openai_compat()].
 #' @param model Character; model identifier for the chosen `service`.
-#' @param temp Optional numeric; sampling temperature. If `NULL`, defaults to 0.7.
+#' @param temp Optional numeric; sampling temperature. If `NULL`, defaults to 1.
 #' @param reasoning One of minimal, low, medium, high, or xhigh.
-#' @param tools Logical; whether to enable tool/function calling for providers
-#'   that support it.
+#' @param tools Logical, list, or JSON object. Use `TRUE` with definitions in
+#'   `my_tools`, or pass tool definitions directly as a list/JSON object.
 #' @param plugins Optional list or JSON string describing provider-specific
 #'   plugins/extensions to include in the request.
-#' @param my_tools Function; your function with tools definitions.
+#' @param my_tools Function or list containing tool definitions. Used when
+#'   `tools = TRUE`.
 #' @param timeout_api Numeric; request timeout (seconds) passed to the provider
 #'   call.
 #' @param null_repeat Logical; if `TRUE`, retries on empty responses with
 #'   progressive waits (10s, 60s, 600s).
+#' @param persist Logical; whether to save the response artifact and generation
+#'   statistics. Set to `FALSE` when another package owns result persistence.
 #' @param ... Additional arguments passed to method-specific implementations.
 #' @return A list with elements: `response_value`, `label`, `label_cat`,
 #'   `service`, `model`, `temp`, `duration`, `status_api`, `status_msg`,
@@ -3186,8 +3189,13 @@ gen_txt.default <- function(
   my_tools = NULL,
   timeout_api = 240,
   null_repeat = TRUE,
+  persist = TRUE,
   ...
 ) {
+  if (!is.logical(persist) || length(persist) != 1L || is.na(persist)) {
+    stop("`persist` must be TRUE or FALSE.", call. = FALSE)
+  }
+
   # Helpers
   is_emptyish <- function(x) {
     if (is.null(x)) {
@@ -3209,31 +3217,7 @@ gen_txt.default <- function(
 
   # Normalize inputs possibly coming as lists/vectors
   if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
-  service <- tolower(trimws(as.character(service %||% "")))
-  if (service %in% c("llama-cpp", "llama_cpp")) {
-    service <- "llamacpp"
-  }
-  if (service %in% c("samba-nova", "samba_nova")) {
-    service <- "sambanova"
-  }
-  if (service %in% c("togetherai", "together-ai", "together_ai")) {
-    service <- "together"
-  }
-  if (service %in% c("deep-seek", "deep_seek")) {
-    service <- "deepseek"
-  }
-  if (service %in% c("deep-infra", "deep_infra")) {
-    service <- "deepinfra"
-  }
-  if (service %in% c("fireworks-ai", "fireworks_ai", "firework")) {
-    service <- "fireworks"
-  }
-  if (service %in% c("pplx")) {
-    service <- "perplexity"
-  }
-  if (service %in% c("claude")) {
-    service <- "anthropic"
-  }
+  service <- .genflow_normalize_service_alias(service)
 
   custom_provider_cfg <- .genflow_get_custom_provider(service)
 
@@ -3507,26 +3491,28 @@ gen_txt.default <- function(
   label_cat <- label_base
 
   # Persist response (assumes .save_response exists and handles logging/saving)
-  try(
-    {
-      .save_response(
-        response_api = response_value_final,
-        context = context,
-        res_context = res_context,
-        label = label_base,
-        label_cat = label_cat,
-        service = service,
-        model = model,
-        temp = temp_v,
-        duration_response = duration_response,
-        directory = directory,
-        status = ifelse(houve_erro_api, "ERROR", "SUCCESS"),
-        tokens_sent = tokens_sent,
-        tokens_received = tokens_received %||% NA_integer_
-      )
-    },
-    silent = TRUE
-  )
+  if (isTRUE(persist)) {
+    try(
+      {
+        .save_response(
+          response_api = response_value_final,
+          context = context,
+          res_context = res_context,
+          label = label_base,
+          label_cat = label_cat,
+          service = service,
+          model = model,
+          temp = temp_v,
+          duration_response = duration_response,
+          directory = directory,
+          status = ifelse(houve_erro_api, "ERROR", "SUCCESS"),
+          tokens_sent = tokens_sent,
+          tokens_received = tokens_received %||% NA_integer_
+        )
+      },
+      silent = TRUE
+    )
+  }
 
   # Final structured return
   result <- list(

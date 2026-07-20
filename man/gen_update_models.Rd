@@ -31,7 +31,8 @@ Invisibly returns the model directory path with attributes describing updated an
 \description{
 High-level convenience function to update model lists from one or several
 providers and write normalized CSV files to a directory.
-
+}
+\details{
 The interactive interface preflights provider credentials before calling this
 helper. When calling it directly, use \code{fail_on_error = TRUE} if provider
 failures should stop the call instead of being reported only as warnings.

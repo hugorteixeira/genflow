@@ -11,15 +11,21 @@ gen_batch(
   one_item_each = NULL,
   add_img = NULL,
   append = c("before", "before"),
-  agent_prefix,
+  agent_prefix = NULL,
   directory = "content",
   directory_img = "content",
   log = FALSE,
-  always_fix_errors = TRUE
+  always_fix_errors = TRUE,
+  agent = NULL,
+  workers = NULL,
+  add_img_each = NULL,
+  persist = TRUE,
+  verbose = TRUE,
+  checkpoint_each = NULL
 )
 }
 \arguments{
-\item{qty}{Integer number of workers/tasks to launch.}
+\item{qty}{Integer number of tasks to run.}
 
 \item{instructions}{Character base prompt/context text. When \code{NULL}, the
 agent's stored \code{context} (if any) is used.}
@@ -36,7 +42,8 @@ omitted, the agent's stored \code{add} value (if any) is used.}
 each agent's stored context/addition. The first entry applies to
 instructions, the second to add data.}
 
-\item{agent_prefix}{Character prefix used to locate agent configs in \code{.GlobalEnv}.}
+\item{agent_prefix}{Character prefix used to locate legacy per-task agent
+configs in \code{.GlobalEnv}, or to label results when \code{agent} is supplied.}
 
 \item{directory}{Character path to save chat/text artifacts.}
 
@@ -47,15 +54,38 @@ instructions, the second to add data.}
 \item{always_fix_errors}{Logical; when TRUE (default) reuses successful results
 from the previous run with the same signature and only re-executes failed
 indices until the batch completes without errors.}
+
+\item{agent}{Optional single \code{genflow_agent} used for every task. Prefer
+\code{\link[=gen_batch_agent]{gen_batch_agent()}} when starting from an agent object.}
+
+\item{workers}{Maximum number of tasks to execute simultaneously. \code{NULL}
+preserves automatic detection. An explicit value is capped by \code{qty}, not
+by the number of CPU cores, because API calls are generally I/O-bound.}
+
+\item{add_img_each}{Optional list or character vector containing one image
+path per task. It is mutually exclusive with \code{add_img}. Names, when
+supplied, must be complete and unique, are preserved on the returned task
+results, and cannot use the reserved name \code{combined_stats}.}
+
+\item{persist}{Logical; whether generator response artifacts and aggregate
+generation statistics should be saved.}
+
+\item{verbose}{Logical; whether to print batch progress and summaries.}
+
+\item{checkpoint_each}{Optional list or character vector with one \code{.rds}
+path per task. Each worker atomically writes its structured result there
+as soon as it finishes, allowing a caller-owned cache to recover after an
+interrupted batch.}
 }
 \value{
 A list of length \code{qty + 1}, where the last element is named
 \code{combined_stats} with aggregated timing and counts.
 }
 \description{
-Orchestrates parallel generation tasks using \code{parallel} (parLapply on Windows,
-mclapply on Unix-likes), collects results, prints timing metrics and errors,
-and returns a list that optionally includes an \code{combined_stats} block.
+Orchestrates parallel generation tasks using \code{parallel} (load-balanced
+\code{parLapplyLB()} on Windows, \code{mclapply()} on Unix-likes), collects results,
+prints timing metrics and errors, and returns a list that optionally includes
+a \code{combined_stats} block.
 }
 \examples{
 # gen_batch(2, instructions = "Describe a cat", agent_prefix = "agent")

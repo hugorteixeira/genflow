@@ -281,44 +281,100 @@ gen_stats_rm <- function(date = NULL) {
 #'
 #' @keywords internal
 #' @noRd
-.pos_process_results <- function(results) {
-  cat("--- Post-Processing and results ---\n")
+.pos_process_results <- function(results,
+                                 persist = TRUE,
+                                 verbose = TRUE,
+                                 persist_results = results) {
+  if (verbose) cat("--- Post-Processing and results ---\n")
   # cat("WARNING: results may be text/images. 'mostrar_text'/'gen_stats' may need adaptation.\n\n")
-  if (exists("gen_view")) {
+  if (verbose && exists("gen_view")) {
     # cat("Tentando 'mostrar_text'...\n")
     try(gen_view(results), silent = TRUE)
-  } else {
+  } else if (verbose) {
     warning("'mostrar_text' not found.")
   }
   # Sys.sleep(0.5)
-  if (exists(".summarize_results")) {
+  if (verbose && exists(".summarize_results")) {
     # Print local summary without touching persisted logs/global env
     try(.summarize_results(results), silent = TRUE)
-  } else {
+  } else if (verbose) {
     warning("'.summarize_results' not found.")
   }
   # Persist stats for all results in this batch (single-writer in main process)
-  try(.persist_many_stats(results), silent = TRUE)
-  cat("--- End of Post-Processing ---\n\n")
+  if (isTRUE(persist)) try(.persist_many_stats(persist_results), silent = TRUE)
+  if (verbose) cat("--- End of Post-Processing ---\n\n")
+}
+
+.genflow_resolve_workers <- function(workers, qty) {
+  if (is.null(workers)) {
+    detected <- suppressWarnings(parallel::detectCores())
+    available <- if (length(detected) != 1L || is.na(detected) || detected < 2L) {
+      1L
+    } else {
+      as.integer(detected) - 1L
+    }
+    return(min(as.integer(qty), available))
+  }
+  if (!is.numeric(workers) || length(workers) != 1L || is.na(workers) ||
+    !is.finite(workers) || workers < 1 || workers != as.integer(workers)) {
+    stop("`workers` must be NULL or a positive integer.", call. = FALSE)
+  }
+  min(as.integer(qty), as.integer(workers))
+}
+
+.genflow_normalize_each <- function(x, qty, arg, paths = FALSE) {
+  if (is.null(x)) return(NULL)
+  if (is.atomic(x) && !is.list(x)) x <- as.list(x)
+  if (!is.list(x)) stop("`", arg, "` must be a list or atomic vector.", call. = FALSE)
+  if (length(x) != qty) {
+    stop("`", arg, "` must contain exactly ", qty, " item(s).", call. = FALSE)
+  }
+  if (paths) {
+    valid <- vapply(x, function(item) {
+      is.null(item) || (is.character(item) && length(item) == 1L && !is.na(item) && nzchar(item))
+    }, logical(1))
+    if (!all(valid)) {
+      stop("Every non-NULL `", arg, "` item must be one non-empty file path.", call. = FALSE)
+    }
+  }
+  x
 }
 #' Run multiple generation tasks in parallel
 #'
-#' Orchestrates parallel generation tasks using `parallel` (parLapply on Windows,
-#' mclapply on Unix-likes), collects results, prints timing metrics and errors,
-#' and returns a list that optionally includes an `combined_stats` block.
+#' Orchestrates parallel generation tasks using `parallel` (load-balanced
+#' `parLapplyLB()` on Windows, `mclapply()` on Unix-likes), collects results,
+#' prints timing metrics and errors, and returns a list that optionally includes
+#' a `combined_stats` block.
 #'
-#' @param qty Integer number of workers/tasks to launch.
+#' @param qty Integer number of tasks to run.
 #' @param instructions Character base prompt/context text. When `NULL`, the
 #'   agent's stored `context` (if any) is used.
 #' @param add Optional additional context mixed into the prompt per worker. When
 #'   omitted, the agent's stored `add` value (if any) is used.
 #' @param one_item_each Optional list of per-worker items to include in prompts.
 #' @param add_img Optional image input for vision-capable providers.
+#' @param add_img_each Optional list or character vector containing one image
+#'   path per task. It is mutually exclusive with `add_img`. Names, when
+#'   supplied, must be complete and unique, are preserved on the returned task
+#'   results, and cannot use the reserved name `combined_stats`.
 #' @param append Character vector or named list (values: `"before"`, `"after"`,
 #'   `"replace"`) controlling how supplied `instructions` and `add` merge with
 #'   each agent's stored context/addition. The first entry applies to
 #'   instructions, the second to add data.
-#' @param agent_prefix Character prefix used to locate agent configs in `.GlobalEnv`.
+#' @param agent_prefix Character prefix used to locate legacy per-task agent
+#'   configs in `.GlobalEnv`, or to label results when `agent` is supplied.
+#' @param agent Optional single `genflow_agent` used for every task. Prefer
+#'   [gen_batch_agent()] when starting from an agent object.
+#' @param workers Maximum number of tasks to execute simultaneously. `NULL`
+#'   preserves automatic detection. An explicit value is capped by `qty`, not
+#'   by the number of CPU cores, because API calls are generally I/O-bound.
+#' @param persist Logical; whether generator response artifacts and aggregate
+#'   generation statistics should be saved.
+#' @param verbose Logical; whether to print batch progress and summaries.
+#' @param checkpoint_each Optional list or character vector with one `.rds`
+#'   path per task. Each worker atomically writes its structured result there
+#'   as soon as it finishes, allowing a caller-owned cache to recover after an
+#'   interrupted batch.
 #' @param directory Character path to save chat/text artifacts.
 #' @param directory_img Character path to save images.
 #' @param log Logical; if TRUE, prints detailed logs.
@@ -333,13 +389,77 @@ gen_stats_rm <- function(date = NULL) {
 #' # gen_batch(2, instructions = "Describe a cat", agent_prefix = "agent")
 #'
 #' @export
-gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = NULL, add_img = NULL, append = c("before", "before"), agent_prefix, directory = "content", directory_img = "content", log = FALSE, always_fix_errors = TRUE) { # Add log = TRUE here
+gen_batch <- function(qty = 8,
+                      instructions = NULL,
+                      add = NULL,
+                      one_item_each = NULL,
+                      add_img = NULL,
+                      append = c("before", "before"),
+                      agent_prefix = NULL,
+                      directory = "content",
+                      directory_img = "content",
+                      log = FALSE,
+                      always_fix_errors = TRUE,
+                      agent = NULL,
+                      workers = NULL,
+                      add_img_each = NULL,
+                      persist = TRUE,
+                      verbose = TRUE,
+                      checkpoint_each = NULL) {
 
   inicio_geral <- Sys.time()
   if (!requireNamespace("parallel", quietly = TRUE)) stop("Package 'parallel' needed.")
-  if (missing(agent_prefix)) stop("'agent_prefix' is required.")
-  if (!is.numeric(qty) || qty < 1) stop("'qty' must be a positive integer.")
+  if (!is.numeric(qty) || length(qty) != 1L || is.na(qty) || !is.finite(qty) ||
+    qty < 1 || qty != as.integer(qty)) {
+    stop("`qty` must be a positive integer.", call. = FALSE)
+  }
   qty <- as.integer(qty)
+  if (!is.logical(persist) || length(persist) != 1L || is.na(persist)) {
+    stop("`persist` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
+    stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.null(agent) && !inherits(agent, "genflow_agent")) {
+    stop("`agent` must be a genflow_agent object.", call. = FALSE)
+  }
+  if (is.null(agent) && (is.null(agent_prefix) || length(agent_prefix) != 1L || !nzchar(agent_prefix))) {
+    stop("`agent_prefix` is required when `agent` is not supplied.", call. = FALSE)
+  }
+  if (!is.null(agent) && (is.null(agent_prefix) || !nzchar(agent_prefix))) {
+    agent_prefix <- .genflow_agent_label(agent) %||% "agent"
+  }
+  agent_prefix <- as.character(agent_prefix)[1]
+  if (!nzchar(agent_prefix)) agent_prefix <- "agent"
+  n_cores <- .genflow_resolve_workers(workers, qty)
+  add_img_each <- .genflow_normalize_each(add_img_each, qty, "add_img_each", paths = TRUE)
+  checkpoint_each <- .genflow_normalize_each(checkpoint_each, qty, "checkpoint_each", paths = TRUE)
+  if (!is.null(checkpoint_each)) {
+    checkpoint_paths <- unlist(checkpoint_each[!vapply(checkpoint_each, is.null, logical(1))], use.names = FALSE)
+    if (length(checkpoint_paths)) {
+      canonical_checkpoints <- normalizePath(
+        path.expand(checkpoint_paths),
+        winslash = "/",
+        mustWork = FALSE
+      )
+      if (anyDuplicated(canonical_checkpoints)) {
+        stop("Non-NULL `checkpoint_each` paths must be unique.", call. = FALSE)
+      }
+    }
+  }
+  if (!is.null(add_img) && !is.null(add_img_each)) {
+    stop("Use either `add_img` or `add_img_each`, not both.", call. = FALSE)
+  }
+  if (!is.null(add_img_each) && !is.null(names(add_img_each))) {
+    item_names <- names(add_img_each)
+    named <- !is.na(item_names) & nzchar(item_names)
+    if (!all(named) || anyDuplicated(item_names)) {
+      stop("Names on `add_img_each` must be complete and unique.", call. = FALSE)
+    }
+    if ("combined_stats" %in% item_names) {
+      stop("`combined_stats` is reserved and cannot name an `add_img_each` task.", call. = FALSE)
+    }
+  }
   add_missing <- missing(add)
   add_img_missing <- missing(add_img)
   one_item_each_missing <- missing(one_item_each)
@@ -410,7 +530,7 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
     instructions_obj <- instructions
     context_candidate <- instructions_obj$context %||% instructions_obj$instructions %||% NULL
     if (!is.null(context_candidate)) {
-      message("Detected list-based instructions. Extracting context and optional fields...")
+      if (verbose) message("Detected list-based instructions. Extracting context and optional fields...")
       instructions <- context_candidate
       if ((add_missing || is.null(add)) && !is.null(instructions_obj$add)) {
         add <- instructions_obj$add
@@ -424,8 +544,12 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
     }
   }
 
-  n_cores <- min(qty, max(1, parallel::detectCores() - 1))
-  cat("Preparing to execute", qty, "tasks with prefix '", agent_prefix, "' using", n_cores, "cores.\n")
+  if (!is.null(add_img) && !is.null(add_img_each)) {
+    stop("Use either `add_img` or `add_img_each`, not both.", call. = FALSE)
+  }
+  if (verbose) {
+    cat("Preparing to execute", qty, "tasks with prefix '", agent_prefix, "' using", n_cores, "workers.\n")
+  }
 
   # Input validation for one_item_each
   if (!is.null(one_item_each)) {
@@ -433,19 +557,23 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
     if (length(one_item_each) < qty) {
       stop(paste0("'one_item_each' (", length(one_item_each), ") has fewer elements than 'qty' (", qty, ")."))
     } else if (length(one_item_each) > qty) {
-      message(paste0("WARNING: 'one_item_each' (", length(one_item_each), ") has more elements than 'qty' (", qty, "). Using only the first ", qty, "."))
+      if (verbose) message(paste0("WARNING: 'one_item_each' (", length(one_item_each), ") has more elements than 'qty' (", qty, "). Using only the first ", qty, "."))
       # Loop 1:qty will handle using only the first qty
     }
-    message("Using 'one_item_each' to provide individual data to each worker.")
+    if (verbose) message("Using 'one_item_each' to provide individual data to each worker.")
     one_item_each <- one_item_each[seq_len(qty)]
   }
 
   # Detect suffix, sanitize instructions, create directories
-  suffix_type <- tryCatch(.detect_suffix_type(agent_prefix, qty), error = function(e) {
-    stop("Error detecting agent suffix (check if agents like '", agent_prefix, "1' or '", agent_prefix, "a' exist in .GlobalEnv): ", conditionMessage(e))
-  })
+  suffix_type <- if (!is.null(agent)) {
+    "numeric"
+  } else {
+    tryCatch(.detect_suffix_type(agent_prefix, qty), error = function(e) {
+      stop("Error detecting agent suffix (check if agents like '", agent_prefix, "1' or '", agent_prefix, "a' exist in .GlobalEnv): ", conditionMessage(e))
+    })
+  }
   instructions <- .sanitize_instructions(instructions)
-  .create_directories(directory, directory_img)
+  if (isTRUE(persist)) .create_directories(directory, directory_img)
 
   pad_list <- function(lst, len) {
     if (is.null(lst)) lst <- list()
@@ -470,24 +598,21 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
   indices_to_run <- seq_len(qty)
   reused_indices <- integer(0)
   if (use_cache) {
-    agent_signature <- lapply(seq_len(qty), function(idx) {
-      label <- if (suffix_type == "alphabetic") {
-        if (idx > 0 && idx <= length(letters)) paste0(agent_prefix, letters[idx]) else paste0(agent_prefix, "invalid_idx_", idx)
-      } else {
-        paste0(agent_prefix, idx)
-      }
-      if (!exists(label, envir = .GlobalEnv)) {
-        return(NULL)
-      }
-      cfg <- get(label, envir = .GlobalEnv)
-      if (!is.list(cfg)) {
-        return(NULL)
-      }
-      list(
-        context = cfg$context %||% cfg$instructions %||% NULL,
-        add = cfg$add %||% NULL
-      )
-    })
+    agent_signature <- if (!is.null(agent)) {
+      as.list(agent)
+    } else {
+      lapply(seq_len(qty), function(idx) {
+        label <- if (suffix_type == "alphabetic") {
+          if (idx > 0 && idx <= length(letters)) paste0(agent_prefix, letters[idx]) else paste0(agent_prefix, "invalid_idx_", idx)
+        } else {
+          paste0(agent_prefix, idx)
+        }
+        if (!exists(label, envir = .GlobalEnv)) return(NULL)
+        cfg <- get(label, envir = .GlobalEnv)
+        if (!is.list(cfg)) return(NULL)
+        as.list(cfg)
+      })
+    }
     cache_key <- .batch_cache_make_key(
       agent_prefix = agent_prefix,
       qty = qty,
@@ -495,13 +620,16 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
       add = add,
       one_item_each = if (!is.null(one_item_each)) one_item_each else NULL,
       add_img = add_img,
+      add_img_each = add_img_each,
+      checkpoint_each = checkpoint_each,
       directory = directory,
       directory_img = directory_img,
       append_modes = append_modes,
-      agent_signature = agent_signature
+      agent_signature = agent_signature,
+      persist = persist
     )
     if (is.null(cache_key)) {
-      message("always_fix_errors enabled but cache key could not be generated; running full batch.")
+      if (verbose) message("always_fix_errors enabled but cache key could not be generated; running full batch.")
       use_cache <- FALSE
     } else {
       cache_entry <- .batch_cache_get(cache_key)
@@ -521,7 +649,7 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
           if (length(pending_indices) > 0) {
             indices_to_run <- pending_indices
             reused_indices <- setdiff(seq_len(qty), pending_indices)
-            if (length(reused_indices) > 0) {
+            if (verbose && length(reused_indices) > 0) {
               message(
                 "always_fix_errors: reusing ", length(reused_indices), " successful result(s): ",
                 paste(reused_indices, collapse = ", ")
@@ -544,15 +672,36 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
 
   # Execute tasks in parallel (Removed on.exit, using try/finally for parLapply)
   if (length(indices_to_run) == 0) {
-    cat("No pending indices detected; skipping execution and reusing cached results.\n")
+    if (verbose) cat("No pending indices detected; skipping execution and reusing cached results.\n")
   } else if (use_parlapply) {
-    cat("Using parLapply with", n_cores, "cores (Windows)...\n")
+    if (verbose) cat("Using parLapplyLB with", n_cores, "workers (Windows)...\n")
     cl <- parallel::makeCluster(n_cores)
     tryCatch({
-      .export_cluster_vars(cl, qty, agent_prefix, suffix_type, instructions, add, add_img, append_modes, directory, directory_img)
-      raw_results <- parallel::parLapply(cl, indices_to_run, function(i) {
+      .export_cluster_vars(
+        cl = cl,
+        qty = qty,
+        agent_prefix = agent_prefix,
+        suffix_type = suffix_type,
+        instructions = instructions,
+        add = add,
+        add_img = add_img,
+        add_img_each = add_img_each,
+        one_item_each = one_item_each,
+        append_modes = append_modes,
+        directory = directory,
+        directory_img = directory_img,
+        agent = agent,
+        persist = persist,
+        checkpoint_each = checkpoint_each
+      )
+      raw_results <- parallel::parLapplyLB(cl, indices_to_run, function(i) {
         tryCatch(
-          .execute_agent_task(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type, append_modes),
+          .execute_agent_task(
+            i, one_item_each, instructions, add, add_img, directory,
+            directory_img, agent_prefix, suffix_type, append_modes,
+            agent = agent, add_img_each = add_img_each, persist = persist,
+            checkpoint_each = checkpoint_each
+          ),
           error = function(e) {
             structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
           }
@@ -563,10 +712,18 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
       cl <- NULL
     })
   } else {
-    cat("Using mclapply with", n_cores, "cores (Non-Windows)...\n")
+    if (verbose) {
+      mode_label <- if (n_cores == 1L) "serial worker" else paste(n_cores, "workers (Non-Windows)")
+      cat("Using", mode_label, "...\n")
+    }
     raw_results <- parallel::mclapply(indices_to_run, function(i) {
       tryCatch(
-        .execute_agent_task(i, one_item_each, instructions, add, add_img, directory, directory_img, agent_prefix, suffix_type, append_modes),
+        .execute_agent_task(
+          i, one_item_each, instructions, add, add_img, directory,
+          directory_img, agent_prefix, suffix_type, append_modes,
+          agent = agent, add_img_each = add_img_each, persist = persist,
+          checkpoint_each = checkpoint_each
+        ),
         error = function(e) {
           structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
         }
@@ -574,10 +731,16 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
     }, mc.cores = n_cores, mc.silent = FALSE, mc.preschedule = FALSE)
   }
   final_geral <- Sys.time()
-  cat("Parallel processing completed.\n")
+  if (verbose) cat("Parallel processing completed.\n")
 
-  cat("Processing worker results...\n")
-  results_processed <- .process_parallel_results(raw_results, qty, agent_prefix, suffix_type)
+  if (verbose) cat("Processing worker results...\n")
+  results_processed <- .process_parallel_results(
+    raw_results,
+    qty,
+    agent_prefix,
+    suffix_type,
+    expected_indices = indices_to_run
+  )
   results_processed$results <- pad_list(results_processed$results, qty)
   results_processed$erros <- pad_list(results_processed$erros, qty)
   results_processed$logs_list <- pad_list(results_processed$logs_list, qty)
@@ -612,16 +775,27 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
   # ----- Imprimir Logs e Metrics -----
   logs_for_print <- paste(unlist(logs_list), collapse = "")
   # Pass the 'log' argument here
-  .print_metric_logs(logs_for_print, inicio_geral, final_geral, single_durations, agent_types, qty, log = log)
-  .report_errors(erros = final_errors, qty = qty, agent_prefix = agent_prefix, suffix_type = suffix_type)
+  if (verbose) {
+    .print_metric_logs(logs_for_print, inicio_geral, final_geral, single_durations, agent_types, qty, log = log)
+    .report_errors(erros = final_errors, qty = qty, agent_prefix = agent_prefix, suffix_type = suffix_type)
+  }
 
   # ----- Build Final Return Object -----
-  cat("--- Building Final Return Object (", qty + 1, " elements) ---\n")
+  if (verbose) cat("--- Building Final Return Object (", qty + 1, " elements) ---\n")
+  parallel_mode <- if (use_parlapply) {
+    "parLapplyLB"
+  } else if (n_cores == 1L) {
+    "serial"
+  } else {
+    "mclapply"
+  }
   combined_stats <- list(
     duration_real_secs = as.numeric(difftime(final_geral, inicio_geral, units = "secs")),
     duration_sum_secs = sum(single_durations, na.rm = TRUE),
     cores_number = n_cores,
-    parallel_mode = if (use_parlapply) "parLapply" else "mclapply",
+    workers_requested = if (is.null(workers)) NA_integer_ else as.integer(workers),
+    workers_used = n_cores,
+    parallel_mode = parallel_mode,
     valid_results = results_processed$valid_results_count,
     qty_solicited = qty,
     detailed_errors = final_errors,
@@ -633,10 +807,15 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
   )
   results_final_obj <- vector("list", qty + 1)
   for (i in 1:qty) {
-    results_final_obj[[i]] <- results_individual_lists[[i]]
+    results_final_obj[i] <- results_individual_lists[i]
   }
   results_final_obj[[qty + 1]] <- combined_stats
-  names(results_final_obj) <- c(rep("", qty), "combined_stats")
+  result_names <- rep("", qty)
+  if (!is.null(add_img_each) && !is.null(names(add_img_each)) &&
+    all(!is.na(names(add_img_each)) & nzchar(names(add_img_each)))) {
+    result_names <- names(add_img_each)
+  }
+  names(results_final_obj) <- c(result_names, "combined_stats")
 
   if (use_cache && !is.null(cache_key)) {
     existing_entry <- cache_entry
@@ -671,8 +850,13 @@ gen_batch <- function(qty = 8, instructions = NULL, add = NULL, one_item_each = 
   }
 
   # ----- Post-Processing -----
-  .pos_process_results(results_final_obj)
+  .pos_process_results(
+    results_final_obj,
+    persist = persist,
+    verbose = verbose,
+    persist_results = results_final_obj[indices_to_run]
+  )
 
-  cat("--- End of content generation ---\n")
+  if (verbose) cat("--- End of content generation ---\n")
   return(results_final_obj)
 }

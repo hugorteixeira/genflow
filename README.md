@@ -246,16 +246,40 @@ one_item_each <- list(
   list(topic = "Financial Fortune Teller", tone = "cynical")
 )
 
-# Run a batch in parallel – temporary agents are created and cleaned up automatically
+# Run a batch in parallel with one agent shared directly by all tasks
 results <- agent |> gen_batch_agent(
   qty = 3,
   instructions = "Write a 120-word launch announcement of a atomic bomb made of gummy bears.",
   one_item_each = one_item_each,
+  workers = 2,
   directory = "generated_content"
 )
 
 gen_view(results)
 ```
+
+`qty` is the number of tasks, while `workers` limits how many run at the same
+time. A single `genflow_agent` is shared directly by the workers; no temporary
+agent copies are created in `.GlobalEnv`. Vision batches can provide one image
+per task, with names preserved on the returned results:
+
+```r
+images <- setNames(
+  list("images/first.jpg", "images/second.jpg"),
+  c("first", "second")
+)
+
+results <- agent |> gen_batch_agent(
+  qty = length(images),
+  add_img_each = images,
+  workers = 2,
+  persist = FALSE
+)
+```
+
+Use `persist = FALSE` when the calling application owns its cache. For durable
+long-running integrations, `checkpoint_each` accepts one RDS path per task and
+atomically records each worker result as soon as it finishes.
 
 ### Intelligent Model Management
 

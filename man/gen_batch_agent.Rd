@@ -17,6 +17,11 @@ gen_batch_agent(
   directory_img = "content",
   log = FALSE,
   always_fix_errors = TRUE,
+  workers = NULL,
+  add_img_each = NULL,
+  persist = TRUE,
+  verbose = TRUE,
+  checkpoint_each = NULL,
   ...
 )
 }
@@ -40,8 +45,8 @@ omitted, the agent's stored \code{add} value (if any) is used.}
 each agent's stored context/addition. The first entry applies to
 instructions, the second to add data.}
 
-\item{agent_prefix}{Optional prefix used for the temporary agents. Defaults
-to the agent's \code{name}, \code{sname}, or "agent".}
+\item{agent_prefix}{Optional result-label prefix. Defaults to the agent's
+\code{name}, \code{sname}, or "agent".}
 
 \item{directory}{Character path to save chat/text artifacts.}
 
@@ -53,13 +58,32 @@ to the agent's \code{name}, \code{sname}, or "agent".}
 from the previous run with the same signature and only re-executes failed
 indices until the batch completes without errors.}
 
+\item{workers}{Maximum number of tasks to execute simultaneously. \code{NULL}
+preserves automatic detection. An explicit value is capped by \code{qty}, not
+by the number of CPU cores, because API calls are generally I/O-bound.}
+
+\item{add_img_each}{Optional list or character vector containing one image
+path per task. It is mutually exclusive with \code{add_img}. Names, when
+supplied, must be complete and unique, are preserved on the returned task
+results, and cannot use the reserved name \code{combined_stats}.}
+
+\item{persist}{Logical; whether generator response artifacts and aggregate
+generation statistics should be saved.}
+
+\item{verbose}{Logical; whether to print batch progress and summaries.}
+
+\item{checkpoint_each}{Optional list or character vector with one \code{.rds}
+path per task. Each worker atomically writes its structured result there
+as soon as it finishes, allowing a caller-owned cache to recover after an
+interrupted batch.}
+
 \item{...}{Additional arguments passed to \code{gen_batch()}.}
 }
 \value{
 The result of \code{gen_batch()}.
 }
 \description{
-Convenience wrapper that prepares temporary agent variables so that
-\code{gen_batch()} can run with a single \code{genflow_agent}. Any temporary variables
-are cleaned up (and previous values restored) once the batch completes.
+Convenience wrapper that runs every batch item from one \code{genflow_agent}.
+The agent is passed directly to the batch runtime; it is not copied into
+temporary variables in \code{.GlobalEnv}.
 }
