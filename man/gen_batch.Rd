@@ -18,6 +18,7 @@ gen_batch(
   always_fix_errors = TRUE,
   agent = NULL,
   workers = NULL,
+  backend = c("psock", "fork"),
   add_img_each = NULL,
   persist = TRUE,
   verbose = TRUE,
@@ -62,6 +63,11 @@ indices until the batch completes without errors.}
 preserves automatic detection. An explicit value is capped by \code{qty}, not
 by the number of CPU cores, because API calls are generally I/O-bound.}
 
+\item{backend}{Parallel process backend. \code{"psock"} (the default) starts
+independent R worker processes and is safe for HTTP clients such as
+\code{curl}/\code{httr}. \code{"fork"} is an explicit Unix-only opt-in for workloads known
+to be fork-safe. A batch with one worker always runs serially.}
+
 \item{add_img_each}{Optional list or character vector containing one image
 path per task. It is mutually exclusive with \code{add_img}. Names, when
 supplied, must be complete and unique, are preserved on the returned task
@@ -82,15 +88,18 @@ A list of length \code{qty + 1}, where the last element is named
 \code{combined_stats} with aggregated timing and counts.
 }
 \description{
-Orchestrates parallel generation tasks using \code{parallel} (load-balanced
-\code{parLapplyLB()} on Windows, \code{mclapply()} on Unix-likes), collects results,
+Orchestrates parallel generation tasks using \code{parallel}, collects results,
 prints timing metrics and errors, and returns a list that optionally includes
-a \code{combined_stats} block.
+a \code{combined_stats} block. Parallel batches use independent PSOCK processes by
+default on every operating system.
 }
 \details{
-On Unix-like systems, interrupting a forked batch forcefully cleans
-up its child processes so blocked provider requests do not keep an R or
-RStudio session alive. Completed per-task checkpoints remain recoverable.
+PSOCK is the safe default for HTTP/API workloads because it does not
+fork the current R process after native networking libraries have already
+been initialized. On Unix-like systems, \code{backend = "fork"} remains
+available as an explicit opt-in for workloads known to be fork-safe.
+Interrupting an opted-in fork batch forcefully cleans up its child
+processes. Completed per-task checkpoints remain recoverable.
 }
 \examples{
 # gen_batch(2, instructions = "Describe a cat", agent_prefix = "agent")

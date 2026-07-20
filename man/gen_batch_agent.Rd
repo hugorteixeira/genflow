@@ -18,6 +18,7 @@ gen_batch_agent(
   log = FALSE,
   always_fix_errors = TRUE,
   workers = NULL,
+  backend = c("psock", "fork"),
   add_img_each = NULL,
   persist = TRUE,
   verbose = TRUE,
@@ -62,6 +63,11 @@ indices until the batch completes without errors.}
 preserves automatic detection. An explicit value is capped by \code{qty}, not
 by the number of CPU cores, because API calls are generally I/O-bound.}
 
+\item{backend}{Parallel process backend. \code{"psock"} (the default) starts
+independent R worker processes and is safe for HTTP clients such as
+\code{curl}/\code{httr}. \code{"fork"} is an explicit Unix-only opt-in for workloads known
+to be fork-safe. A batch with one worker always runs serially.}
+
 \item{add_img_each}{Optional list or character vector containing one image
 path per task. It is mutually exclusive with \code{add_img}. Names, when
 supplied, must be complete and unique, are preserved on the returned task
@@ -88,7 +94,8 @@ The agent is passed directly to the batch runtime; it is not copied into
 temporary variables in \code{.GlobalEnv}.
 }
 \details{
-On Unix-like systems, interrupting a forked batch forcefully cleans
-up its child processes so blocked provider requests do not keep an R or
-RStudio session alive. Completed per-task checkpoints remain recoverable.
+Parallel batches use independent PSOCK processes by default so HTTP
+clients are not inherited from the current R process. On Unix-like systems,
+\code{backend = "fork"} remains an explicit opt-in for fork-safe workloads.
+Completed per-task checkpoints remain recoverable.
 }

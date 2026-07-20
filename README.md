@@ -259,9 +259,11 @@ gen_view(results)
 ```
 
 `qty` is the number of tasks, while `workers` limits how many run at the same
-time. A single `genflow_agent` is shared directly by the workers; no temporary
-agent copies are created in `.GlobalEnv`. Vision batches can provide one image
-per task, with names preserved on the returned results:
+time. Parallel batches use independent PSOCK worker processes on every operating
+system by default, which is safe for the native networking libraries used by
+HTTP providers. A single `genflow_agent` is shared directly by the workers; no
+temporary agent copies are created in `.GlobalEnv`. Vision batches can provide
+one image per task, with names preserved on the returned results:
 
 ```r
 images <- setNames(
@@ -277,8 +279,8 @@ results <- agent |> gen_batch_agent(
 )
 ```
 
-On Unix-like systems, interrupting a forked batch forcefully terminates its
-children so blocked provider requests do not prevent an RStudio session restart.
+For a workload known to be fork-safe, Unix-like systems can opt in with
+`backend = "fork"`. API/HTTP batches should keep the default `"psock"` backend.
 
 Use `persist = FALSE` when the calling application owns its cache. For durable
 long-running integrations, `checkpoint_each` accepts one RDS path per task and

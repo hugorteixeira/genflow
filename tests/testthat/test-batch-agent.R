@@ -6,6 +6,57 @@ test_that("worker limits are independent from task quantity", {
   expect_error(genflow:::.genflow_resolve_workers(NA, 5), "positive integer")
 })
 
+test_that("PSOCK is the safe default parallel backend", {
+  expect_identical(genflow:::.genflow_resolve_backend("psock", 2L), "psock")
+  expect_identical(genflow:::.genflow_resolve_backend("fork", 1L), "serial")
+  expect_identical(genflow:::.genflow_resolve_backend("psock", 1L), "serial")
+  expect_error(genflow:::.genflow_resolve_backend("invalid", 2L), "arg")
+
+  if (.Platform$OS.type == "windows") {
+    expect_error(genflow:::.genflow_resolve_backend("fork", 2L), "not available")
+  }
+})
+
+test_that("parallel agent batches use PSOCK by default", {
+  td <- tempfile("genflow_psock_default_")
+  dir.create(td)
+  on.exit(unlink(td, recursive = TRUE), add = TRUE)
+  checkpoints <- file.path(td, paste0("checkpoint_", 1:2, ".rds"))
+  agent <- set_agent(
+    "psock_default_agent",
+    setup = list(service = "mock", model = "mock-model", type = "Vision"),
+    content = list(context = "Describe"),
+    save = FALSE,
+    assign = FALSE
+  )
+
+  result <- gen_batch_agent(
+    agent,
+    qty = 2L,
+    workers = 2L,
+    persist = FALSE,
+    verbose = FALSE,
+    always_fix_errors = FALSE,
+    checkpoint_each = checkpoints
+  )
+
+  expect_identical(result$combined_stats$backend_requested, "psock")
+  expect_identical(result$combined_stats$parallel_mode, "parLapplyLB")
+  expect_identical(result$combined_stats$workers_used, 2L)
+  expect_identical(result$combined_stats$executed_indices, 1:2)
+  expect_true(all(file.exists(checkpoints)))
+  expect_identical(
+    vapply(lapply(checkpoints, readRDS), `[[`, character(1), "task_id"),
+    c("1", "2")
+  )
+  transport_errors <- unlist(result$combined_stats$detailed_errors, use.names = FALSE)
+  expect_false(any(grepl(
+    "No valid result|returned NULL|did not deliver results",
+    transport_errors,
+    ignore.case = TRUE
+  )))
+})
+
 test_that("fork batches request hard child cleanup on interruption", {
   seen <- NULL
   fake_mclapply <- function(X, FUN, ...) {
@@ -130,6 +181,7 @@ mock_text_runtime <- function(context,
 }
 
 test_that("one agent runs distinct named image tasks without global clones", {
+  skip_on_os("windows")
   td <- tempfile("genflow_batch_")
   dir.create(td)
   on.exit(unlink(td, recursive = TRUE), add = TRUE)
@@ -163,6 +215,7 @@ test_that("one agent runs distinct named image tasks without global clones", {
     qty = length(images),
     add_img_each = image_items,
     workers = 2,
+    backend = "fork",
     persist = FALSE,
     verbose = FALSE,
     always_fix_errors = FALSE,

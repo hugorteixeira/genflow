@@ -322,6 +322,21 @@ gen_stats_rm <- function(date = NULL) {
   min(as.integer(qty), as.integer(workers))
 }
 
+#' Resolve the parallel backend used by a batch
+#'
+#' Socket workers are the safe default for provider calls. Forking a process
+#' after libcurl or another multithreaded native library has been initialized
+#' can crash the child before R has a chance to return a structured error.
+#' @noRd
+.genflow_resolve_backend <- function(backend = c("psock", "fork"), workers) {
+  backend <- match.arg(backend)
+  if (as.integer(workers) <= 1L) return("serial")
+  if (identical(backend, "fork") && .Platform$OS.type == "windows") {
+    stop("`backend = \"fork\"` is not available on Windows.", call. = FALSE)
+  }
+  backend
+}
+
 #' Run forked tasks with hard cleanup on interruption
 #'
 #' Provider calls can remain blocked in native network code after the main R
@@ -363,14 +378,17 @@ gen_stats_rm <- function(date = NULL) {
 }
 #' Run multiple generation tasks in parallel
 #'
-#' Orchestrates parallel generation tasks using `parallel` (load-balanced
-#' `parLapplyLB()` on Windows, `mclapply()` on Unix-likes), collects results,
+#' Orchestrates parallel generation tasks using `parallel`, collects results,
 #' prints timing metrics and errors, and returns a list that optionally includes
-#' a `combined_stats` block.
+#' a `combined_stats` block. Parallel batches use independent PSOCK processes by
+#' default on every operating system.
 #'
-#' @details On Unix-like systems, interrupting a forked batch forcefully cleans
-#'   up its child processes so blocked provider requests do not keep an R or
-#'   RStudio session alive. Completed per-task checkpoints remain recoverable.
+#' @details PSOCK is the safe default for HTTP/API workloads because it does not
+#'   fork the current R process after native networking libraries have already
+#'   been initialized. On Unix-like systems, `backend = "fork"` remains
+#'   available as an explicit opt-in for workloads known to be fork-safe.
+#'   Interrupting an opted-in fork batch forcefully cleans up its child
+#'   processes. Completed per-task checkpoints remain recoverable.
 #'
 #' @param qty Integer number of tasks to run.
 #' @param instructions Character base prompt/context text. When `NULL`, the
@@ -394,6 +412,10 @@ gen_stats_rm <- function(date = NULL) {
 #' @param workers Maximum number of tasks to execute simultaneously. `NULL`
 #'   preserves automatic detection. An explicit value is capped by `qty`, not
 #'   by the number of CPU cores, because API calls are generally I/O-bound.
+#' @param backend Parallel process backend. `"psock"` (the default) starts
+#'   independent R worker processes and is safe for HTTP clients such as
+#'   `curl`/`httr`. `"fork"` is an explicit Unix-only opt-in for workloads known
+#'   to be fork-safe. A batch with one worker always runs serially.
 #' @param persist Logical; whether generator response artifacts and aggregate
 #'   generation statistics should be saved.
 #' @param verbose Logical; whether to print batch progress and summaries.
@@ -428,6 +450,7 @@ gen_batch <- function(qty = 8,
                       always_fix_errors = TRUE,
                       agent = NULL,
                       workers = NULL,
+                      backend = c("psock", "fork"),
                       add_img_each = NULL,
                       persist = TRUE,
                       verbose = TRUE,
@@ -458,6 +481,8 @@ gen_batch <- function(qty = 8,
   agent_prefix <- as.character(agent_prefix)[1]
   if (!nzchar(agent_prefix)) agent_prefix <- "agent"
   n_cores <- .genflow_resolve_workers(workers, qty)
+  backend_requested <- match.arg(backend)
+  parallel_backend <- .genflow_resolve_backend(backend_requested, n_cores)
   add_img_each <- .genflow_normalize_each(add_img_each, qty, "add_img_each", paths = TRUE)
   checkpoint_each <- .genflow_normalize_each(checkpoint_each, qty, "checkpoint_each", paths = TRUE)
   if (!is.null(checkpoint_each)) {
@@ -691,17 +716,16 @@ gen_batch <- function(qty = 8,
   }
 
   # Parallel execution setup
-  is_windows <- .Platform$OS.type == "windows"
-  use_parlapply <- is_windows && n_cores > 1
   raw_results <- list()
   cl <- NULL
 
-  # Execute tasks in parallel (Removed on.exit, using try/finally for parLapply)
+  # Execute tasks. PSOCK is deliberately the cross-platform default because
+  # provider clients rely on native networking libraries that are not fork-safe.
   if (length(indices_to_run) == 0) {
     if (verbose) cat("No pending indices detected; skipping execution and reusing cached results.\n")
-  } else if (use_parlapply) {
-    if (verbose) cat("Using parLapplyLB with", n_cores, "workers (Windows)...\n")
-    cl <- parallel::makeCluster(n_cores)
+  } else if (identical(parallel_backend, "psock")) {
+    if (verbose) cat("Using PSOCK parLapplyLB with", n_cores, "workers...\n")
+    cl <- parallel::makeCluster(n_cores, type = "PSOCK")
     tryCatch({
       .export_cluster_vars(
         cl = cl,
@@ -734,13 +758,12 @@ gen_batch <- function(qty = 8,
         )
       })
     }, finally = {
-      if (!is.null(cl)) parallel::stopCluster(cl)
+      if (!is.null(cl)) try(parallel::stopCluster(cl), silent = TRUE)
       cl <- NULL
     })
-  } else {
+  } else if (identical(parallel_backend, "fork")) {
     if (verbose) {
-      mode_label <- if (n_cores == 1L) "serial worker" else paste(n_cores, "workers (Non-Windows)")
-      cat("Using", mode_label, "...\n")
+      cat("Using", n_cores, "fork workers (explicit opt-in)...\n")
     }
     raw_results <- .genflow_mclapply(indices_to_run, function(i) {
       tryCatch(
@@ -755,6 +778,21 @@ gen_batch <- function(qty = 8,
         }
       )
     }, workers = n_cores)
+  } else {
+    if (verbose) cat("Using serial worker...\n")
+    raw_results <- lapply(indices_to_run, function(i) {
+      tryCatch(
+        .execute_agent_task(
+          i, one_item_each, instructions, add, add_img, directory,
+          directory_img, agent_prefix, suffix_type, append_modes,
+          agent = agent, add_img_each = add_img_each, persist = persist,
+          checkpoint_each = checkpoint_each
+        ),
+        error = function(e) {
+          structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
+        }
+      )
+    })
   }
   final_geral <- Sys.time()
   if (verbose) cat("Parallel processing completed.\n")
@@ -808,19 +846,19 @@ gen_batch <- function(qty = 8,
 
   # ----- Build Final Return Object -----
   if (verbose) cat("--- Building Final Return Object (", qty + 1, " elements) ---\n")
-  parallel_mode <- if (use_parlapply) {
-    "parLapplyLB"
-  } else if (n_cores == 1L) {
-    "serial"
-  } else {
-    "mclapply"
-  }
+  parallel_mode <- switch(
+    parallel_backend,
+    psock = "parLapplyLB",
+    fork = "mclapply",
+    serial = "serial"
+  )
   combined_stats <- list(
     duration_real_secs = as.numeric(difftime(final_geral, inicio_geral, units = "secs")),
     duration_sum_secs = sum(single_durations, na.rm = TRUE),
     cores_number = n_cores,
     workers_requested = if (is.null(workers)) NA_integer_ else as.integer(workers),
     workers_used = n_cores,
+    backend_requested = backend_requested,
     parallel_mode = parallel_mode,
     valid_results = results_processed$valid_results_count,
     qty_solicited = qty,
