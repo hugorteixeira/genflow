@@ -6,6 +6,26 @@ test_that("worker limits are independent from task quantity", {
   expect_error(genflow:::.genflow_resolve_workers(NA, 5), "positive integer")
 })
 
+test_that("fork batches request hard child cleanup on interruption", {
+  seen <- NULL
+  fake_mclapply <- function(X, FUN, ...) {
+    seen <<- list(...)
+    lapply(X, FUN)
+  }
+
+  out <- genflow:::.genflow_mclapply(
+    indices = 1:2,
+    task = function(i) i * 2L,
+    workers = 2L,
+    mclapply_fn = fake_mclapply
+  )
+
+  expect_identical(out, list(2L, 4L))
+  expect_identical(seen$mc.cores, 2L)
+  expect_identical(seen$mc.preschedule, FALSE)
+  expect_identical(seen$mc.cleanup, tools::SIGKILL)
+})
+
 test_that("provider lookup and text runtime share service aliases", {
   aliases <- c(
     claude = "anthropic",

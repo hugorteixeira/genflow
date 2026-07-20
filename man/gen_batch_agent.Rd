@@ -87,3 +87,8 @@ Convenience wrapper that runs every batch item from one \code{genflow_agent}.
 The agent is passed directly to the batch runtime; it is not copied into
 temporary variables in \code{.GlobalEnv}.
 }
+\details{
+On Unix-like systems, interrupting a forked batch forcefully cleans
+up its child processes so blocked provider requests do not keep an R or
+RStudio session alive. Completed per-task checkpoints remain recoverable.
+}

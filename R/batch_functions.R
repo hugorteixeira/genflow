@@ -322,6 +322,28 @@ gen_stats_rm <- function(date = NULL) {
   min(as.integer(qty), as.integer(workers))
 }
 
+#' Run forked tasks with hard cleanup on interruption
+#'
+#' Provider calls can remain blocked in native network code after the main R
+#' process is interrupted. `mclapply()` normally sends `SIGTERM`, which can
+#' leave those children alive long enough to block an RStudio session restart.
+#' Use `SIGKILL` only for interrupted fork cleanup; normal completion and
+#' result collection are unchanged.
+#' @noRd
+.genflow_mclapply <- function(indices,
+                              task,
+                              workers,
+                              mclapply_fn = parallel::mclapply) {
+  mclapply_fn(
+    indices,
+    task,
+    mc.cores = workers,
+    mc.silent = FALSE,
+    mc.preschedule = FALSE,
+    mc.cleanup = tools::SIGKILL
+  )
+}
+
 .genflow_normalize_each <- function(x, qty, arg, paths = FALSE) {
   if (is.null(x)) return(NULL)
   if (is.atomic(x) && !is.list(x)) x <- as.list(x)
@@ -345,6 +367,10 @@ gen_stats_rm <- function(date = NULL) {
 #' `parLapplyLB()` on Windows, `mclapply()` on Unix-likes), collects results,
 #' prints timing metrics and errors, and returns a list that optionally includes
 #' a `combined_stats` block.
+#'
+#' @details On Unix-like systems, interrupting a forked batch forcefully cleans
+#'   up its child processes so blocked provider requests do not keep an R or
+#'   RStudio session alive. Completed per-task checkpoints remain recoverable.
 #'
 #' @param qty Integer number of tasks to run.
 #' @param instructions Character base prompt/context text. When `NULL`, the
@@ -716,7 +742,7 @@ gen_batch <- function(qty = 8,
       mode_label <- if (n_cores == 1L) "serial worker" else paste(n_cores, "workers (Non-Windows)")
       cat("Using", mode_label, "...\n")
     }
-    raw_results <- parallel::mclapply(indices_to_run, function(i) {
+    raw_results <- .genflow_mclapply(indices_to_run, function(i) {
       tryCatch(
         .execute_agent_task(
           i, one_item_each, instructions, add, add_img, directory,
@@ -728,7 +754,7 @@ gen_batch <- function(qty = 8,
           structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
         }
       )
-    }, mc.cores = n_cores, mc.silent = FALSE, mc.preschedule = FALSE)
+    }, workers = n_cores)
   }
   final_geral <- Sys.time()
   if (verbose) cat("Parallel processing completed.\n")

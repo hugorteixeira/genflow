@@ -87,6 +87,11 @@ Orchestrates parallel generation tasks using \code{parallel} (load-balanced
 prints timing metrics and errors, and returns a list that optionally includes
 a \code{combined_stats} block.
 }
+\details{
+On Unix-like systems, interrupting a forked batch forcefully cleans
+up its child processes so blocked provider requests do not keep an R or
+RStudio session alive. Completed per-task checkpoints remain recoverable.
+}
 \examples{
 # gen_batch(2, instructions = "Describe a cat", agent_prefix = "agent")
 

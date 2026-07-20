@@ -277,6 +277,9 @@ results <- agent |> gen_batch_agent(
 )
 ```
 
+On Unix-like systems, interrupting a forked batch forcefully terminates its
+children so blocked provider requests do not prevent an RStudio session restart.
+
 Use `persist = FALSE` when the calling application owns its cache. For durable
 long-running integrations, `checkpoint_each` accepts one RDS path per task and
 atomically records each worker result as soon as it finishes.

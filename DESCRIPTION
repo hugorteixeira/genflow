@@ -1,7 +1,7 @@
 Package: genflow
 Type: Package
 Title: Generate texts, images and more with multiple AI API providers 
-Version: 0.0.3
+Version: 0.0.4
 Authors@R: person(
     given = "Hugo",
     family = "Rzepian Teixeira",
