@@ -4,12 +4,14 @@
 \alias{mv_setup}
 \title{Rename a cached setup}
 \usage{
-mv_setup(from, to)
+mv_setup(from, to, update_agents = TRUE)
 }
 \arguments{
 \item{from}{Current setup name.}
 
 \item{to}{New setup name.}
+
+\item{update_agents}{Update saved agents that reference the setup.}
 }
 \value{
 Invisible TRUE when renamed.

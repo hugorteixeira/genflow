@@ -41,8 +41,8 @@
       model = character(0),
       temp = numeric(0),
       duration = numeric(0),
-      tks_envia = numeric(0), # Match original column names
-      tks_recebe = numeric(0), # Match original column names
+      tks_envia = numeric(0),
+      tks_recebe = numeric(0),
       status_api = character(0), # Add status for context
       stringsAsFactors = FALSE
     )
@@ -106,8 +106,9 @@
 
 #' Read daily generation logs
 #'
-#' Loads and prints the saved stats for a given date from
-#' `tools::R_user_dir("genflow", which = "data")`.
+#' Loads and prints the saved stats for a given date from the directory set by
+#' option `genflow.log_dir`, or from
+#' `tools::R_user_dir("genflow", which = "data")` when the option is unset.
 #'
 #' @param date Date or character. If NULL, uses today's date. Accepts
 #'   Date objects, "YYYYMMDD", or ISO "YYYY-MM-DD" strings.
@@ -118,48 +119,76 @@
 #' # gen_stats(Sys.Date()-1)  # show yesterday's logs
 #' @export
 gen_stats <- function(date = NULL) {
-  # Parse date
-  if (is.null(date)) {
-    d <- Sys.Date()
-  } else if (inherits(date, "Date")) {
-    d <- date
-  } else if (is.character(date)) {
-    if (grepl("^\\d{8}$", date)) {
-      d <- as.Date(date, format = "%Y%m%d")
-    } else {
-      d <- as.Date(date)
-    }
-  } else {
-    stop("date must be NULL, Date, or character")
-  }
-  if (is.na(d)) stop("Could not parse 'date'. Use YYYYMMDD or YYYY-MM-DD or Date object.")
+  d <- .genflow_parse_stats_date(date)
 
-  dir <- tools::R_user_dir("genflow", which = "data")
+  dir <- .get_log_dir(create = FALSE)
   fp <- file.path(dir, paste0(format(d, "%Y%m%d"), ".rds"))
+  if (!dir.exists(dir) || !file.exists(fp)) {
+    message("No logs found for ", format(d, "%Y-%m-%d"), ".")
+    return(invisible(.genflow_empty_stats()))
+  }
+
+  lock <- .genflow_acquire_stats_lock(fp)
+  on.exit(.genflow_release_file_lock(lock), add = TRUE)
   if (!file.exists(fp)) {
     message("No logs found for ", format(d, "%Y-%m-%d"), ".")
-    df_empty <- data.frame(label = character(0), model = character(0), temp = numeric(0), duration = numeric(0), tks_envia = numeric(0), tks_recebe = numeric(0), status_api = character(0), stringsAsFactors = FALSE)
-    return(invisible(df_empty))
+    return(invisible(.genflow_empty_stats()))
   }
-  df <- tryCatch(readRDS(fp), error = function(e) NULL)
+  df <- tryCatch(
+    readRDS(fp),
+    error = function(e) NULL
+  )
   if (!is.data.frame(df)) {
     warning("Log file corrupted or invalid: ", fp)
-    df <- data.frame(label = character(0), model = character(0), temp = numeric(0), duration = numeric(0), tks_envia = numeric(0), tks_recebe = numeric(0), status_api = character(0), stringsAsFactors = FALSE)
+    df <- .genflow_empty_stats()
   }
   print(df)
   invisible(df)
 }
 
+.genflow_parse_stats_date <- function(date = NULL) {
+  if (is.null(date)) {
+    value <- Sys.Date()
+  } else if (inherits(date, "Date") && length(date) == 1L) {
+    value <- date
+  } else if (is.character(date) && length(date) == 1L && !is.na(date)) {
+    if (grepl("^\\d{8}$", date)) {
+      value <- as.Date(date, format = "%Y%m%d")
+    } else {
+      value <- suppressWarnings(as.Date(date))
+    }
+  } else {
+    stop("date must be NULL, one Date, or one character value", call. = FALSE)
+  }
+  if (length(value) != 1L || is.na(value)) {
+    stop(
+      "Could not parse 'date'. Use YYYYMMDD, YYYY-MM-DD, or a Date object.",
+      call. = FALSE
+    )
+  }
+  value
+}
+
+.genflow_remove_stats_file <- function(path) {
+  lock <- .genflow_acquire_stats_lock(path)
+  on.exit(.genflow_release_file_lock(lock), add = TRUE)
+  if (!file.exists(path)) {
+    return(FALSE)
+  }
+  isTRUE(file.remove(path))
+}
+
 #' Remove saved logs
 #'
-#' Deletes one day's log file or all logs from
-#' `tools::R_user_dir("genflow", which = "data")`.
+#' Deletes one day's log file or all logs from the directory set by option
+#' `genflow.log_dir`, or from
+#' `tools::R_user_dir("genflow", which = "data")` when the option is unset.
 #'
 #' @param date Date or character. If NULL, deletes all logs. If set, deletes only that day's file.
 #' @return Invisibly returns TRUE if deletion occurred, FALSE otherwise.
 #' @export
 gen_stats_rm <- function(date = NULL) {
-  dir <- tools::R_user_dir("genflow", which = "data")
+  dir <- .get_log_dir(create = FALSE)
   if (!dir.exists(dir)) {
     return(invisible(FALSE))
   }
@@ -168,28 +197,21 @@ gen_stats_rm <- function(date = NULL) {
     if (length(files) == 0) {
       return(invisible(FALSE))
     }
-    ok <- all(file.remove(files))
-    if (ok) message("Removed ", length(files), " log file(s).")
-    return(invisible(ok))
-  }
-  # Parse single date
-  if (inherits(date, "Date")) {
-    d <- date
-  } else if (is.character(date)) {
-    if (grepl("^\\d{8}$", date)) {
-      d <- as.Date(date, format = "%Y%m%d")
-    } else {
-      d <- as.Date(date)
+    removed <- vapply(files, .genflow_remove_stats_file, logical(1))
+    if (any(removed)) {
+      message("Removed ", sum(removed), " log file(s).")
     }
-  } else {
-    stop("date must be NULL, Date, or character")
+    if (any(!removed)) {
+      warning("Some statistics log files could not be removed.", call. = FALSE)
+    }
+    return(invisible(all(removed)))
   }
-  if (is.na(d)) stop("Could not parse 'date'. Use YYYYMMDD or YYYY-MM-DD or Date object.")
+  d <- .genflow_parse_stats_date(date)
   fp <- file.path(dir, paste0(format(d, "%Y%m%d"), ".rds"))
   if (!file.exists(fp)) {
     return(invisible(FALSE))
   }
-  ok <- file.remove(fp)
+  ok <- .genflow_remove_stats_file(fp)
   if (ok) message("Removed ", basename(fp), ".")
   invisible(ok)
 }
@@ -198,7 +220,8 @@ gen_stats_rm <- function(date = NULL) {
 #'
 #' @keywords internal
 #' @noRd
-.print_metric_logs <- function(logs_completos, inicio_geral, final_geral, single_durations, agent_types, qty, log = TRUE) { # Add log = TRUE here
+.print_metric_logs <- function(logs_completos, inicio_geral, final_geral,
+                               single_durations, agent_types, qty, log = TRUE) {
 
   # --- Conditionally Print Detailed Logs ---
   if (log) {
@@ -216,7 +239,7 @@ gen_stats_rm <- function(date = NULL) {
   }
   # --- End Conditional Log Printing ---
 
-  # --- Print Metrics (code remains the same) ---
+  # --- Print Metrics ---
   cat("--- Timing Metrics ---\n")
   duration_real_decorrido <- difftime(final_geral, inicio_geral, units = "secs")
   duration_total_somado_num <- sum(single_durations, na.rm = TRUE) # Ensure numeric sum
@@ -301,25 +324,73 @@ gen_stats_rm <- function(date = NULL) {
     warning("'.summarize_results' not found.")
   }
   # Persist stats for all results in this batch (single-writer in main process)
-  if (isTRUE(persist)) try(.persist_many_stats(persist_results), silent = TRUE)
+  if (isTRUE(persist)) {
+    tryCatch(
+      .persist_many_stats(persist_results),
+      error = function(e) {
+        warning(
+          "Batch results were produced, but their statistics could not be persisted: ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+  }
   if (verbose) cat("--- End of Post-Processing ---\n\n")
 }
 
+.genflow_positive_integer <- function(value, arg) {
+  valid <- is.numeric(value) &&
+    length(value) == 1L &&
+    !is.na(value) &&
+    is.finite(value) &&
+    value >= 1 &&
+    value <= .Machine$integer.max &&
+    value == floor(value)
+  if (!isTRUE(valid)) {
+    stop("`", arg, "` must be a positive integer.", call. = FALSE)
+  }
+  as.integer(value)
+}
+
 .genflow_resolve_workers <- function(workers, qty) {
+  qty <- .genflow_positive_integer(qty, "qty")
   if (is.null(workers)) {
-    detected <- suppressWarnings(parallel::detectCores())
-    available <- if (length(detected) != 1L || is.na(detected) || detected < 2L) {
+    detected <- suppressWarnings(tryCatch(
+      parallel::detectCores(),
+      error = function(e) NA_real_
+    ))
+    detected_is_valid <- is.numeric(detected) &&
+      length(detected) == 1L &&
+      !is.na(detected) &&
+      is.finite(detected) &&
+      detected >= 2 &&
+      detected == floor(detected)
+    available <- if (!isTRUE(detected_is_valid)) {
       1L
     } else {
-      as.integer(detected) - 1L
+      as.integer(min(detected - 1, .Machine$integer.max))
     }
-    return(min(as.integer(qty), available))
+    default_cap_raw <- getOption("genflow.batch_max_workers", 4L)
+    default_cap <- tryCatch(
+      .genflow_positive_integer(default_cap_raw, "genflow.batch_max_workers"),
+      error = function(e) {
+        warning(
+          "Option `genflow.batch_max_workers` must be a positive integer; using 4.",
+          call. = FALSE
+        )
+        4L
+      }
+    )
+    return(min(qty, available, default_cap))
   }
-  if (!is.numeric(workers) || length(workers) != 1L || is.na(workers) ||
-    !is.finite(workers) || workers < 1 || workers != as.integer(workers)) {
-    stop("`workers` must be NULL or a positive integer.", call. = FALSE)
-  }
-  min(as.integer(qty), as.integer(workers))
+  workers <- tryCatch(
+    .genflow_positive_integer(workers, "workers"),
+    error = function(e) {
+      stop("`workers` must be NULL or a positive integer.", call. = FALSE)
+    }
+  )
+  min(qty, workers)
 }
 
 #' Resolve the parallel backend used by a batch
@@ -390,6 +461,12 @@ gen_stats_rm <- function(date = NULL) {
 #'   Interrupting an opted-in fork batch forcefully cleans up its child
 #'   processes. Completed per-task checkpoints remain recoverable.
 #'
+#'   `always_fix_errors` reuses successful results from a matching failed batch
+#'   within the current R session. Files in `checkpoint_each` provide durable,
+#'   caller-owned recovery after an interruption; they are not loaded
+#'   automatically because a file path alone cannot prove that a checkpoint
+#'   belongs to the current task payload.
+#'
 #' @param qty Integer number of tasks to run.
 #' @param instructions Character base prompt/context text. When `NULL`, the
 #'   agent's stored `context` (if any) is used.
@@ -410,8 +487,9 @@ gen_stats_rm <- function(date = NULL) {
 #' @param agent Optional single `genflow_agent` used for every task. Prefer
 #'   [gen_batch_agent()] when starting from an agent object.
 #' @param workers Maximum number of tasks to execute simultaneously. `NULL`
-#'   preserves automatic detection. An explicit value is capped by `qty`, not
-#'   by the number of CPU cores, because API calls are generally I/O-bound.
+#'   uses automatic detection capped by option `genflow.batch_max_workers`
+#'   (default: 4). An explicit value is capped by `qty`, not by the number of
+#'   CPU cores, because API calls are generally I/O-bound.
 #' @param backend Parallel process backend. `"psock"` (the default) starts
 #'   independent R worker processes and is safe for HTTP clients such as
 #'   `curl`/`httr`. `"fork"` is an explicit Unix-only opt-in for workloads known
@@ -458,31 +536,38 @@ gen_batch <- function(qty = 8,
 
   inicio_geral <- Sys.time()
   if (!requireNamespace("parallel", quietly = TRUE)) stop("Package 'parallel' needed.")
-  if (!is.numeric(qty) || length(qty) != 1L || is.na(qty) || !is.finite(qty) ||
-    qty < 1 || qty != as.integer(qty)) {
-    stop("`qty` must be a positive integer.", call. = FALSE)
-  }
-  qty <- as.integer(qty)
+  qty <- .genflow_positive_integer(qty, "qty")
   if (!is.logical(persist) || length(persist) != 1L || is.na(persist)) {
     stop("`persist` must be TRUE or FALSE.", call. = FALSE)
   }
   if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
     stop("`verbose` must be TRUE or FALSE.", call. = FALSE)
   }
+  if (!is.logical(log) || length(log) != 1L || is.na(log)) {
+    stop("`log` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(always_fix_errors) || length(always_fix_errors) != 1L ||
+    is.na(always_fix_errors)) {
+    stop("`always_fix_errors` must be TRUE or FALSE.", call. = FALSE)
+  }
   if (!is.null(agent) && !inherits(agent, "genflow_agent")) {
     stop("`agent` must be a genflow_agent object.", call. = FALSE)
   }
-  if (is.null(agent) && (is.null(agent_prefix) || length(agent_prefix) != 1L || !nzchar(agent_prefix))) {
+  valid_agent_prefix <- function(value) {
+    is.character(value) &&
+      length(value) == 1L &&
+      !is.na(value) &&
+      nzchar(value)
+  }
+  if (is.null(agent) && !valid_agent_prefix(agent_prefix)) {
     stop("`agent_prefix` is required when `agent` is not supplied.", call. = FALSE)
   }
-  if (!is.null(agent) && (is.null(agent_prefix) || !nzchar(agent_prefix))) {
-    agent_prefix <- .genflow_agent_label(agent) %||% "agent"
+  if (!is.null(agent) && !valid_agent_prefix(agent_prefix)) {
+    agent_label <- .genflow_agent_label(agent)
+    agent_prefix <- if (valid_agent_prefix(agent_label)) agent_label else "agent"
   }
-  agent_prefix <- as.character(agent_prefix)[1]
-  if (!nzchar(agent_prefix)) agent_prefix <- "agent"
-  n_cores <- .genflow_resolve_workers(workers, qty)
+  worker_limit <- .genflow_resolve_workers(workers, qty)
   backend_requested <- match.arg(backend)
-  parallel_backend <- .genflow_resolve_backend(backend_requested, n_cores)
   add_img_each <- .genflow_normalize_each(add_img_each, qty, "add_img_each", paths = TRUE)
   checkpoint_each <- .genflow_normalize_each(checkpoint_each, qty, "checkpoint_each", paths = TRUE)
   if (!is.null(checkpoint_each)) {
@@ -599,7 +684,7 @@ gen_batch <- function(qty = 8,
     stop("Use either `add_img` or `add_img_each`, not both.", call. = FALSE)
   }
   if (verbose) {
-    cat("Preparing to execute", qty, "tasks with prefix '", agent_prefix, "' using", n_cores, "workers.\n")
+    cat("Preparing to execute", qty, "tasks with prefix '", agent_prefix, "' using up to", worker_limit, "workers.\n")
   }
 
   # Input validation for one_item_each
@@ -715,6 +800,17 @@ gen_batch <- function(qty = 8,
     }
   }
 
+  execution_workers <- if (length(indices_to_run) == 0L) {
+    0L
+  } else {
+    min(worker_limit, length(indices_to_run))
+  }
+  parallel_backend <- if (execution_workers == 0L) {
+    "serial"
+  } else {
+    .genflow_resolve_backend(backend_requested, execution_workers)
+  }
+
   # Parallel execution setup
   raw_results <- list()
   cl <- NULL
@@ -724,8 +820,8 @@ gen_batch <- function(qty = 8,
   if (length(indices_to_run) == 0) {
     if (verbose) cat("No pending indices detected; skipping execution and reusing cached results.\n")
   } else if (identical(parallel_backend, "psock")) {
-    if (verbose) cat("Using PSOCK parLapplyLB with", n_cores, "workers...\n")
-    cl <- parallel::makeCluster(n_cores, type = "PSOCK")
+    if (verbose) cat("Using PSOCK parLapplyLB with", execution_workers, "workers...\n")
+    cl <- parallel::makeCluster(execution_workers, type = "PSOCK")
     tryCatch({
       .export_cluster_vars(
         cl = cl,
@@ -763,7 +859,7 @@ gen_batch <- function(qty = 8,
     })
   } else if (identical(parallel_backend, "fork")) {
     if (verbose) {
-      cat("Using", n_cores, "fork workers (explicit opt-in)...\n")
+      cat("Using", execution_workers, "fork workers (explicit opt-in)...\n")
     }
     raw_results <- .genflow_mclapply(indices_to_run, function(i) {
       tryCatch(
@@ -777,7 +873,7 @@ gen_batch <- function(qty = 8,
           structure(paste("Error in worker", i, ":", conditionMessage(e)), class = "try-error")
         }
       )
-    }, workers = n_cores)
+    }, workers = execution_workers)
   } else {
     if (verbose) cat("Using serial worker...\n")
     raw_results <- lapply(indices_to_run, function(i) {
@@ -855,9 +951,9 @@ gen_batch <- function(qty = 8,
   combined_stats <- list(
     duration_real_secs = as.numeric(difftime(final_geral, inicio_geral, units = "secs")),
     duration_sum_secs = sum(single_durations, na.rm = TRUE),
-    cores_number = n_cores,
+    cores_number = execution_workers,
     workers_requested = if (is.null(workers)) NA_integer_ else as.integer(workers),
-    workers_used = n_cores,
+    workers_used = execution_workers,
     backend_requested = backend_requested,
     parallel_mode = parallel_mode,
     valid_results = results_processed$valid_results_count,

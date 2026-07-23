@@ -2,11 +2,23 @@
 
 .genflow_cache_dir <- function() {
   cache_dir <- getOption("genflow.cache_dir")
-  if (is.null(cache_dir) || !nzchar(cache_dir)) {
+  if (is.null(cache_dir)) {
     cache_dir <- tools::R_user_dir("genflow", which = "cache")
+  } else if (!is.character(cache_dir) ||
+      length(cache_dir) != 1L ||
+      is.na(cache_dir) ||
+      !nzchar(trimws(cache_dir))) {
+    stop(
+      "`options(\"genflow.cache_dir\")` must be one non-empty path.",
+      call. = FALSE
+    )
   }
+  cache_dir <- path.expand(cache_dir)
   if (!dir.exists(cache_dir)) {
-    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+    created <- dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+    if (!isTRUE(created) && !dir.exists(cache_dir)) {
+      stop("Could not create genflow cache directory: ", cache_dir, call. = FALSE)
+    }
   }
   cache_dir
 }
@@ -14,34 +26,122 @@
 .genflow_cache_subdir <- function(type) {
   dir_path <- file.path(.genflow_cache_dir(), type)
   if (!dir.exists(dir_path)) {
-    dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
+    created <- dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
+    if (!isTRUE(created) && !dir.exists(dir_path)) {
+      stop("Could not create genflow cache subdirectory: ", dir_path, call. = FALSE)
+    }
   }
   dir_path
 }
 
-.genflow_setup_path <- function(sname) {
-  sanitized <- .sanitize_filename(sname)
-  file.path(.genflow_cache_subdir("setups"), paste0(sanitized, ".rds"))
+.genflow_cache_filename <- function(name) {
+  name <- enc2utf8(as.character(name)[1])
+  prefix <- tolower(gsub("[^A-Za-z0-9._-]+", "_", name, perl = TRUE))
+  prefix <- gsub("^_+|_+$", "", prefix)
+  if (!nzchar(prefix)) {
+    prefix <- "item"
+  }
+  prefix <- substr(prefix, 1L, 60L)
+  digest <- .genflow_raw_md5(charToRaw(name))
+  if (is.null(digest) || !nzchar(digest)) {
+    stop("Could not derive a stable cache key.", call. = FALSE)
+  }
+  paste0(prefix, "--", digest, ".rds")
 }
 
-.genflow_agent_path <- function(name) {
-  sanitized <- .sanitize_filename(name)
-  file.path(.genflow_cache_subdir("agents"), paste0(sanitized, ".rds"))
+.genflow_legacy_entity_path <- function(type, name) {
+  file.path(
+    .genflow_cache_subdir(type),
+    paste0(.sanitize_filename(name), ".rds")
+  )
 }
 
-.genflow_content_path <- function(cname) {
-  sanitized <- .sanitize_filename(cname)
-  file.path(.genflow_cache_subdir("content"), paste0(sanitized, ".rds"))
+.genflow_entity_stored_name <- function(path, type) {
+  value <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (is.null(value)) {
+    return(NULL)
+  }
+  field <- switch(
+    type,
+    setups = "sname",
+    agents = "name",
+    content = "cname",
+    stop("Unsupported cache entity type.", call. = FALSE)
+  )
+  stored <- value[[field]]
+  if (is.null(stored) || length(stored) != 1L || is.na(stored)) {
+    return(NULL)
+  }
+  as.character(stored)
+}
+
+.genflow_entity_path <- function(type, name, existing = FALSE) {
+  current <- file.path(
+    .genflow_cache_subdir(type),
+    .genflow_cache_filename(name)
+  )
+  if (!isTRUE(existing) || file.exists(current)) {
+    return(current)
+  }
+  legacy <- .genflow_legacy_entity_path(type, name)
+  if (
+    file.exists(legacy) &&
+    identical(.genflow_entity_stored_name(legacy, type), as.character(name)[1])
+  ) {
+    return(legacy)
+  }
+  current
+}
+
+.genflow_setup_path <- function(sname, existing = FALSE) {
+  .genflow_entity_path("setups", sname, existing)
+}
+
+.genflow_agent_path <- function(name, existing = FALSE) {
+  .genflow_entity_path("agents", name, existing)
+}
+
+.genflow_content_path <- function(cname, existing = FALSE) {
+  .genflow_entity_path("content", cname, existing)
+}
+
+.genflow_save_entity <- function(object, type, name, overwrite) {
+  existing_path <- .genflow_entity_path(type, name, existing = TRUE)
+  target_path <- .genflow_entity_path(type, name, existing = FALSE)
+  if (!isTRUE(overwrite) && file.exists(existing_path)) {
+    return(list(saved = FALSE, path = existing_path))
+  }
+  .genflow_atomic_save_rds(object, target_path)
+  if (
+    file.exists(existing_path) &&
+    !identical(
+      normalizePath(existing_path, winslash = "/", mustWork = FALSE),
+      normalizePath(target_path, winslash = "/", mustWork = FALSE)
+    )
+  ) {
+    if (!file.remove(existing_path)) {
+      warning(
+        "Saved the migrated cache entry but could not remove legacy file ",
+        existing_path,
+        ".",
+        call. = FALSE
+      )
+    }
+  }
+  list(saved = TRUE, path = target_path)
 }
 
 .genflow_validate_name <- function(name, what) {
   if (missing(name) || is.null(name)) {
     stop(sprintf("You must provide a name for the %s.", what), call. = FALSE)
   }
-  if (!is.character(name) || length(name) != 1 || !nzchar(name)) {
+  if (!is.character(name) ||
+      length(name) != 1L ||
+      is.na(name) ||
+      !nzchar(trimws(name))) {
     stop(sprintf("The %s name must be a non-empty character string.", what), call. = FALSE)
   }
-  name
+  trimws(name)
 }
 
 .genflow_drop_null <- function(x) {
@@ -56,7 +156,107 @@
     name <- sub("\\.rds$", "", basename(path))
     stop(sprintf("No cached %s named '%s' was found.", what, name), call. = FALSE)
   }
-  readRDS(path)
+  value <- tryCatch(
+    readRDS(path),
+    error = function(e) {
+      stop(
+        "Could not read cached ", what, " from ", path, ": ",
+        conditionMessage(e),
+        call. = FALSE
+      )
+    }
+  )
+  if (!is.list(value)) {
+    stop("Cached ", what, " has an invalid schema: ", path, call. = FALSE)
+  }
+  value
+}
+
+.genflow_agent_references <- function(field, value) {
+  if (!field %in% c("sname", "cname")) {
+    stop("Unsupported agent reference field: ", field, call. = FALSE)
+  }
+  dir_path <- .genflow_cache_subdir("agents")
+  paths <- list.files(dir_path, pattern = "\\.rds$", full.names = TRUE)
+  if (!length(paths)) {
+    return(list())
+  }
+
+  references <- list()
+  for (path in paths) {
+    agent <- tryCatch(
+      readRDS(path),
+      error = function(e) {
+        stop(
+          "Could not inspect saved agent ", basename(path), ": ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+    reference <- agent[[field]]
+    if (
+      !is.null(reference) &&
+      length(reference) == 1L &&
+      !is.na(reference) &&
+      identical(as.character(reference), as.character(value))
+    ) {
+      name <- as.character(agent$name %||%
+        sub("\\.rds$", "", basename(path)))[1]
+      references[[name]] <- list(path = path, agent = agent)
+    }
+  }
+  references
+}
+
+.genflow_retarget_agent_references <- function(field, from, to = NULL) {
+  references <- .genflow_agent_references(field, from)
+  if (!length(references)) {
+    return(character())
+  }
+
+  updated <- character()
+  tryCatch(
+    {
+      for (name in names(references)) {
+        agent <- references[[name]]$agent
+        if (is.null(to)) {
+          agent[[field]] <- NULL
+        } else {
+          agent[[field]] <- as.character(to)[1]
+        }
+        .genflow_atomic_save_rds(agent, references[[name]]$path)
+        updated <- c(updated, name)
+      }
+    },
+    error = function(e) {
+      for (name in updated) {
+        try(
+          .genflow_atomic_save_rds(
+            references[[name]]$agent,
+            references[[name]]$path
+          ),
+          silent = TRUE
+        )
+      }
+      stop(
+        "Could not update dependent agent references: ",
+        conditionMessage(e),
+        call. = FALSE
+      )
+    }
+  )
+  updated
+}
+
+.genflow_reference_error <- function(resource, name, references) {
+  agents <- names(references)
+  paste0(
+    "Cannot delete ", resource, " '", name, "' because it is referenced by ",
+    length(agents), " saved agent", if (length(agents) == 1L) "" else "s",
+    ": ", paste(agents, collapse = ", "),
+    ". Update those agents first or use `force = TRUE`."
+  )
 }
 
 .genflow_collapse_value <- function(x, max_chars = 40) {
@@ -146,11 +346,10 @@ set_setup <- function(sname,
   ))
 
   if (isTRUE(save)) {
-    path <- .genflow_setup_path(sname)
-    if (!overwrite && file.exists(path)) {
+    saved <- .genflow_save_entity(setup, "setups", sname, overwrite)
+    if (!isTRUE(saved$saved)) {
       stop(sprintf("A setup named '%s' already exists. Set overwrite = TRUE to replace it.", sname), call. = FALSE)
     }
-    saveRDS(setup, path)
   }
 
   if (isTRUE(assign)) {
@@ -167,10 +366,13 @@ set_setup <- function(sname,
 #' @param envir Target environment for assignment.
 #'
 #' @return Setup list.
-#' @export
+  #' @export
 get_setup <- function(sname, assign = FALSE, envir = .GlobalEnv) {
   sname <- .genflow_validate_name(sname, "setup")
-  setup <- .genflow_load_object(.genflow_setup_path(sname), "setup")
+  setup <- .genflow_load_object(
+    .genflow_setup_path(sname, existing = TRUE),
+    "setup"
+  )
   setup$sname <- setup$sname %||% sname
   if (isTRUE(assign)) {
     assign(setup$sname, setup, envir = envir)
@@ -181,38 +383,62 @@ get_setup <- function(sname, assign = FALSE, envir = .GlobalEnv) {
 #' Rename a cached setup
 #' @param from Current setup name.
 #' @param to New setup name.
+#' @param update_agents Update saved agents that reference the setup.
 #' @return Invisible TRUE when renamed.
 #' @export
-mv_setup <- function(from, to) {
+mv_setup <- function(from, to, update_agents = TRUE) {
   from <- .genflow_validate_name(from, "setup")
   to <- .genflow_validate_name(to, "setup")
-  old_path <- .genflow_setup_path(from)
+  old_path <- .genflow_setup_path(from, existing = TRUE)
   new_path <- .genflow_setup_path(to)
   if (!file.exists(old_path)) {
     stop(sprintf("No cached setup named '%s' was found.", from), call. = FALSE)
   }
-  if (file.exists(new_path)) {
+  if (file.exists(.genflow_setup_path(to, existing = TRUE))) {
     stop(sprintf("A setup named '%s' already exists.", to), call. = FALSE)
   }
   setup <- readRDS(old_path)
   setup$sname <- to
-  saveRDS(setup, new_path)
-  file.remove(old_path)
+  .genflow_atomic_save_rds(setup, new_path)
+  if (isTRUE(update_agents)) {
+    tryCatch(
+      .genflow_retarget_agent_references("sname", from, to),
+      error = function(e) {
+        unlink(new_path)
+        stop(conditionMessage(e), call. = FALSE)
+      }
+    )
+  }
+  if (!file.remove(old_path)) {
+    stop("Could not remove the old setup file after renaming.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
 #' Delete a cached setup
 #' @param sname Setup identifier.
+#' @param force Delete even when saved agents reference the setup. Referencing
+#'   agents keep their flattened runtime fields, but the stale `sname` metadata
+#'   is removed.
 #' @return Invisible TRUE when removed.
 #' @export
-rm_setup <- function(sname) {
+rm_setup <- function(sname, force = FALSE) {
   sname <- .genflow_validate_name(sname, "setup")
-  path <- .genflow_setup_path(sname)
+  path <- .genflow_setup_path(sname, existing = TRUE)
   if (!file.exists(path)) {
     warning(sprintf("No cached setup named '%s' was found.", sname), call. = FALSE)
     return(invisible(FALSE))
   }
-  file.remove(path)
+  references <- .genflow_agent_references("sname", sname)
+  if (length(references) && !isTRUE(force)) {
+    stop(.genflow_reference_error("setup", sname, references), call. = FALSE)
+  }
+  if (length(references)) {
+    .genflow_retarget_agent_references("sname", sname, to = NULL)
+  }
+  if (!file.remove(path)) {
+    stop("Could not delete setup '", sname, "'.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
@@ -227,7 +453,7 @@ list_setups <- function() {
     return(character())
   }
   vapply(files, function(path) {
-    setup <- readRDS(path)
+    setup <- .genflow_load_object(path, "setup")
     sname <- setup$sname %||% sub("\\.rds$", "", basename(path))
     summary <- .genflow_drop_null(list(
       if (!is.null(setup$service)) sprintf("service=%s", setup$service) else NULL,
@@ -267,11 +493,15 @@ set_content <- function(cname,
   content <- list(...)
 
   if (isTRUE(save)) {
-    path <- .genflow_content_path(cname)
-    if (!overwrite && file.exists(path)) {
+    saved <- .genflow_save_entity(
+      list(cname = cname, data = content),
+      "content",
+      cname,
+      overwrite
+    )
+    if (!isTRUE(saved$saved)) {
       stop(sprintf("Content named '%s' already exists. Set overwrite = TRUE to replace it.", cname), call. = FALSE)
     }
-    saveRDS(list(cname = cname, data = content), path)
   }
 
   if (isTRUE(assign)) {
@@ -291,7 +521,10 @@ set_content <- function(cname,
 #' @export
 get_content <- function(cname, assign = FALSE, envir = .GlobalEnv) {
   cname <- .genflow_validate_name(cname, "content")
-  payload <- .genflow_load_object(.genflow_content_path(cname), "content")
+  payload <- .genflow_load_object(
+    .genflow_content_path(cname, existing = TRUE),
+    "content"
+  )
   if (isTRUE(assign)) {
     assign(payload$cname, payload$data, envir = envir)
   }
@@ -301,38 +534,62 @@ get_content <- function(cname, assign = FALSE, envir = .GlobalEnv) {
 #' Rename cached content
 #' @param from Current content name.
 #' @param to New content name.
+#' @param update_agents Update saved agents that reference the content.
 #' @return Invisible TRUE when renamed.
 #' @export
-mv_content <- function(from, to) {
+mv_content <- function(from, to, update_agents = TRUE) {
   from <- .genflow_validate_name(from, "content")
   to <- .genflow_validate_name(to, "content")
-  old_path <- .genflow_content_path(from)
+  old_path <- .genflow_content_path(from, existing = TRUE)
   new_path <- .genflow_content_path(to)
   if (!file.exists(old_path)) {
     stop(sprintf("No cached content named '%s' was found.", from), call. = FALSE)
   }
-  if (file.exists(new_path)) {
+  if (file.exists(.genflow_content_path(to, existing = TRUE))) {
     stop(sprintf("Content named '%s' already exists.", to), call. = FALSE)
   }
   payload <- readRDS(old_path)
   payload$cname <- to
-  saveRDS(payload, new_path)
-  file.remove(old_path)
+  .genflow_atomic_save_rds(payload, new_path)
+  if (isTRUE(update_agents)) {
+    tryCatch(
+      .genflow_retarget_agent_references("cname", from, to),
+      error = function(e) {
+        unlink(new_path)
+        stop(conditionMessage(e), call. = FALSE)
+      }
+    )
+  }
+  if (!file.remove(old_path)) {
+    stop("Could not remove the old content file after renaming.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
 #' Delete cached content
 #' @param cname Content identifier.
+#' @param force Delete even when saved agents reference the content. Referencing
+#'   agents keep their flattened runtime fields, but the stale `cname` metadata
+#'   is removed.
 #' @return Invisible TRUE when removed.
 #' @export
-rm_content <- function(cname) {
+rm_content <- function(cname, force = FALSE) {
   cname <- .genflow_validate_name(cname, "content")
-  path <- .genflow_content_path(cname)
+  path <- .genflow_content_path(cname, existing = TRUE)
   if (!file.exists(path)) {
     warning(sprintf("No cached content named '%s' was found.", cname), call. = FALSE)
     return(invisible(FALSE))
   }
-  file.remove(path)
+  references <- .genflow_agent_references("cname", cname)
+  if (length(references) && !isTRUE(force)) {
+    stop(.genflow_reference_error("content", cname, references), call. = FALSE)
+  }
+  if (length(references)) {
+    .genflow_retarget_agent_references("cname", cname, to = NULL)
+  }
+  if (!file.remove(path)) {
+    stop("Could not delete content '", cname, "'.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
@@ -347,7 +604,10 @@ list_content <- function() {
     return(character())
   }
   vapply(files, function(path) {
-    payload <- readRDS(path)
+    payload <- .genflow_load_object(path, "content")
+    if (is.null(payload$data) || !is.list(payload$data)) {
+      stop("Cached content has an invalid schema: ", path, call. = FALSE)
+    }
     cname <- payload$cname %||% sub("\\.rds$", "", basename(path))
     if (length(payload$data) == 0) {
       summary <- "empty"
@@ -461,11 +721,10 @@ set_agent <- function(name,
   class(agent) <- unique(c("genflow_agent", class(agent)))
 
   if (isTRUE(save)) {
-    path <- .genflow_agent_path(name)
-    if (!overwrite && file.exists(path)) {
+    saved <- .genflow_save_entity(agent, "agents", name, overwrite)
+    if (!isTRUE(saved$saved)) {
       stop(sprintf("An agent named '%s' already exists. Set overwrite = TRUE to replace it.", name), call. = FALSE)
     }
-    saveRDS(agent, path)
   }
 
   if (isTRUE(assign)) {
@@ -485,7 +744,10 @@ set_agent <- function(name,
 #' @export
 get_agent <- function(name, assign = FALSE, envir = .GlobalEnv) {
   name <- .genflow_validate_name(name, "agent")
-  agent <- .genflow_load_object(.genflow_agent_path(name), "agent")
+  agent <- .genflow_load_object(
+    .genflow_agent_path(name, existing = TRUE),
+    "agent"
+  )
   agent$name <- agent$name %||% name
   if (!inherits(agent, "genflow_agent")) {
     class(agent) <- unique(c("genflow_agent", class(agent)))
@@ -504,18 +766,21 @@ get_agent <- function(name, assign = FALSE, envir = .GlobalEnv) {
 mv_agent <- function(from, to) {
   from <- .genflow_validate_name(from, "agent")
   to <- .genflow_validate_name(to, "agent")
-  old_path <- .genflow_agent_path(from)
+  old_path <- .genflow_agent_path(from, existing = TRUE)
   new_path <- .genflow_agent_path(to)
   if (!file.exists(old_path)) {
     stop(sprintf("No cached agent named '%s' was found.", from), call. = FALSE)
   }
-  if (file.exists(new_path)) {
+  if (file.exists(.genflow_agent_path(to, existing = TRUE))) {
     stop(sprintf("An agent named '%s' already exists.", to), call. = FALSE)
   }
-  agent <- readRDS(old_path)
+  agent <- .genflow_load_object(old_path, "agent")
   agent$name <- to
-  saveRDS(agent, new_path)
-  file.remove(old_path)
+  .genflow_atomic_save_rds(agent, new_path)
+  if (!file.remove(old_path)) {
+    unlink(new_path, force = TRUE)
+    stop("Could not remove the old agent file after renaming.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
@@ -525,12 +790,14 @@ mv_agent <- function(from, to) {
 #' @export
 rm_agent <- function(name) {
   name <- .genflow_validate_name(name, "agent")
-  path <- .genflow_agent_path(name)
+  path <- .genflow_agent_path(name, existing = TRUE)
   if (!file.exists(path)) {
     warning(sprintf("No cached agent named '%s' was found.", name), call. = FALSE)
     return(invisible(FALSE))
   }
-  file.remove(path)
+  if (!file.remove(path)) {
+    stop("Could not delete agent '", name, "'.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
@@ -545,7 +812,7 @@ list_agents <- function() {
     return(character())
   }
   vapply(files, function(path) {
-    agent <- readRDS(path)
+    agent <- .genflow_load_object(path, "agent")
     name <- agent$name %||% sub("\\.rds$", "", basename(path))
     summary <- .genflow_drop_null(list(
       if (!is.null(agent$service)) sprintf("service=%s", agent$service) else NULL,

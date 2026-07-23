@@ -13,6 +13,7 @@ gen_stats_rm(date = NULL)
 Invisibly returns TRUE if deletion occurred, FALSE otherwise.
 }
 \description{
-Deletes one day's log file or all logs from
-\code{tools::R_user_dir("genflow", which = "data")}.
+Deletes one day's log file or all logs from the directory set by option
+\code{genflow.log_dir}, or from
+\code{tools::R_user_dir("genflow", which = "data")} when the option is unset.
 }

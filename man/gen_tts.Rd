@@ -44,7 +44,9 @@ gen_tts(text, ...)
 \item{voice}{Optional voice identifier supported by the provider. If NULL,
 the first available voice is selected automatically.}
 
-\item{format}{Output audio format. Defaults to "mp3".}
+\item{format}{Requested output audio format. Defaults to \code{"mp3"}. Providers
+may return another audio container; the saved filename and returned
+\code{format} always describe the detected bytes instead of the request label.}
 
 \item{speed}{Numeric speech speed (0.25 to 4.0). Defaults to 1.}
 
@@ -57,11 +59,23 @@ the first available voice is selected automatically.}
 \value{
 Invisibly returns a list with \code{response_value} (saved file path),
 \code{status_api}, \code{status_msg}, \code{service}, \code{model}, \code{duration}, \code{saved_file},
-and metadata such as \code{voice}, \code{format}.
+and metadata such as \code{voice}, detected \code{format}, \code{requested_format}, and
+canonical \code{mime_type}. The existing \code{content_type = "audio"} category is
+preserved.
 }
 \description{
 High-level text-to-speech (TTS) wrapper that dispatches to provider-specific
 implementations (currently OpenAI and Replicate). Returns the saved audio file path.
+}
+\details{
+Replicate model metadata is fetched at most once per \code{gen_tts()}
+call and reused for voice validation plus prediction construction.
+Provider temporaries are removed after the final file is copied, including
+error paths.
+
+For a \code{genflow_agent}, a saved \code{context} is used as speech text when
+the agent has no explicit \code{text}. Supply \code{text_override} through \code{...} to
+replace the saved text for one call.
 }
 \examples{
 # Minimal example (requires OpenAI API key)

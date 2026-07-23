@@ -16,19 +16,31 @@
 
 #' Default base directory for genflow outputs (internal)
 #'
-#' @return Path to ~/.genflow
+#' The location can be overridden with `options(genflow.output_dir = ...)` or
+#' `GENFLOW_OUTPUT_DIR`.
+#'
+#' @return Path to the configured genflow output directory.
 #' @keywords internal
 #' @noRd
 .genflow_base_dir <- function() {
-  base <- path.expand("~/.genflow")
-  if (!dir.exists(base)) dir.create(base, recursive = TRUE, showWarnings = FALSE)
+  base <- getOption("genflow.output_dir", NULL)
+  if (is.null(base) || !is.character(base) || length(base) != 1L ||
+      is.na(base) || !nzchar(trimws(base))) {
+    base <- Sys.getenv("GENFLOW_OUTPUT_DIR", unset = "")
+  }
+  if (!nzchar(trimws(base))) base <- "~/.genflow"
+  base <- path.expand(base)
+  if (!dir.exists(base) &&
+      !dir.create(base, recursive = TRUE, showWarnings = FALSE)) {
+    stop("Could not create genflow output directory: ", base, call. = FALSE)
+  }
   base
 }
 
 #' Default output directory by type (internal)
 #'
 #' @param kind Optional subdirectory name (e.g., "texts", "imgs", "audios").
-#' @return Path to ~/.genflow[/kind]
+#' @return Path below the configured genflow output directory.
 #' @keywords internal
 #' @noRd
 .genflow_default_dir <- function(kind = NULL) {
@@ -38,19 +50,8 @@
   if (!dir.exists(out)) dir.create(out, recursive = TRUE, showWarnings = FALSE)
   out
 }
-#' Fallback infix operator: x %||% y (internal)
-#'
-#' Returns `x` if not NULL, otherwise returns `y`.
-#'
-#' @param a Any R object.
-#' @param b Any R object to return when `a` is NULL.
-#' @return `a` if not NULL, otherwise `b`.
-#' @keywords internal
-#' @noRd
-`%||%` <- function(a, b) {
-  if (!is.null(a)) a else b
-}
 .batch_cache_env <- new.env(parent = emptyenv())
+
 .batch_cache_make_key <- function(agent_prefix,
                                  qty,
                                  instructions,
@@ -88,16 +89,19 @@
   if (is.null(raw_payload) || length(raw_payload) == 0) {
     return(NULL)
   }
-  hex_string <- paste(sprintf("%02x", as.integer(raw_payload)), collapse = "")
-  checksum <- sum(as.double(as.integer(raw_payload)) * seq_along(raw_payload))
-  checksum <- sprintf("%08x", as.integer(abs(checksum) %% 2^31))
+  checksum <- .genflow_raw_md5(raw_payload)
+  if (is.null(checksum) || !nzchar(checksum)) {
+    return(NULL)
+  }
   prefix_clean <- sanitize_prefix(agent_prefix)
-  max_body_len <- 2000L
-  key_body <- if (nchar(hex_string) > max_body_len) substr(hex_string, 1, max_body_len) else hex_string
-  paste0("batch_", prefix_clean, "_", key_body, "_", checksum)
+  paste0("batch_", prefix_clean, "_", checksum)
 }
 
-.genflow_atomic_save_rds <- function(object, path) {
+.genflow_atomic_save_rds <- function(object,
+                                     path,
+                                     save_fn = saveRDS,
+                                     rename_fn = file.rename,
+                                     portable_replace = identical(.Platform$OS.type, "windows")) {
   if (is.null(path) || length(path) != 1L || is.na(path) || !nzchar(path)) {
     return(invisible(FALSE))
   }
@@ -105,15 +109,68 @@
   if (!dir.exists(parent)) {
     dir.create(parent, recursive = TRUE, showWarnings = FALSE)
   }
-  tmp <- tempfile(pattern = paste0(".", basename(path), "."), tmpdir = parent)
-  on.exit(if (file.exists(tmp)) unlink(tmp), add = TRUE)
-  saveRDS(object, tmp)
-  if (file.exists(path)) unlink(path)
-  if (!file.rename(tmp, path)) {
-    if (!file.copy(tmp, path, overwrite = TRUE)) {
-      stop("Could not save task checkpoint: ", path, call. = FALSE)
+  if (!dir.exists(parent)) {
+    stop("Could not create the directory for an RDS file.", call. = FALSE)
+  }
+
+  staging <- .genflow_unique_sidecar_path(path, "staging", ".tmp")
+  on.exit(if (file.exists(staging)) unlink(staging, force = TRUE), add = TRUE)
+  wrote <- tryCatch({
+    save_fn(object, staging)
+    file.exists(staging) && isTRUE(file.info(staging)$size[[1]] > 0)
+  }, error = function(e) FALSE)
+  if (!isTRUE(wrote)) {
+    stop("Could not write the RDS staging file.", call. = FALSE)
+  }
+  .genflow_set_private_file_mode(staging)
+
+  target_exists <- file.exists(path)
+  if (!target_exists || !isTRUE(portable_replace)) {
+    replaced <- tryCatch(
+      rename_fn(staging, path),
+      error = function(e) FALSE
+    )
+    if (!isTRUE(replaced)) {
+      stop("Could not atomically replace the RDS file.", call. = FALSE)
     }
-    unlink(tmp)
+    .genflow_set_private_file_mode(path)
+    return(invisible(TRUE))
+  }
+
+  rollback <- .genflow_unique_sidecar_path(path, "rollback", ".tmp")
+  moved_original <- tryCatch(
+    rename_fn(path, rollback),
+    error = function(e) FALSE
+  )
+  if (!isTRUE(moved_original)) {
+    stop("Could not prepare a recoverable RDS replacement.", call. = FALSE)
+  }
+  .genflow_set_private_file_mode(rollback)
+
+  replaced <- tryCatch(
+    rename_fn(staging, path),
+    error = function(e) FALSE
+  )
+  if (!isTRUE(replaced)) {
+    restored <- tryCatch(
+      rename_fn(rollback, path),
+      error = function(e) FALSE
+    )
+    if (isTRUE(restored)) {
+      .genflow_set_private_file_mode(path)
+      stop("Could not replace the RDS file; the original was restored.", call. = FALSE)
+    }
+    stop(
+      "Could not replace the RDS file; the original remains in private recovery file ",
+      rollback,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  .genflow_set_private_file_mode(path)
+  if (file.exists(rollback)) {
+    unlink(rollback, force = TRUE)
   }
   invisible(TRUE)
 }
@@ -128,6 +185,24 @@
     return(invisible(FALSE))
   }
   assign(key, value, envir = .batch_cache_env)
+  max_entries <- suppressWarnings(as.integer(
+    getOption("genflow.batch_cache_max_entries", 32L)
+  )[1])
+  if (is.na(max_entries) || max_entries < 1L) {
+    max_entries <- 32L
+  }
+  keys <- ls(envir = .batch_cache_env, all.names = TRUE)
+  if (length(keys) > max_entries) {
+    timestamps <- vapply(keys, function(cache_key) {
+      entry <- get(cache_key, envir = .batch_cache_env, inherits = FALSE)
+      timestamp <- entry$timestamp %||% as.POSIXct(NA)
+      numeric <- suppressWarnings(as.numeric(timestamp)[1])
+      if (is.na(numeric)) -Inf else numeric
+    }, numeric(1))
+    remove_count <- length(keys) - max_entries
+    remove_keys <- keys[order(timestamps, keys)][seq_len(remove_count)]
+    rm(list = remove_keys, envir = .batch_cache_env)
+  }
   invisible(TRUE)
 }
 .batch_cache_clear <- function(key) {
@@ -147,8 +222,16 @@
 #' @keywords internal
 #' @noRd
 .encode_image <- function(image_path) {
-  if (!file.exists(image_path)) {
-    stop("Image file not found!")
+  if (!is.character(image_path) || length(image_path) != 1L ||
+      is.na(image_path) || !nzchar(image_path) || !file.exists(image_path) ||
+      isTRUE(file.info(image_path)$isdir)) {
+    stop("`image_path` must point to one readable image file.", call. = FALSE)
+  }
+  if (!requireNamespace("base64enc", quietly = TRUE)) {
+    stop(
+      "Package 'base64enc' is required for inline image inputs.",
+      call. = FALSE
+    )
   }
   image_data <- readBin(image_path, "raw", file.info(image_path)$size)
   base64enc::base64encode(image_data)
@@ -199,7 +282,13 @@
                            tokens_sent,
                            tokens_received) {
   # --- Generate the filename ---
-  data_hora <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  data_hora <- paste0(
+    gsub("[^0-9]", "", format(Sys.time(), "%Y%m%d_%H%M%OS6")),
+    "_p",
+    Sys.getpid(),
+    "_",
+    sprintf("%06d", sample.int(999999L, 1L))
+  )
 
   # Determine a sanitized label to use in filenames. Prefer the provided
   # `label_cat` (already sanitized by callers). If not provided, derive from
@@ -306,9 +395,8 @@
     error = function(e) TRUE
   )
   if (isTRUE(should_persist)) {
-    try(
-      {
-        .persist_stats_row(list(
+    tryCatch(
+      .persist_stats_row(list(
           label      = label_cat %||% label %||% NA_character_,
           model      = model %||% NA_character_,
           temp       = temp %||% NA_real_,
@@ -316,9 +404,14 @@
           tks_envia  = tokens_sent %||% NA_real_,
           tks_recebe = tokens_received %||% NA_real_,
           status_api = status %||% "UNKNOWN"
-        ))
-      },
-      silent = TRUE
+      )),
+      error = function(e) {
+        warning(
+          "The response was generated, but its statistics could not be persisted: ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
     )
   }
 
@@ -358,15 +451,88 @@
 
 #' Get persistent log directory (internal)
 #'
-#' Uses tools::R_user_dir("genflow", which = "data"). Ensures directory exists.
+#' Uses option `genflow.log_dir` when set, otherwise
+#' tools::R_user_dir("genflow", which = "data").
+#'
+#' @param create Logical; create the directory when it does not exist.
 #' @keywords internal
 #' @noRd
-.get_log_dir <- function() {
-  dir <- tools::R_user_dir("genflow", which = "data")
-  if (!dir.exists(dir)) {
-    dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+.get_log_dir <- function(create = TRUE) {
+  override <- getOption("genflow.log_dir", NULL)
+  if (is.null(override)) {
+    directory <- tools::R_user_dir("genflow", which = "data")
+  } else {
+    if (!is.character(override) || length(override) != 1L ||
+        is.na(override) || !nzchar(trimws(override))) {
+      stop("Option `genflow.log_dir` must be one non-empty path.", call. = FALSE)
+    }
+    directory <- path.expand(override)
   }
-  dir
+
+  if (isTRUE(create) && !dir.exists(directory)) {
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (isTRUE(create) && !dir.exists(directory)) {
+    stop("Could not create the genflow statistics directory.", call. = FALSE)
+  }
+  directory
+}
+
+.genflow_stats_columns <- function() {
+  c("label", "model", "temp", "duration", "tks_envia", "tks_recebe", "status_api")
+}
+
+.genflow_empty_stats <- function() {
+  data.frame(
+    label = character(),
+    model = character(),
+    temp = numeric(),
+    duration = numeric(),
+    tks_envia = numeric(),
+    tks_recebe = numeric(),
+    status_api = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+.genflow_normalize_stats_frame <- function(value,
+                                           keep_extra = FALSE,
+                                           allow_empty = FALSE) {
+  if (is.list(value) && !is.data.frame(value)) {
+    value <- tryCatch(
+      as.data.frame(value, stringsAsFactors = FALSE),
+      error = function(e) NULL
+    )
+  }
+  if (!is.data.frame(value) || anyDuplicated(names(value)) ||
+      (!isTRUE(allow_empty) && !nrow(value))) {
+    return(NULL)
+  }
+
+  expected <- .genflow_stats_columns()
+  for (nm in setdiff(expected, names(value))) {
+    value[[nm]] <- NA
+  }
+  extras <- if (isTRUE(keep_extra)) setdiff(names(value), expected) else character()
+  value <- value[, c(expected, extras), drop = FALSE]
+  value$label <- as.character(value$label)
+  value$model <- as.character(value$model)
+  value$temp <- suppressWarnings(as.numeric(value$temp))
+  value$duration <- suppressWarnings(as.numeric(value$duration))
+  value$tks_envia <- suppressWarnings(as.numeric(value$tks_envia))
+  value$tks_recebe <- suppressWarnings(as.numeric(value$tks_recebe))
+  value$status_api <- as.character(value$status_api)
+  value
+}
+
+.genflow_acquire_stats_lock <- function(file_path) {
+  .genflow_acquire_file_lock(
+    file_path,
+    timeout = getOption("genflow.stats_lock_timeout", 10),
+    poll = getOption("genflow.stats_lock_poll", 0.05),
+    stale_after = getOption("genflow.stats_lock_stale_after", 300),
+    lock_label = "statistics file"
+  )
 }
 
 #' Append a single stats row to today's RDS (internal)
@@ -375,69 +541,60 @@
 #' label, model, temp, duration, tks_envia, tks_recebe, status_api
 #' @keywords internal
 #' @noRd
-.persist_stats_row <- function(row) {
-  # Normalize input to one-row data.frame with expected columns
-  expected_cols <- c("label", "model", "temp", "duration", "tks_envia", "tks_recebe", "status_api")
-  if (is.list(row) && !is.data.frame(row)) row <- as.data.frame(row, stringsAsFactors = FALSE)
-  if (!is.data.frame(row)) {
+.persist_stats_row <- function(row,
+                               write_fn = .genflow_atomic_save_rds,
+                               date = Sys.Date()) {
+  row <- .genflow_normalize_stats_frame(row)
+  if (is.null(row)) {
     return(invisible(FALSE))
   }
-  # Keep only expected columns, fill missing with NA
-  for (nm in expected_cols) if (!nm %in% names(row)) row[[nm]] <- NA
-  row <- row[, expected_cols, drop = FALSE]
-
-  # Coerce types
-  row$label <- as.character(row$label)
-  row$model <- as.character(row$model)
-  row$temp <- suppressWarnings(as.numeric(row$temp))
-  row$duration <- suppressWarnings(as.numeric(row$duration))
-  row$tks_envia <- suppressWarnings(as.numeric(row$tks_envia))
-  row$tks_recebe <- suppressWarnings(as.numeric(row$tks_recebe))
-  row$status_api <- as.character(row$status_api)
-
-  log_dir <- .get_log_dir()
-  file_path <- file.path(log_dir, paste0(format(Sys.Date(), "%Y%m%d"), ".rds"))
-
-  # Basic retry mechanism in case of transient file access issues
-  attempt <- 1
-  max_attempts <- 3
-  repeat {
-    ok <- TRUE
-    df <- NULL
-    if (file.exists(file_path)) {
-      df <- tryCatch(readRDS(file_path), error = function(e) {
-        ok <<- FALSE
-        NULL
-      })
-      if (!ok || !is.data.frame(df)) {
-        # Reset if corrupted/unexpected
-        df <- data.frame(
-          label = character(0), model = character(0), temp = numeric(0), duration = numeric(0),
-          tks_envia = numeric(0), tks_recebe = numeric(0), status_api = character(0),
-          stringsAsFactors = FALSE
-        )
-        ok <- TRUE
-      }
-      # Align columns
-      for (nm in setdiff(names(row), names(df))) df[[nm]] <- NA
-      for (nm in setdiff(names(df), names(row))) row[[nm]] <- NA
-      df <- rbind(df[, names(row), drop = FALSE], row)
-    } else {
-      df <- row
-    }
-
-    # Try to write
-    write_ok <- TRUE
-    tryCatch(saveRDS(df, file_path), error = function(e) {
-      write_ok <<- FALSE
-    })
-    if (write_ok) break
-
-    attempt <- attempt + 1
-    if (attempt > max_attempts) break
-    Sys.sleep(runif(1, 0.05, 0.2))
+  if (!inherits(date, "Date") || length(date) != 1L || is.na(date)) {
+    stop("Statistics date must be one valid Date.", call. = FALSE)
   }
 
+  log_dir <- .get_log_dir()
+  file_path <- file.path(log_dir, paste0(format(date, "%Y%m%d"), ".rds"))
+  lock <- .genflow_acquire_stats_lock(file_path)
+  on.exit(.genflow_release_file_lock(lock), add = TRUE)
+
+  existing <- .genflow_empty_stats()
+  if (file.exists(file_path)) {
+    existing <- tryCatch(
+      readRDS(file_path),
+      error = function(e) {
+        stop(
+          "Existing statistics log is unreadable; it was left unchanged.",
+          call. = FALSE
+        )
+      }
+    )
+    if (!is.data.frame(existing)) {
+      stop(
+        "Existing statistics log has an invalid schema; it was left unchanged.",
+        call. = FALSE
+      )
+    }
+    existing <- .genflow_normalize_stats_frame(
+      existing,
+      keep_extra = TRUE,
+      allow_empty = TRUE
+    )
+    if (is.null(existing)) {
+      stop(
+        "Existing statistics log has an invalid schema; it was left unchanged.",
+        call. = FALSE
+      )
+    }
+  }
+
+  for (nm in setdiff(names(existing), names(row))) {
+    row[[nm]] <- NA
+  }
+  combined <- rbind(existing, row[, names(existing), drop = FALSE])
+  committed <- write_fn(combined, file_path)
+  if (!isTRUE(committed) || !file.exists(file_path)) {
+    stop("Statistics log was not committed.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
@@ -448,10 +605,10 @@
   if (!is.list(results_list)) {
     return(invisible(FALSE))
   }
-  for (i in seq_along(results_list)) {
+  rows <- lapply(seq_along(results_list), function(i) {
     item <- results_list[[i]]
     if (is.list(item) && !is.null(item$status_api)) {
-      .persist_stats_row(list(
+      return(list(
         label      = item$label %||% NA_character_,
         model      = item$model %||% NA_character_,
         temp       = item$temp %||% NA_real_,
@@ -461,125 +618,19 @@
         status_api = item$status_api %||% "UNKNOWN"
       ))
     }
+    NULL
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) {
+    return(invisible(FALSE))
   }
-  invisible(TRUE)
+  rows <- do.call(
+    rbind,
+    lapply(rows, as.data.frame, stringsAsFactors = FALSE)
+  )
+  .persist_stats_row(rows)
 }
 
-#' Select agent configuration from CSV (internal)
-#'
-#' @param key Key/index to select in the CSV.
-#' @param type Type/category (e.g., Chat, Image).
-#' @param temperature Default temperature if not specified.
-#' @param config_dir Directory containing `models_*.csv` files.
-#' @return List with service/model/temperature/type.
-#' @keywords internal
-#' @noRd
-.select_agent <- function(key, type, temperature = 0.7, config_dir = "agent_configs") {
-  # --- Input validations ---
-  if (missing(key) || missing(type)) {
-    stop("The 'key' and 'type' arguments are required.")
-  }
-  if (!is.character(type) || length(type) != 1 || !nzchar(trimws(type))) {
-    type_arg_name <- deparse(substitute(type))
-    stop(paste0(
-      "Argument 'type' must be a non-empty string (e.g., \"Chat\", \"Image\"). ",
-      "Received: ", type_arg_name
-    ))
-  }
-  type <- trimws(type) # Remove leading/trailing spaces
-
-  if (!is.numeric(temperature) || length(temperature) != 1 || temperature < 0) {
-    warning("Invalid 'temperature' argument (must be a number >= 0). Using default 0.7.")
-    temperature <- 0.7
-  }
-  # --- End of validations ---
-
-  # --- Construct the file name ---
-  type_lower <- tolower(type) # Convert to lowercase (e.g., "chat", "models_chat")
-
-  # Check if the type already starts with "models_"
-  if (startsWith(type_lower, "models_")) {
-    # Use the provided base name directly (after lowercasing)
-    file_base_name <- type_lower
-    # print(paste0("Info: 'type' ('", type, "') already formatted. Using base '", file_base_name, "'.")) # optional message
-  } else {
-    # build the base name by prefixing "models_" (e.g., "models_chat")
-    file_base_name <- paste0("models_", type_lower)
-  }
-
-  file_name <- paste0(file_base_name, ".csv") # Add .csv extension
-
-  # Clean the directory path (remove unnecessary trailing slashes)
-  config_dir_clean <- sub("/+$", "", config_dir)
-
-  # Build the full path using file.path
-  file_path <- file.path(config_dir_clean, file_name)
-
-  # print(paste("Attempting to locate configuration file:", file_path)) # Show which file is being searched
-  # --- End of file name construction ---
-
-
-  # Check if the directory exists
-  if (!dir.exists(config_dir_clean)) {
-    stop(paste("Configuration directory not found:", config_dir_clean))
-  }
-
-  # Check if the CSV file exists
-  if (!file.exists(file_path)) {
-    stop(paste(
-      "Configuration file not found:", file_path,
-      "\nCheck if directory '", config_dir_clean,
-      "' contains file '", file_name,
-      "' and whether the 'type' argument ('", type, "') is correct."
-    ))
-  }
-
-  # Try to read o file CSV
-  config_data <- tryCatch(
-    {
-      utils::read.csv(file_path, stringsAsFactors = FALSE, header = TRUE, check.names = FALSE)
-    },
-    error = function(e) {
-      stop(paste("Error reading CSV file:", file_path, "-", e$message))
-    }
-  )
-
-  # Check if the required columns exist
-  required_cols <- c("Key", "Service", "Model")
-  if (!all(required_cols %in% colnames(config_data))) {
-    stop(paste("CSV file", file_path, "does not contain required columns:", paste(required_cols, collapse = ", ")))
-  }
-
-  # Find the row corresponding to the key
-  # Try to convert the 'Key' column to the same type as the input 'key' for robust comparison
-  # (Assumes that 'key' is numeric; adjust if it can be a string)
-  match_row_index <- which(as.character(config_data$Key) == as.character(key))
-
-  # Check if the key was found
-  if (length(match_row_index) == 0) {
-    stop(paste("Key", key, "not found in file:", file_path))
-  }
-
-  # Check if more than one key was found (indicates a CSV issue)
-  if (length(match_row_index) > 1) {
-    warning(paste("Multiple entries found for Key", key, "in file:", file_path, ". Using the first occurrence."))
-    match_row_index <- match_row_index[1] # Use only the index of the first occurrence
-  }
-
-  # Extract data from the matched row
-  service_value <- config_data$Service[match_row_index]
-  model_value <- config_data$Model[match_row_index]
-
-  # Build and return the result list
-  result <- list(
-    service = service_value,
-    model = model_value,
-    temperature = temperature,
-    type = type
-  )
-
-  return(result)
-}
 #' Detect agent suffix style (internal)
 #'
 #' Checks whether agent variables exist as alphabetic (a,b,...) or numeric (1,2,...)
@@ -917,9 +968,10 @@
 
       # --- 2. Determine Agent Type ---
       if (!tipo_agente %in% c("chat", "vision", "image")) {
-        warning(paste0("Agent type '", tipo_agente_raw, "' not recognized for '", label_agente, "'. Treating as 'Chat'."))
-        logs_internos <- c(logs_internos, paste0("  -> Agent type not recognized '", tipo_agente_raw, "', using fallback 'Chat'.\n"))
-        tipo_agente <- "chat" # Safe fallback (lowercase for comparisons)
+        stop(
+          "Agent type '", tipo_agente_raw, "' is not supported for '",
+          label_agente, "'. Choose Chat, Vision, or Image."
+        )
       } else {
         logs_internos <- c(logs_internos, paste0("  -> Agent type set: '", tipo_agente_raw, "'\n"))
       }
@@ -1047,7 +1099,7 @@
                   error = function(e) {
                     err_msg <- paste0("[ERROR: Could not read the TXT file ", file_log_preview, " - ", conditionMessage(e), "]")
                     logs_internos <<- c(logs_internos, paste0("           -> ERROR to read TXT: ", err_msg, "\n"))
-                    return(err_msg) # Return error message as text content
+                    stop(err_msg)
                   }
                 )
               } else if (extensao == "csv") {
@@ -1061,17 +1113,13 @@
                   error = function(e) {
                     err_msg <- paste0("[ERROR: Could not read the CSV file ", file_log_preview, " - ", conditionMessage(e), "]")
                     logs_internos <<- c(logs_internos, paste0("           -> ERROR to read CSV: ", err_msg, "\n"))
-                    return(err_msg) # Return error message as text content
+                    stop(err_msg)
                   }
                 )
               } else {
-                # Unsupported file type - return error message as text content
                 err_msg <- paste0("[ERROR: Unsupported file format in 'add' (item ", idx, "): '", file_log_preview, "' (extension .", extensao, "). Use .txt or .csv.]")
                 logs_internos <<- c(logs_internos, paste0("           -> ", err_msg, "\n"))
-                # Returning an error string here allows the worker to continue processing other items
-                # This error will be visible in the final prompt text passed to the LLM
-                return(err_msg)
-                # Old processar_add would stop here: stop(error_msg) # This would stop the worker entirely
+                stop(err_msg)
               }
             } else {
               # It's not a file path, convert the R object to string

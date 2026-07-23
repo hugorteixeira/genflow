@@ -21,7 +21,9 @@
 .genflow_prepare_agent_args <- function(agent,
                                         overrides,
                                         target_formals,
-                                        required = character()) {
+                                        required = character(),
+                                        override_aliases = character(),
+                                        override_label = "agent") {
 
   args <- .genflow_agent_clean_fields(agent)
   args <- .genflow_drop_null(args)
@@ -29,7 +31,59 @@
   recognized <- intersect(names(args), names(target_formals))
   base_args <- args[recognized]
 
-  overrides <- overrides[names(overrides) %in% names(target_formals)]
+  if (length(overrides)) {
+    override_names <- names(overrides)
+    if (is.null(override_names)) {
+      override_names <- rep("", length(overrides))
+    }
+    if (any(!nzchar(override_names))) {
+      stop("All agent overrides must be named.", call. = FALSE)
+    }
+    if (anyDuplicated(override_names)) {
+      duplicate <- unique(override_names[duplicated(override_names)])
+      stop(
+        "Agent override supplied more than once: ",
+        paste(duplicate, collapse = ", "),
+        call. = FALSE
+      )
+    }
+
+    if (length(override_aliases)) {
+      if (is.null(names(override_aliases)) ||
+          any(!nzchar(names(override_aliases))) ||
+          any(!nzchar(override_aliases))) {
+        stop("Internal error: invalid agent override aliases.", call. = FALSE)
+      }
+      for (alias in intersect(override_names, names(override_aliases))) {
+        target <- unname(override_aliases[[alias]])
+        if (target %in% override_names) {
+          stop(
+            "Supply only one of `", alias, "` and `", target, "`.",
+            call. = FALSE
+          )
+        }
+        names(overrides)[names(overrides) == alias] <- target
+      }
+      override_names <- names(overrides)
+    }
+
+    supported <- setdiff(names(target_formals), "...")
+    unsupported <- setdiff(override_names, supported)
+    if (length(unsupported)) {
+      label <- if (identical(override_label, "agent")) {
+        "agent"
+      } else {
+        paste0("`", override_label, "`")
+      }
+      stop(
+        "Unsupported ", label, " override(s): ",
+        paste(unsupported, collapse = ", "),
+        ".",
+        call. = FALSE
+      )
+    }
+  }
+
   combined <- modifyList(base_args, overrides)
 
   if (length(required) > 0) {
@@ -91,11 +145,7 @@ gen_batch_agent <- function(agent,
     stop("`agent` must be a genflow_agent object.", call. = FALSE)
   }
 
-  if (!is.numeric(qty) || length(qty) != 1L || is.na(qty) || !is.finite(qty) ||
-    qty < 1 || qty != as.integer(qty)) {
-    stop("`qty` must be a positive integer.", call. = FALSE)
-  }
-  qty_int <- as.integer(qty)
+  qty_int <- .genflow_positive_integer(qty, "qty")
 
   prefix <- agent_prefix %||% agent$name %||% agent$sname %||% "agent"
 

@@ -68,7 +68,8 @@
     .genflow_credential_spec_row("hyperbolic", "Hyperbolic", "HYPERBOLIC_API_KEY", "API key", required_for_models = TRUE),
     .genflow_credential_spec_row("hyperbolic", "Hyperbolic", "HYPERBOLIC_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.hyperbolic.xyz"),
 
-    .genflow_credential_spec_row("gemini", "Gemini", "GEMINI_API_KEY", "API key", required_for_models = TRUE),
+    .genflow_credential_spec_row("gemini", "Gemini", "GOOGLE_API_KEY", "Google API key", required_for_models = TRUE, required_group = "gemini_api_key"),
+    .genflow_credential_spec_row("gemini", "Gemini", "GEMINI_API_KEY", "Gemini API key alias", required_for_models = TRUE, required_group = "gemini_api_key"),
     .genflow_credential_spec_row("fal", "FAL", "FAL_API_KEY", "API key", required_for_models = TRUE),
     .genflow_credential_spec_row("replicate", "Replicate", "REPLICATE_API_TOKEN", "API token", "api_token", TRUE, TRUE),
 
@@ -98,29 +99,6 @@
     },
     error = function(e) list()
   )
-  if (length(custom_cfgs)) {
-    custom_rows <- list()
-    for (id in names(custom_cfgs)) {
-      cfg <- custom_cfgs[[id]]
-      provider_id <- tolower(trimws(as.character(.genflow_cred_or(cfg$id, id))[1]))
-      provider_label <- trimws(as.character(.genflow_cred_or(cfg$label, provider_id))[1])
-      api_key_env <- trimws(as.character(.genflow_cred_or(cfg$api_key_env, ""))[1])
-      if (nzchar(api_key_env)) {
-        custom_rows[[length(custom_rows) + 1L]] <- .genflow_credential_spec_row(
-          provider_id,
-          provider_label,
-          api_key_env,
-          "API key",
-          required_for_models = isTRUE(cfg$api_key_required),
-          required_group = paste0(provider_id, "_api_key")
-        )
-      }
-    }
-    if (length(custom_rows)) {
-      specs <- rbind(specs, do.call(rbind, custom_rows))
-    }
-  }
-
   specs <- unique(specs)
   if (!is.null(providers)) {
     providers <- tolower(trimws(as.character(providers)))
@@ -432,15 +410,366 @@
   encodeString(value, quote = "\"")
 }
 
+.genflow_set_private_file_mode <- function(path) {
+  if (!file.exists(path)) {
+    stop("Cannot secure a file that does not exist.", call. = FALSE)
+  }
+  secured <- tryCatch(
+    Sys.chmod(path, mode = "0600", use_umask = FALSE),
+    error = function(e) FALSE
+  )
+  if (!identical(.Platform$OS.type, "windows") &&
+      (!length(secured) || !all(secured))) {
+    stop("Failed to set private permissions on a file.", call. = FALSE)
+  }
+  invisible(isTRUE(all(secured)))
+}
+
+.genflow_unique_sidecar_path <- function(path, tag, extension = "") {
+  stamp <- format(Sys.time(), "%Y%m%d%H%M%OS6", tz = "UTC")
+  stamp <- gsub("[^0-9]", "", stamp)
+  prefix <- paste0(path, ".", stamp, "-", Sys.getpid(), "-", tag)
+  for (idx in 0:9999) {
+    candidate <- paste0(prefix, "-", sprintf("%04d", idx), extension)
+    if (!file.exists(candidate) && !dir.exists(candidate)) {
+      return(candidate)
+    }
+  }
+  stop("Could not allocate a unique file sidecar path.", call. = FALSE)
+}
+
+.genflow_private_copy_file <- function(from, to) {
+  if (!file.exists(from)) {
+    stop("Cannot copy a credential file that does not exist.", call. = FALSE)
+  }
+  created <- file.create(to, showWarnings = FALSE)
+  if (!isTRUE(created)) {
+    stop("Failed to create a private credential copy.", call. = FALSE)
+  }
+  complete <- FALSE
+  on.exit({
+    if (!isTRUE(complete) && file.exists(to)) {
+      unlink(to, force = TRUE)
+    }
+  }, add = TRUE)
+  .genflow_set_private_file_mode(to)
+
+  input <- NULL
+  output <- NULL
+  copied <- tryCatch({
+    input <- file(from, open = "rb")
+    output <- file(to, open = "wb")
+    repeat {
+      chunk <- readBin(input, what = "raw", n = 65536L)
+      if (!length(chunk)) {
+        break
+      }
+      writeBin(chunk, output)
+    }
+    close(output)
+    output <- NULL
+    close(input)
+    input <- NULL
+    TRUE
+  }, error = function(e) FALSE)
+  if (!is.null(output)) {
+    try(close(output), silent = TRUE)
+  }
+  if (!is.null(input)) {
+    try(close(input), silent = TRUE)
+  }
+  if (!isTRUE(copied)) {
+    stop("Failed to create a private credential copy.", call. = FALSE)
+  }
+  .genflow_set_private_file_mode(to)
+  complete <- TRUE
+  invisible(to)
+}
+
+.genflow_file_lock_path <- function(path) {
+  paste0(path, ".genflow.lock")
+}
+
+.genflow_lock_number <- function(value, default, minimum = 0, allow_infinite = FALSE) {
+  value <- .genflow_cred_or(value, default)
+  if (!length(value)) {
+    value <- default
+  }
+  value <- suppressWarnings(as.numeric(value[[1]]))
+  valid <- length(value) == 1L && !is.na(value) && value >= minimum
+  if (!isTRUE(allow_infinite)) {
+    valid <- valid && is.finite(value)
+  }
+  if (!valid) {
+    stop("Invalid file lock timing configuration.", call. = FALSE)
+  }
+  value
+}
+
+.genflow_acquire_file_lock <- function(path,
+                                       timeout = 10,
+                                       poll = 0.05,
+                                       stale_after = 300,
+                                       lock_label = "file") {
+  if (!is.character(lock_label) || length(lock_label) != 1L ||
+      is.na(lock_label) || !nzchar(trimws(lock_label))) {
+    stop("File lock label must be one non-empty string.", call. = FALSE)
+  }
+  timeout <- .genflow_lock_number(
+    timeout,
+    10,
+    minimum = 0
+  )
+  poll <- .genflow_lock_number(
+    poll,
+    0.05,
+    minimum = 0.001
+  )
+  stale_after <- .genflow_lock_number(
+    stale_after,
+    300,
+    minimum = 0,
+    allow_infinite = TRUE
+  )
+
+  lock_path <- .genflow_file_lock_path(path)
+  dir.create(dirname(lock_path), recursive = TRUE, showWarnings = FALSE)
+  started <- Sys.time()
+
+  repeat {
+    acquired <- dir.create(
+      lock_path,
+      showWarnings = FALSE,
+      recursive = FALSE,
+      mode = "0700"
+    )
+    if (isTRUE(acquired)) {
+      token <- paste(
+        Sys.getpid(),
+        format(Sys.time(), "%Y%m%d%H%M%OS6", tz = "UTC"),
+        sep = "-"
+      )
+      owner_path <- file.path(lock_path, "owner")
+      owner_ready <- tryCatch({
+        if (!isTRUE(file.create(owner_path, showWarnings = FALSE))) {
+          stop("owner file")
+        }
+        .genflow_set_private_file_mode(owner_path)
+        writeLines(
+          c(
+            paste0("token=", token),
+            paste0("pid=", Sys.getpid()),
+            paste0("created_utc=", format(Sys.time(), "%Y-%m-%dT%H:%M:%OS6Z", tz = "UTC"))
+          ),
+          owner_path,
+          useBytes = TRUE
+        )
+        .genflow_set_private_file_mode(owner_path)
+        TRUE
+      }, error = function(e) FALSE)
+      if (!isTRUE(owner_ready)) {
+        unlink(lock_path, recursive = TRUE, force = TRUE)
+        stop("Failed to initialize the ", lock_label, " lock.", call. = FALSE)
+      }
+      return(structure(
+        list(path = lock_path, token = token),
+        class = "genflow_file_lock"
+      ))
+    }
+
+    if (dir.exists(lock_path) && is.finite(stale_after)) {
+      lock_info <- file.info(lock_path)
+      lock_age <- suppressWarnings(as.numeric(
+        difftime(Sys.time(), lock_info$mtime[[1]], units = "secs")
+      ))
+      if (length(lock_age) && !is.na(lock_age) && lock_age >= stale_after) {
+        stale_path <- .genflow_unique_sidecar_path(lock_path, "stale")
+        moved <- file.rename(lock_path, stale_path)
+        if (isTRUE(moved)) {
+          unlink(stale_path, recursive = TRUE, force = TRUE)
+          next
+        }
+      }
+    }
+
+    elapsed <- as.numeric(difftime(Sys.time(), started, units = "secs"))
+    if (!is.finite(elapsed) || elapsed >= timeout) {
+      stop("Timed out acquiring the ", lock_label, " lock.", call. = FALSE)
+    }
+    Sys.sleep(min(poll, max(0, timeout - elapsed)))
+  }
+}
+
+.genflow_release_file_lock <- function(lock) {
+  if (is.null(lock) || !inherits(lock, "genflow_file_lock")) {
+    return(invisible(FALSE))
+  }
+  lock_path <- as.character(.genflow_cred_or(lock$path, ""))[[1]]
+  token <- as.character(.genflow_cred_or(lock$token, ""))[[1]]
+  if (!nzchar(lock_path) || !dir.exists(lock_path)) {
+    return(invisible(FALSE))
+  }
+
+  owner_path <- file.path(lock_path, "owner")
+  owner <- tryCatch(readLines(owner_path, warn = FALSE), error = function(e) character())
+  expected <- paste0("token=", token)
+  if (!length(owner) || !identical(owner[[1]], expected)) {
+    return(invisible(FALSE))
+  }
+  invisible(isTRUE(unlink(lock_path, recursive = TRUE, force = TRUE) == 0L))
+}
+
+.genflow_acquire_credentials_lock <- function(path,
+                                               timeout = NULL,
+                                               poll = NULL,
+                                               stale_after = NULL) {
+  lock <- .genflow_acquire_file_lock(
+    path,
+    timeout = .genflow_cred_or(
+      timeout,
+      getOption("genflow.credentials_lock_timeout", 10)
+    ),
+    poll = .genflow_cred_or(
+      poll,
+      getOption("genflow.credentials_lock_poll", 0.05)
+    ),
+    stale_after = .genflow_cred_or(
+      stale_after,
+      getOption("genflow.credentials_lock_stale_after", 300)
+    ),
+    lock_label = "credential file"
+  )
+  class(lock) <- c("genflow_credentials_lock", class(lock))
+  lock
+}
+
+.genflow_release_credentials_lock <- function(lock) {
+  .genflow_release_file_lock(lock)
+}
+
+.genflow_atomic_write_lines <- function(lines,
+                                        path,
+                                        write_fn = writeLines,
+                                        rename_fn = file.rename,
+                                        portable_replace = identical(.Platform$OS.type, "windows")) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(dirname(path))) {
+    stop("Failed to create the credential directory.", call. = FALSE)
+  }
+
+  staging <- .genflow_unique_sidecar_path(path, "staging", ".tmp")
+  if (!isTRUE(file.create(staging, showWarnings = FALSE))) {
+    stop("Failed to create a credential staging file.", call. = FALSE)
+  }
+  on.exit({
+    if (file.exists(staging)) {
+      unlink(staging, force = TRUE)
+    }
+  }, add = TRUE)
+  .genflow_set_private_file_mode(staging)
+
+  wrote <- tryCatch({
+    write_fn(as.character(lines), staging, useBytes = TRUE)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!isTRUE(wrote)) {
+    stop("Failed to write the credential staging file.", call. = FALSE)
+  }
+  .genflow_set_private_file_mode(staging)
+
+  target_exists <- file.exists(path)
+  if (!target_exists || !isTRUE(portable_replace)) {
+    replaced <- tryCatch(
+      rename_fn(staging, path),
+      error = function(e) FALSE
+    )
+    if (!isTRUE(replaced)) {
+      stop("Failed to atomically replace the credential file.", call. = FALSE)
+    }
+    .genflow_set_private_file_mode(path)
+    return(invisible(path))
+  }
+
+  rollback <- .genflow_unique_sidecar_path(path, "rollback", ".tmp")
+  moved_original <- tryCatch(
+    rename_fn(path, rollback),
+    error = function(e) FALSE
+  )
+  if (!isTRUE(moved_original)) {
+    stop("Failed to prepare a recoverable credential file replacement.", call. = FALSE)
+  }
+  .genflow_set_private_file_mode(rollback)
+
+  replaced <- tryCatch(
+    rename_fn(staging, path),
+    error = function(e) FALSE
+  )
+  if (!isTRUE(replaced)) {
+    restored <- tryCatch(
+      rename_fn(rollback, path),
+      error = function(e) FALSE
+    )
+    if (isTRUE(restored)) {
+      stop("Failed to replace the credential file; the original was restored.", call. = FALSE)
+    }
+    stop(
+      "Failed to replace the credential file; the original remains in private recovery file ",
+      rollback,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  .genflow_set_private_file_mode(path)
+  if (file.exists(rollback)) {
+    unlink(rollback, force = TRUE)
+  }
+  invisible(path)
+}
+
+.genflow_recover_credentials_file <- function(path) {
+  if (file.exists(path)) {
+    return(invisible(""))
+  }
+  directory <- dirname(path)
+  if (!dir.exists(directory)) {
+    return(invisible(""))
+  }
+
+  sidecars <- list.files(
+    directory,
+    all.files = TRUE,
+    no.. = TRUE,
+    full.names = TRUE
+  )
+  sidecar_names <- basename(sidecars)
+  prefix <- paste0(basename(path), ".")
+  rollback <- sidecars[
+    startsWith(sidecar_names, prefix) &
+      grepl("-rollback-[0-9]{4}\\.tmp$", sidecar_names, perl = TRUE)
+  ]
+  if (!length(rollback)) {
+    return(invisible(""))
+  }
+
+  info <- file.info(rollback)
+  rollback <- rollback[order(info$mtime, decreasing = TRUE, na.last = TRUE)]
+  recovery_path <- rollback[[1]]
+  .genflow_set_private_file_mode(recovery_path)
+  restored <- file.rename(recovery_path, path)
+  if (!isTRUE(restored)) {
+    stop("An interrupted credential update could not be restored.", call. = FALSE)
+  }
+  .genflow_set_private_file_mode(path)
+  invisible(recovery_path)
+}
+
 .genflow_backup_file <- function(path) {
   if (!file.exists(path)) {
     return("")
   }
-  backup <- paste0(path, ".", format(Sys.time(), "%Y%m%d%H%M%S"), ".bak")
-  ok <- file.copy(path, backup, overwrite = FALSE)
-  if (!isTRUE(ok)) {
-    stop("Failed to back up ", path, call. = FALSE)
-  }
+  backup <- .genflow_unique_sidecar_path(path, "backup", ".bak")
+  .genflow_private_copy_file(path, backup)
   backup
 }
 
@@ -465,6 +794,9 @@
 
   target <- .genflow_credentials_path(path)
   dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
+  lock <- .genflow_acquire_credentials_lock(target)
+  on.exit(.genflow_release_credentials_lock(lock), add = TRUE)
+  .genflow_recover_credentials_file(target)
   lines <- if (file.exists(target)) readLines(target, warn = FALSE) else character()
   backup_path <- if (isTRUE(backup)) .genflow_backup_file(target) else ""
   added <- character()
@@ -485,7 +817,7 @@
       added <- c(added, env)
     }
   }
-  writeLines(lines, target, useBytes = TRUE)
+  .genflow_atomic_write_lines(lines, target)
   if (isTRUE(set_session)) {
     args <- as.list(values)
     do.call(Sys.setenv, args)
@@ -513,6 +845,10 @@
   }
 
   target <- .genflow_credentials_path(path)
+  dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
+  lock <- .genflow_acquire_credentials_lock(target)
+  on.exit(.genflow_release_credentials_lock(lock), add = TRUE)
+  .genflow_recover_credentials_file(target)
   lines <- if (file.exists(target)) readLines(target, warn = FALSE) else character()
   backup_path <- if (isTRUE(backup)) .genflow_backup_file(target) else ""
   removed <- character()
@@ -528,8 +864,7 @@
     }
     lines <- lines[keep]
   }
-  dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
-  writeLines(lines, target, useBytes = TRUE)
+  .genflow_atomic_write_lines(lines, target)
   if (isTRUE(unset_session)) {
     Sys.unsetenv(vars)
   }

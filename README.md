@@ -1,401 +1,488 @@
-# 🌊 genflow - AI Generation Toolkit for R
+# genflow
 
-[![Project Status: Active – The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![Lifecycle: Experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
-[![R](https://img.shields.io/badge/R-%E2%89%A54.5-blue)](https://www.r-project.org/)
+[![R](https://img.shields.io/badge/R-%E2%89%A54.1-blue)](https://www.r-project.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-<!-- badges: end -->
 
-> **Easy generative AI inference for R**: genflow transforms your R workflows with seamless integration to the world's most powerful AI models. Generate text, images, and multimedia with unparalleled ease.
+genflow provides one R interface for cloud and local generative-AI workflows.
+It normalizes provider responses, persists reusable agents, runs resumable
+batches, maintains model catalogs, and includes a Shiny/RStudio management app.
 
-Dive into AI-powered R programming with **genflow** — an intuitive, powerful toolkit that connects R with leading AI providers including OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, and FAL, and now supports **local inference** with **Ollama** and **llama-cpp**.
+Current runtime surfaces:
 
-## ✨ Why genflow?
+- `gen_txt()`: cloud providers plus local Ollama and llama.cpp servers.
+- `gen_img()`: OpenAI, Hugging Face Inference Providers, Replicate, and FAL.
+- `gen_stt()`: cloud transcription, local Hugging Face/Transformers models,
+  native STT engines, and OpenAI-compatible local STT servers.
+- `gen_tts()`: OpenAI and Replicate.
 
-- 🚀 **Fast Integration**: Connect to multiple AI providers in seconds, not hours
-- 🎯 **Intentional Design**: Built specifically for R workflows and data science pipelines
-- 🌐 **Popular Provider Support**: OpenAI, OpenRouter, Anthropic, Groq, Cerebras, Together, SambaNova, Nebius, DeepSeek, Perplexity, Fireworks, DeepInfra, Hyperbolic, Hugging Face, Replicate, FAL, and more
-- 🏠 **Local AI Mode**: Run `gen_txt()` against Ollama and llama-cpp on your own machine
-- 📝 **Multi-Modal Inference**: Text generation, image creation, audio processing, and beyond
-- ⚡ **Optimized Performance**: Batch processing and parallel execution for faster tasks
-- 📊 **Smart Analytics**: Built-in tracking, logging, and performance metrics
-- 🔄 **Easy Model Updates**: Automatic model discovery and management
-- 👁️ **Integrated Viewer**: Built-in visualization for all generated content
-- 🧠 **Reusable Agents**: Define setups, content, and agents once, then reuse them across sessions with a single pipe
+The package is experimental. Provider APIs and individual model schemas can
+change independently of genflow, so production workflows should pin models,
+use focused smoke tests, and inspect structured `status_api`/`status_msg`
+results.
 
-## 🚀 Getting Started
-
-### Installation
+## Installation
 
 ```r
-# Install the development version from GitHub
-# install.packages("devtools")
-devtools::install_github("hugorteixeira/genflow")
+# install.packages("pak")
+pak::pak("hugorteixeira/genflow")
 ```
 
-### Setup Provider Credentials (Cloud + Local)
+## First call
 
-The RStudio addin can manage provider credentials from the **Models >
-Credentials** panel:
+Put cloud credentials in environment variables, not in scripts:
+
+```text
+OPENAI_API_KEY=...
+GOOGLE_API_KEY=...       # or GEMINI_API_KEY
+HUGGINGFACE_API_TOKEN=...
+REPLICATE_API_TOKEN=...
+FAL_KEY=...
+```
+
+The app can manage supported credentials in the user `.Renviron`:
 
 ```r
+library(genflow)
 gen_interface()
 ```
 
-Use that panel to add, edit, import, or delete API keys. It writes credentials
-to your user `.Renviron`, loads them into the current R session immediately, and
-backs up the existing `.Renviron` before changing it. The import action scans
-the current R session, user `.Renviron`, project `.Renviron`, project `.env`,
-`~/.bashrc`, and `~/.zshrc` for simple `KEY=value` assignments and shows masked
-values before importing. Base URL fields show genflow's built-in defaults when
-available; save them only if you want to override the default endpoint.
+Use **Models > Credentials** to add, import, or remove credentials. Writes are
+locked, backed up, privately permissioned on Unix-like systems, and atomically
+replaced. Secrets are not stored in agents, model catalogs, local-inference
+configuration, or exported bundles. See
+[the credential and catalog workflow](inst/doc/credential-and-model-catalog-workflow.md).
 
-You can still configure credentials manually in `.Renviron`:
+Generate text:
 
 ```r
-# Add to your .Renviron file
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Local provider: Ollama
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-
-# Local provider: llama-cpp
-LLAMACPP_BASE_URL=http://127.0.0.1:8080
-LLAMACPP_API_KEY=optional_token_here
-```
-
-You can edit `.Renviron` manually by running:
-
-```r
-usethis::edit_r_environ()
-```
-
-After manual edits, restart your R session or call `readRenviron("~/.Renviron")`
-for the changes to take effect.
-
-The credentials panel does not manage model choices or `*_MODEL` variables.
-Set the credential first, update the provider catalog, then choose the model in
-the setup/agent controls. See `docs/credential-and-model-catalog-workflow.md`
-for the detailed workflow.
-
-### Setup OpenAI-compatible Providers (Optional)
-
-You can configure custom OpenAI-compatible providers directly in the RStudio
-addin.
-
-In the `genflow` addin, the **Models** tab now includes a **Custom providers**
-panel where you can add, edit, remove, and test OpenAI-compatible providers
-(including a live connection/model-list check).
-
-## 💡 Examples
-
-### Text Generation
-
-```r
-library(genflow)
-
-# Transform complex concepts into clear explanations
 result <- gen_txt(
-  context = "Explain quantum computing like I'm dumb as a potato",
+  context = "Explain why reproducible backtests need point-in-time data.",
   service = "openai",
-  model = "gpt-5",
-  reasoning = "high"
+  model = "gpt-5-mini",
+  reasoning = "medium"
 )
 
-# Instantly visualize your results
-gen_view(result)
+result$status_api
+result$response_value
 ```
 
-### Text Generation (Local Inference: Ollama or llama-cpp)
+High-level generators return a structured list containing at least:
+
+- `response_value`
+- `service`
+- `model`
+- `duration`
+- `status_api` (`"SUCCESS"` or `"ERROR"`)
+- `status_msg`
+
+Text results also include token estimates. Media results include a saved path
+on success.
+
+Generated files default to subdirectories of `~/.genflow`. Override the root
+without changing every call:
 
 ```r
-library(genflow)
+options(genflow.output_dir = "/absolute/path/to/genflow-output")
+```
 
-# Ollama
-local_ollama <- gen_txt(
-  context = "Tell me a ultra nasty joke to irritate the most people possible.",
+`GENFLOW_OUTPUT_DIR` provides the equivalent environment override.
+
+See [Architecture and runtime contract](inst/doc/architecture-and-runtime-contract.md)
+for the active provider matrix, persistence boundaries, and provider-extension
+checklist.
+
+## Model catalogs
+
+Refresh one or more catalogs explicitly:
+
+```r
+gen_update_models(
+  provider = c("openai", "hf", "hf-local"),
+  fail_on_error = TRUE
+)
+
+gen_show_models(provider = "hf", type = "Chat")
+gen_show_models(provider = "hf-local", type = "Audio")
+```
+
+The two Hugging Face catalogs have intentionally different contracts:
+
+- `hf.csv` contains models with a live Hugging Face Inference Provider mapping.
+- `hf-local.csv` contains Hub models suitable for local discovery, including
+  ASR and audio-to-text candidates that are not hosted by an Inference
+  Provider.
+
+This prevents the UI from presenting a local-only model as if `service = "hf"`
+could call it remotely. The model
+`OpenMOSS-Team/MOSS-Transcribe-Diarize`, for example, belongs in the local
+catalog.
+
+Gemini model discovery and text generation accept `GOOGLE_API_KEY` first and
+`GEMINI_API_KEY` as its compatibility alias. The catalog follows all model-list
+pages; the runtime uses the same model ids through `gen_txt(service =
+"gemini")`.
+
+Catalog refreshes are provider-specific network operations. With
+`fail_on_error = TRUE`, genflow attempts the requested updates and then reports
+every failure instead of presenting a false success.
+
+## Local text inference
+
+Ollama:
+
+```r
+ollama_result <- gen_txt(
+  "Summarize this release note in five bullets.",
   service = "ollama",
   model = "llama3.2"
 )
+```
 
-# llama-cpp - accepts "llamacpp", "llama-cpp", or "llama_cpp"
-local_llamacpp <- gen_txt(
-  context = "Rewrite this as if you are Ricky Gervais in a stand-up.",
+llama.cpp's OpenAI-compatible server:
+
+```r
+llamacpp_result <- gen_txt(
+  "Draft a concise incident report.",
   service = "llamacpp",
   model = "local-model"
 )
-
-gen_view(local_ollama, local_llamacpp)
 ```
 
-Both local providers are supported for local inference workflows.
+Default endpoints are `http://127.0.0.1:11434` for Ollama and
+`http://127.0.0.1:8080` for llama.cpp. Configure them in **Local inference**,
+with `gen_local_config()`, or through `OLLAMA_*` and
+`LLAMACPP_*` environment variables.
 
-### Image Generation
+genflow talks to these servers; it does not install or supervise them.
+The app keeps Ollama, llama.cpp, Hugging Face STT, native STT, and compatible
+STT servers in separate sub-tabs. Saving applies the complete configuration;
+**Check adapter** diagnoses only the currently selected adapter.
+
+## Local speech-to-text
+
+`service = "hf-local"` starts an isolated Python subprocess for each
+transcription. Its default is the generic Transformers ASR pipeline with
+`openai/whisper-large-v3-turbo`; `openai/whisper-tiny` is a smaller first-run
+smoke test. A dedicated `OpenMOSS-Team/MOSS-Transcribe-Diarize` adapter remains
+available as an advanced profile with additional dependencies.
 
 ```r
-# Bring your ideas to visual life
-image_result <- gen_img(
-  prompt = "An image of existence if existence didn't exist and even thinking about existence would make it exist.",
-  service = "hf",  # Hugging Face
-  model = "black-forest-labs/FLUX.1-schnell",
+gen_local_config(
+  python = "/absolute/path/to/stt-venv/bin/python",
+  hf_cache_dir = "/absolute/path/to/huggingface-cache",
+  hf_stt_model = "openai/whisper-large-v3-turbo",
+  hf_stt_profile = "transformers",
+  device = "cpu",
+  dtype = "auto"
+)
+
+gen_local_diagnostics(
+  adapters = "hf-local",
+  check_endpoints = FALSE
+)
+
+transcript <- gen_stt(
+  "meeting.wav",
+  service = "hf-local",
+  timeout_api = 1800
+)
+
+transcript$response_value
+transcript$metadata
+```
+
+To avoid Python, `service = "local-native"` invokes an external native STT
+engine. The experimental CrispASR integration is the broader option: it
+supports multiple ASR architectures and chooses a model-specific backend.
+`moss-transcribe` remains available as a MOSS-specific engine. A Vulkan build
+is independent of the PyTorch accelerator setting. Configure the compiled
+file under the CMake build directory, not the CrispASR source directory:
+
+```r
+gen_local_config(
+  stt_native_engine = "crispasr",
+  stt_native_executable =
+    "/absolute/path/to/CrispASR/build-vulkan/bin/crispasr",
+  stt_native_model = paste0(
+    "hf://cstr/granite-speech-4.1-2b-GGUF/",
+    "granite-speech-4.1-2b-q4_k.gguf"
+  ),
+  stt_native_backend = "granite-4.1",
+  stt_native_device = "vulkan"
+)
+
+gen_local_diagnostics(
+  adapters = "local-native",
+  check_endpoints = FALSE
+)
+
+native_transcript <- gen_stt(
+  "meeting.wav",
+  service = "local-native",
+  timeout_api = 1800
+)
+```
+
+The native model selector may be a local model path, `auto`, or a supported
+`hf://OWNER/REPO:FILE` reference. The copy-and-paste form
+`hf://OWNER/REPO/FILE` is also accepted and normalized; a filename is
+required. This is not universal Hugging Face compatibility: the selected
+engine must implement the architecture and the exact model packaging.
+
+For example, the IBM llama.cpp
+[Granite Speech GGUF repository](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-GGUF/tree/main)
+uses a model GGUF plus a separate `mmproj` file. CrispASR instead needs its
+[single-file Granite Speech conversion](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF).
+Models downloaded by CrispASR normally live under `~/.cache/crispasr`, or the
+directory selected by `CRISPASR_CACHE_DIR`/`CRISPASR_MODELS_DIR`;
+`gen_local_diagnostics()` reports when the configured filename is already
+cached and ignores a conflicting CrispASR `.src` origin sidecar. This native
+cache is independent of the Python `hf_cache_dir`/`HF_HOME` setting. An
+`hf://` reference follows the repository's mutable `main` revision; for an
+auditable model artifact, download a reviewed revision yourself and configure
+its local file path.
+
+CrispASR is currently experimental/beta despite its broader model coverage.
+The pre-release `moss-cpp` service name is retained only as a compatibility
+alias for `local-native` with `native_engine = "moss-transcribe"`.
+
+For any separately managed server implementing the OpenAI multipart
+transcription contract:
+
+```r
+server_result <- gen_stt(
+  "meeting.wav",
+  service = "local-openai",
+  base_url = "http://127.0.0.1:8000",
+  model = "local-model",
+  response_format = "verbose_json"
+)
+```
+
+Local Python inference is optional. It requires a compatible Python
+environment, PyTorch, Transformers, and usually FFmpeg. Whisper uses the
+generic profile without remote repository code. MOSS additionally requires
+helper code from its official GitHub project plus the custom code in its
+Hugging Face model repository. The two artifacts are separate.
+
+The pinned MOSS helper currently requires Transformers `>=5.6.0,<6.0.0`.
+Do not upgrade a shared environment in place when another application pins an
+incompatible version. `revision` passed to `gen_stt()` pins Hugging Face model
+files only; it does not pin the separately installed helper.
+
+For AMD, genflow accepts `device = "rocm"`/`"hip"` and maps it to PyTorch's
+`cuda` device API, which is also how PyTorch represents HIP devices. Hardware,
+OS, PyTorch wheel, and ROCm compatibility still need to match. Diagnostics
+reject a CUDA wheel when ROCm is selected, but a real transcription remains
+the end-to-end readiness check. Selecting ROCm does not convert a CUDA PyTorch
+wheel. Native Vulkan inference uses `local-native` or a compatible server
+through `local-openai` instead.
+
+See [Local inference](inst/doc/local-inference.md) for configuration precedence,
+dependencies, native engine/model compatibility, MOSS behavior, Vulkan, server
+mode, security, and AMD diagnostics.
+
+## Images, STT, and TTS
+
+Image generation:
+
+```r
+image <- gen_img(
+  prompt = "A clean isometric diagram of a reproducible data pipeline",
+  service = "openai",
+  model = "gpt-image-2",
   h = 1024,
   y = 1024
 )
-
-# View your generated masterpiece
-gen_view(image_result)
 ```
 
-
-
-### Speech To Text
+Cloud transcription:
 
 ```r
-# Transcribe an audio file (requires provider API key)
 stt <- gen_stt(
-  audio = "audio.ogg",
-  service = "replicate",
-  model = "openai/whisper"
-)
-
-stt$response_value
-```
-
-### Text To Speech
-
-```r
-# Synthesize speech from text (requires provider API key)
-tts <- gen_tts(
-  text = "Welcome to genflow.",
-  service = "replicate",
-  model = "qwen/qwen3-tts",
-  voice = "Aiden"
-)
-
-tts$response_value
-```
-
-Tested model: `qwen/qwen3-tts` via Replicate. Other services/models are not tested yet.
-
-### Reusable Agents & Content
-
-```r
-# Capture a reusable setup
-set_setup(
-  sname   = "writer_openai",
+  "audio.ogg",
   service = "openai",
-  model   = "gpt-4o-mini",
-  temp    = 0.7,
-  type    = "Chat"
+  model = "whisper-1"
+)
+```
+
+Speech synthesis:
+
+```r
+tts <- gen_tts(
+  "The validation run completed successfully.",
+  service = "openai",
+  model = "gpt-4o-mini-tts",
+  voice = "alloy"
+)
+```
+
+Replicate accepts model-specific image input through `replicate_input` and an
+optional `model_version`. Asynchronous Replicate and FAL calls have bounded
+polling through `poll_interval` and `max_poll_seconds`.
+
+## Reusable setups, content, and agents
+
+```r
+set_setup(
+  sname = "reviewer",
+  service = "openai",
+  model = "gpt-5-mini",
+  reasoning = "medium",
+  type = "Chat"
 )
 
-# Store supporting content
 set_content(
-  cname   = "launch_brief",
-  context = "We are launching an AI-first analytics tool.",
-  add     = "Audience: crazy data people who are in a serious relationship with R.",
-  label   = "launch_announcement"
+  cname = "release_notes",
+  context = "Review the supplied release notes for ambiguity and missing risks."
 )
 
-# Combine into an agent (automatically cached on disk)
-creative_agent <- set_agent(
-  name    = "creative_writer",
-  setup   = "writer_openai",
-  content = "launch_brief"
+agent <- set_agent(
+  name = "release_reviewer",
+  setup = "reviewer",
+  content = "release_notes"
 )
 
-# Pipe agents directly into generators
-creative_agent |> gen_txt()
-creative_agent |> gen_img(prompt = "Richard Feynman and Michael Jackson playing Final Fantasy IX")
+agent |> gen_txt()
+agent |> gen_txt(context_override = "Review this replacement text.")
+```
 
-# Inspect everything that is cached
+Agents can also drive other modalities. A saved content `context` becomes the
+default prompt/text for image and TTS agents:
+
+```r
+agent |> gen_img(prompt_override = "A minimal release dashboard")
+agent |> gen_tts(text_override = "The release is ready.")
+```
+
+Use `audio_override` for one-off STT input. Unknown overrides now raise an
+error instead of being silently ignored.
+
+Setups, content, and agents are stored below
+`tools::R_user_dir("genflow", "cache")`. Filenames include a content hash to
+avoid collisions caused by punctuation, case, or truncation. Renaming a setup
+or content entry updates referencing agents; deleting a referenced entry is
+blocked unless `force = TRUE`.
+
+```r
+list_setups()
+list_content()
+list_agents()
 gen_list()
 ```
 
-Agents, setups, and content are stored under `options("genflow.cache_dir")`
-(defaults to `tools::R_user_dir("genflow", "cache")`), so they survive across R
-sessions. A simple `get_agent("creative_writer")` in a future session gives you
-a ready-to-use list that pipes straight into any generator.
+## Batch execution and checkpoints
 
-Need an interface? Launch the interactive agent manager anytime with:
+```r
+items <- list(
+  list(topic = "catalog refresh"),
+  list(topic = "credential storage"),
+  list(topic = "local STT")
+)
+
+results <- agent |> gen_batch_agent(
+  qty = length(items),
+  one_item_each = items,
+  workers = 2,
+  persist = FALSE,
+  checkpoint_each = file.path(
+    "checkpoints",
+    sprintf("task-%02d.rds", seq_along(items))
+  )
+)
+```
+
+`qty` is task count; `workers` is the concurrency limit. PSOCK is the default
+backend for provider calls on every OS. Unix-like systems can explicitly choose
+`backend = "fork"` for fork-safe work; interrupted fork batches force cleanup
+of blocked child processes. Completed per-task checkpoints remain recoverable;
+genflow does not automatically trust and resume arbitrary checkpoint files.
+
+Pass one `genflow_agent` directly to `gen_batch_agent()`. It is serialized to
+workers without creating temporary per-task objects in `.GlobalEnv`.
+
+## App and viewer
 
 ```r
 gen_interface()
-
+gen_view(result)
 ```
 
-![Easier to use, save, re-use and setup!](./gen_interface.png)
+The app manages setups, content, agents, credentials, model catalogs, custom
+OpenAI-compatible providers, and local-inference settings. It binds to
+`127.0.0.1` by default. A non-loopback host requires
+`allow_remote = TRUE` and emits a warning because the app has no authentication
+layer.
 
-
-You’ll also find a “Launch Genflow Agent Interface” entry under the RStudio Addins menu for one-click access.
-
-### Easy Object Visualization
-
-![Just use function gen_view(object1,object2,object3,etc)](./gen_view.png)
-
-### Batch Processing
+`gen_view()` renders text and media in the RStudio Viewer and falls back to the
+console. Large media is copied into a bounded Viewer asset history instead of
+being embedded as an unbounded Base64 string. Configure:
 
 ```r
-# Load or build an agent
-agent <- get_agent("creative_writer")
-
-# Optional per-item data
-one_item_each <- list(
-  list(topic = "Healthcare Price Markupper", tone = "optimistic"),
-  list(topic = "Retail Master of Boredom", tone = "boring"),
-  list(topic = "Financial Fortune Teller", tone = "cynical")
+options(
+  genflow.viewer_inline_max_bytes = 1024^2,
+  genflow.viewer_history = 10L
 )
-
-# Run a batch in parallel with one agent shared directly by all tasks
-results <- agent |> gen_batch_agent(
-  qty = 3,
-  instructions = "Write a 120-word launch announcement of a atomic bomb made of gummy bears.",
-  one_item_each = one_item_each,
-  workers = 2,
-  directory = "generated_content"
-)
-
-gen_view(results)
 ```
 
-`qty` is the number of tasks, while `workers` limits how many run at the same
-time. Parallel batches use independent PSOCK worker processes on every operating
-system by default, which is safe for the native networking libraries used by
-HTTP providers. A single `genflow_agent` is shared directly by the workers; no
-temporary agent copies are created in `.GlobalEnv`. Vision batches can provide
-one image per task, with names preserved on the returned results:
+## Persistence and bundles
+
+Daily statistics use an inter-process lock and atomic RDS replacement:
 
 ```r
-images <- setNames(
-  list("images/first.jpg", "images/second.jpg"),
-  c("first", "second")
-)
-
-results <- agent |> gen_batch_agent(
-  qty = length(images),
-  add_img_each = images,
-  workers = 2,
-  persist = FALSE
-)
+options(genflow.log_dir = "/absolute/path/to/logs")
+gen_stats()
+gen_stats_rm(Sys.Date() - 30)
 ```
 
-For a workload known to be fork-safe, Unix-like systems can opt in with
-`backend = "fork"`. API/HTTP batches should keep the default `"psock"` backend.
+A corrupt existing log is reported and preserved rather than overwritten.
+Generation results remain available if logging fails, with an explicit
+warning.
 
-Use `persist = FALSE` when the calling application owns its cache. For durable
-long-running integrations, `checkpoint_each` accepts one RDS path per task and
-atomically records each worker result as soon as it finishes.
-
-### Intelligent Model Management
+Bundle import validates archive paths, entry counts, expanded sizes, allowed
+file types, and serialized schemas before installing anything:
 
 ```r
-# Stay current with the latest models
-gen_update_models()
-
-# Discover the perfect model for your task
-gen_show_models(provider = "openai", type = "chat")
+bundle <- gen_export_bundle()
+gen_import_bundle(bundle, overwrite = FALSE)
 ```
 
-In the interface, model updates run a credential preflight first. If a provider
-needs a missing key, genflow opens the credential dialog before attempting the
-API request instead of reporting a false success. Model selection stays in the
-setup/agent flow after the provider catalog has been updated.
-
-
-## 🧭 Example Workflow (Mermaid)
-
-```mermaid
-graph TD
-  A[Define Setup] --> B[Create Content]
-  B --> C[set_agent]
-  C -->|Pipe| D[gen_txt]
-  C -->|Pipe| E[gen_img]
-  C -->|Pipe| F[gen_batch_agent]
-  D --> G[gen_view]
-  E --> G
-  F --> G
-  G --> H[Publish Report / Dashboard]
-```
-
-> _GitHub renders this Mermaid diagram automatically once committed. For local previews without Mermaid support, paste the snippet into [mermaid.live](https://mermaid.live/)._
-
-## 🔧 Complete Function Reference
+## Main functions
 
 | Function | Purpose |
-|---------|-------------|
-| `gen_txt()` | Generate text with cloud and local providers (including **Ollama** and **llama-cpp**) |
-| `gen_img()` | Create stunning images from text prompts |
-| `gen_stt()` | Speech-to-text (tested: Replicate `openai/whisper`; other services/models not tested yet) |
-| `gen_tts()` | Text-to-speech (tested: Replicate `qwen/qwen3-tts`; other services/models not tested yet) |
-| `gen_batch()` | Execute parallel generation campaigns |
-| `gen_view()` | Visualize and explore generation results |
-| `gen_stats()` | Analyze performance and usage metrics |
-| `gen_stats_rm()` | Clean and manage statistics data |
-| `gen_update_models()` | Refresh available models from supported providers (including local catalogs) |
-| `gen_show_models()` | Browse and filter available models |
-| `set_setup()` / `get_setup()` / `list_setups()` | Persist provider configurations for reuse |
-| `set_content()` / `get_content()` / `list_content()` | Store briefs, context, and other payloads |
-| `set_agent()` / `get_agent()` / `list_agents()` | Combine setups and content into reusable agents |
-| `mv_*()` / `rm_*()` | Rename or delete cached setups, content, or agents |
-| `gen_list()` | Summarize everything saved in the cache directory |
-| `gen_batch_agent()` | Run batch workloads directly from a `genflow_agent` |
-| `gen_interface()` | Launch the interactive agent management interface (also available as an RStudio addin) |
+| --- | --- |
+| `gen_txt()` | Cloud and local text generation |
+| `gen_img()` | Image generation |
+| `gen_stt()` | Cloud, local Python, native GGUF, and local-server transcription |
+| `gen_tts()` | Speech synthesis |
+| `gen_batch()` / `gen_batch_agent()` | Parallel, checkpointable workloads |
+| `gen_local_config()` | Read or update non-secret local settings |
+| `gen_local_diagnostics()` | Check Python, native backends, Vulkan, FFmpeg, and endpoints |
+| `gen_update_models()` / `gen_show_models()` | Refresh and browse catalogs |
+| `set_*()` / `get_*()` / `list_*()` | Persist setups, content, and agents |
+| `mv_*()` / `rm_*()` | Rename or remove persisted entities |
+| `gen_interface()` | Launch the management app |
+| `gen_view()` | Render structured results |
+| `gen_stats()` / `gen_stats_rm()` | Inspect or remove daily logs |
+| `gen_export_bundle()` / `gen_import_bundle()` | Portable validated bundles |
+| `gen_vote()` | Extract and rank structured vote markers |
 
-## 📊 Workflow Integration
+## Validation
 
-genflow is designed to seamlessly integrate into your existing R workflows:
+The repository test suite uses mocked provider HTTP/subprocess boundaries so it
+does not spend API credits or download large models. Release validation should
+include:
 
 ```r
-# Pull an agent and pass it straight into generators & pipelines
-agent <- get_agent("creative_writer")
-
-# Generate both narrative and visuals for your reports
-copy <- agent |> gen_txt()
-visual <- agent |> gen_img(prompt = "Millions of rubber ducks blitzkrieging Geneva")
-
-# Feed generated assets into downstream analysis, dashboards, and reports
+devtools::document()
+devtools::test()
 ```
 
-## 🛡️ Best Practices
+and a tarball-based `R CMD check`. Real provider credentials, a running local
+server, or a compatible ROCm environment are still required for their
+respective end-to-end smoke tests.
 
-### Production Readiness
+## License
 
-- ⚡ **Monitor Usage**: Track API consumption with built-in statistics
-- 🔐 **Secure Keys**: Keep API keys in environment variables, never in code
-- 🧪 **Test Thoroughly**: Validate outputs for your specific use cases
-- 📈 **Scale Smart**: Use batch processing for high-volume tasks
-
-### Performance Tips
-
-- 🔁 **Reuse Connections**: Initialize once, generate many
-- 📦 **Manage Memory**: Use `gen_stats_rm()` to clean up old data
-- ⚡ **Choose Wisely**: Select the right model for your specific task
-- 🔄 **Update Regularly**: Run `gen_update_models()` periodically
-
-## 🤝 Contributing
-
-We welcome contributions! Whether it's:
-- 🐛 Bug reports and fixes
-- ✨ New feature proposals
-- 📝 Documentation improvements
-- 🎯 Performance optimizations
-
-## 📄 License
-
-This project is licensed under the GPL-3 License.
-
-## 🙏 Acknowledgments
-
-Special thanks to the AI provider communities and the R ecosystem for making genflow possible.
-
-## 👨‍💻 About the Author
-
-Hi, I'm Hugo. I build tools around trading, backtesting, and generative models in R to iterate on strategies faster and create cool stuff. If you find genflow useful (or want to suggest improvements!), feedback is always welcome.
-
----
-
-Project Link: [https://github.com/hugorteixeira/genflow](https://github.com/hugorteixeira/genflow)
-
----
-
-<p align="center">Flow into the future of AI with ❤️ and ☕ in R</p>
+GPL (>= 3), as declared in `DESCRIPTION`.

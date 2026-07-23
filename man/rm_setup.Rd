@@ -4,10 +4,14 @@
 \alias{rm_setup}
 \title{Delete a cached setup}
 \usage{
-rm_setup(sname)
+rm_setup(sname, force = FALSE)
 }
 \arguments{
 \item{sname}{Setup identifier.}
+
+\item{force}{Delete even when saved agents reference the setup. Referencing
+agents keep their flattened runtime fields, but the stale \code{sname} metadata
+is removed.}
 }
 \value{
 Invisible TRUE when removed.

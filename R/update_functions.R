@@ -1168,11 +1168,8 @@
 
 #' Update Gemini models list (internal)
 #'
-#' Connects to the Gemini API, retrieves the list of models and saves a
+#' Connects to the Gemini API, follows model-list pagination, and saves a
 #' normalized CSV file in the provided directory.
-#'
-#' - Installs and loads required packages on-demand.
-#' - Validates environment variable `GEMINI_API_KEY`.
 #'
 #' @param directory Character path where the CSV will be saved. If NULL, uses current working dir.
 #' @param verbose Logical flag to print progress messages.
@@ -1180,113 +1177,161 @@
 #' @keywords internal
 #' @noRd
 .update_models_gemini <- function(directory = NULL, verbose = TRUE) {
-  # --- 2. API Key ---
-  api_key_gemini <- Sys.getenv("GEMINI_API_KEY")
-  if (api_key_gemini == "") stop("Error: Environment variable 'GEMINI_API_KEY' not set.")
-
-  # --- 3. API URL ---
-  api_base_url <- "https://generativelanguage.googleapis.com"
-  api_version  <- "v1beta"
-  api_path     <- paste0("/", api_version, "/models")
-  api_url      <- paste0(api_base_url, api_path, "?key=", api_key_gemini)
-
-  # --- 4. API Call ---
-  if (verbose) message("Connecting to the Gemini API...")
-  response <- tryCatch({ httr::GET(url = api_url, httr::timeout(60)) },
-                       error = function(e) stop("Error connecting to the Google AI API: ", e$message))
-
-  # --- 5. Check Response Status ---
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    error_details <- ""
-    try({
-      parsed_error <- jsonlite::fromJSON(error_content)
-      if (is.list(parsed_error) && "error" %in% names(parsed_error)) {
-        error_details <- paste(parsed_error$error$code, parsed_error$error$status, parsed_error$error$message, sep = ": ")
-      }
-    }, silent = TRUE)
-    if (nzchar(error_details)) stop("Google AI API Error (Status: ", httr::status_code(response), "): ", error_details)
-    stop("Google AI API Error (Status: ", httr::status_code(response), "): ", substr(error_content, 1, 500))
+  api_key <- trimws(Sys.getenv("GOOGLE_API_KEY", ""))
+  if (!nzchar(api_key)) {
+    api_key <- trimws(Sys.getenv("GEMINI_API_KEY", ""))
+  }
+  if (!nzchar(api_key)) {
+    stop("Environment variable GOOGLE_API_KEY or GEMINI_API_KEY not set.")
   }
 
-  # --- 6. Process JSON ---
-  if (verbose) message("Processing JSON response...")
-  models_list <- NULL
-  parsed_content <- tryCatch({ jsonlite::fromJSON(rawToChar(httr::content(response, "raw")), simplifyVector = TRUE) },
-                             error = function(e) stop("Error processing JSON or extracting 'models' field from Google AI API: ", e$message))
-  if (!is.null(parsed_content) && is.list(parsed_content) && "models" %in% names(parsed_content)) {
-    if (is.data.frame(parsed_content$models)) {
-      models_list <- parsed_content$models
-    } else if (is.list(parsed_content$models)) {
-      models_list <- dplyr::bind_rows(!!!lapply(parsed_content$models, function(x) {
-        x <- rapply(x, as.character, classes = "list", how = "replace")
-        as.data.frame(t(unlist(x)), stringsAsFactors = FALSE)
-      }))
+  if (is.null(directory) || !length(directory) || is.na(directory[[1]]) ||
+      !nzchar(trimws(as.character(directory[[1]])))) {
+    stop("`directory` must be one non-empty path.", call. = FALSE)
+  }
+  directory <- path.expand(as.character(directory[[1]]))
+  if (!dir.exists(directory)) {
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!dir.exists(directory)) {
+    stop("Failed to create directory: ", directory, call. = FALSE)
+  }
+
+  headers <- httr::add_headers("x-goog-api-key" = api_key)
+  endpoint <- "https://generativelanguage.googleapis.com/v1beta/models"
+  page_token <- ""
+  seen_tokens <- character()
+  models <- list()
+
+  if (verbose) message("Connecting to the Gemini models API...")
+  repeat {
+    query <- list(pageSize = 1000L)
+    if (nzchar(page_token)) {
+      query$pageToken <- page_token
     }
-  }
-
-  if (is.null(models_list) || nrow(models_list) == 0) {
-    if (verbose) print(utils::str(parsed_content))
-    stop("Field 'models' containing model list not found, empty, or not processable in Google AI API response.")
-  }
-
-  # --- 7. Format Data ---
-  if (verbose) message("Processing ", nrow(models_list), " Gemini models...")
-
-  output_df <- purrr::map_df(seq_len(nrow(models_list)), function(i) {
-    model_info <- models_list[i, ]
-
-    model_id_raw  <- model_info$name %||% paste0("UNKNOWN_GEMINI_NAME_", i)
-    model_id_safe <- sub("^models/", "", model_id_raw)
-
-    supported_methods <- model_info$supportedGenerationMethods %||% character(0)
-    if (is.list(supported_methods)) supported_methods <- unlist(supported_methods)
-
-    model_type <- dplyr::case_when(
-      grepl("^gemini-.*pro",   model_id_safe, ignore.case = TRUE) ~ "Chat",
-      grepl("^gemini-.*flash", model_id_safe, ignore.case = TRUE) ~ "Chat",
-      grepl("^gemini-ultra",   model_id_safe, ignore.case = TRUE) ~ "Chat",
-      grepl("^embedding-",     model_id_safe, ignore.case = TRUE) ~ "Embedding",
-      grepl("^text-embedding-",model_id_safe, ignore.case = TRUE) ~ "Embedding",
-      ("embedContent" %in% supported_methods) && !("generateContent" %in% supported_methods) ~ "Embedding",
-      ("generateContent" %in% supported_methods) ~ "Chat",
-      TRUE ~ "Unknown"
+    response <- tryCatch(
+      httr::GET(
+        url = endpoint,
+        headers,
+        query = query,
+        httr::timeout(60)
+      ),
+      error = function(e) {
+        stop(
+          "Error connecting to the Gemini models API: ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
     )
+    if (httr::status_code(response) != 200L) {
+      error_content <- httr::content(response, "text", encoding = "UTF-8")
+      error_details <- tryCatch({
+        parsed <- jsonlite::fromJSON(error_content, simplifyVector = FALSE)
+        parsed$error$message %||% parsed$message %||% error_content
+      }, error = function(e) error_content)
+      stop(
+        "Gemini models API returned HTTP ",
+        httr::status_code(response),
+        ": ",
+        substr(as.character(error_details)[1], 1L, 1000L),
+        call. = FALSE
+      )
+    }
 
-    tibble::tibble(
+    parsed <- tryCatch(
+      httr::content(
+        response,
+        as = "parsed",
+        type = "application/json",
+        encoding = "UTF-8"
+      ),
+      error = function(e) {
+        stop(
+          "Could not parse the Gemini models response: ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+    page_models <- parsed$models %||% list()
+    if (is.data.frame(page_models) && nrow(page_models)) {
+      page_models <- lapply(seq_len(nrow(page_models)), function(i) {
+        as.list(page_models[i, , drop = FALSE])
+      })
+    }
+    if (is.list(page_models)) {
+      models <- c(models, page_models)
+    }
+
+    next_token <- trimws(as.character(parsed$nextPageToken %||% "")[1])
+    if (!nzchar(next_token)) {
+      break
+    }
+    if (next_token %in% seen_tokens) {
+      stop("Gemini model pagination repeated a page token.", call. = FALSE)
+    }
+    seen_tokens <- c(seen_tokens, next_token)
+    page_token <- next_token
+  }
+
+  rows <- lapply(models, function(model_info) {
+    if (!is.list(model_info)) {
+      return(NULL)
+    }
+    model_id <- sub(
+      "^models/",
+      "",
+      trimws(as.character(model_info$name %||% "")[1])
+    )
+    if (!nzchar(model_id)) {
+      return(NULL)
+    }
+    methods <- unique(as.character(unlist(
+      model_info$supportedGenerationMethods %||% character(),
+      use.names = FALSE
+    )))
+    model_type <- if ("generateContent" %in% methods) {
+      "Chat"
+    } else if ("embedContent" %in% methods ||
+               grepl("(^|-)embedding", model_id, ignore.case = TRUE)) {
+      "Embedding"
+    } else {
+      "Unknown"
+    }
+    data.frame(
       service = "gemini",
-      model = model_id_safe,
+      model = model_id,
       type = model_type,
       pricing = "",
-      description = ""
+      description = as.character(model_info$description %||%
+        model_info$displayName %||% "")[1],
+      stringsAsFactors = FALSE
     )
   })
-
-  # --- 8. Post-processing: Add quotes ---
-  if (nrow(output_df) > 0) {
-    output_df <- output_df %>%
-      dplyr::mutate(
-        pricing = sprintf('"%s"', pricing),
-        description = sprintf('"%s"', description)
-      )
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) {
+    stop("The Gemini models API returned no usable models.", call. = FALSE)
   }
+  output_df <- unique(do.call(rbind, rows))
+  output_df <- output_df[order(output_df$type, output_df$model), , drop = FALSE]
+  rownames(output_df) <- NULL
 
-  # --- 9. Create Directory ---
-  if (!dir.exists(directory)) {
-    if (verbose) message("Creating directory: ", directory)
-    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
-  }
-
-  # --- 10. Save CSV ---
   file_path <- file.path(directory, "gemini.csv")
-  if (verbose) message("\nSaving ", nrow(output_df), " Gemini models to: ", file_path)
-  tryCatch({
-    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
-                row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8")
-  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
-
-  if (verbose) message("File 'gemini.csv' updated successfully.")
+  utils::write.csv(
+    output_df,
+    file = file_path,
+    row.names = FALSE,
+    na = "",
+    fileEncoding = "UTF-8"
+  )
+  if (verbose) {
+    message(
+      "File 'gemini.csv' updated successfully with ",
+      nrow(output_df),
+      " models."
+    )
+  }
   invisible(output_df)
 }
 #' Update FAL models list (internal)
@@ -1561,6 +1606,646 @@
   invisible(output_df)
 }
 
+#' Hugging Face Hub catalog task groups (internal)
+#'
+#' Remote rows are restricted to models with a live Inference Provider mapping.
+#' Local rows intentionally use a separate service/catalog so Hub-only models do
+#' not get routed through the remote Hugging Face adapter.
+#'
+#' @keywords internal
+#' @noRd
+.hf_catalog_tasks <- function(local = FALSE) {
+  if (isTRUE(local)) {
+    return(c(
+      "automatic-speech-recognition",
+      "audio-text-to-text"
+    ))
+  }
+
+  c(
+    "text-generation",
+    "text2text-generation",
+    "image-text-to-text",
+    "visual-question-answering",
+    "text-to-image",
+    "image-to-image",
+    "automatic-speech-recognition",
+    "audio-text-to-text",
+    "text-to-speech",
+    "text-to-audio"
+  )
+}
+
+#' Hugging Face models with explicit local runtime profiles (internal)
+#'
+#' These ids are fetched directly in addition to ranked Hub searches so a tested
+#' adapter does not disappear from the catalog when download/trending ranks move.
+#'
+#' @keywords internal
+#' @noRd
+.hf_local_featured_models <- function() {
+  c("OpenMOSS-Team/MOSS-Transcribe-Diarize")
+}
+
+#' Extract the next Hugging Face pagination URL (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_next_page_url <- function(link_header) {
+  if (is.null(link_header) || !length(link_header)) {
+    return(NULL)
+  }
+  link_header <- as.character(link_header[[1]])
+  if (is.na(link_header) || !nzchar(trimws(link_header))) {
+    return(NULL)
+  }
+
+  parts <- strsplit(link_header, ",(?=\\s*<)", perl = TRUE)[[1]]
+  next_part <- parts[grepl("rel\\s*=\\s*['\"]?next['\"]?", parts, ignore.case = TRUE, perl = TRUE)]
+  if (!length(next_part)) {
+    return(NULL)
+  }
+
+  next_url <- sub("^\\s*<([^>]+)>.*$", "\\1", next_part[[1]], perl = TRUE)
+  if (!nzchar(next_url) || identical(next_url, next_part[[1]])) {
+    return(NULL)
+  }
+  next_url
+}
+
+#' Fetch one Hugging Face Hub model page (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_fetch_models_page <- function(url,
+                                  query = NULL,
+                                  headers = httr::add_headers(Accept = "application/json"),
+                                  timeout = 60,
+                                  verbose = FALSE) {
+  response <- tryCatch(
+    httr::RETRY(
+      "GET",
+      url,
+      config = headers,
+      query = query,
+      httr::timeout(timeout),
+      times = 3L,
+      pause_base = 1,
+      pause_cap = 15,
+      terminate_on = c(400L, 401L, 403L, 404L),
+      quiet = !isTRUE(verbose)
+    ),
+    error = function(e) {
+      stop("Error connecting to the Hugging Face Hub API: ", conditionMessage(e), call. = FALSE)
+    }
+  )
+
+  status <- httr::status_code(response)
+  if (!identical(status, 200L)) {
+    error_content <- tryCatch(
+      httr::content(response, "text", encoding = "UTF-8"),
+      error = function(e) ""
+    )
+    error_content <- gsub("[\r\n]+", " ", as.character(error_content %||% ""))
+    stop(
+      "Hugging Face Hub API error (status ",
+      status,
+      "): ",
+      substr(error_content, 1, 500),
+      call. = FALSE
+    )
+  }
+
+  response_text <- httr::content(response, "text", encoding = "UTF-8")
+  parsed <- tryCatch(
+    jsonlite::fromJSON(response_text, simplifyVector = FALSE),
+    error = function(e) {
+      stop("Error processing JSON from the Hugging Face Hub API: ", conditionMessage(e), call. = FALSE)
+    }
+  )
+  if (is.null(parsed)) {
+    parsed <- list()
+  }
+  if (!is.list(parsed) || (length(parsed) && !all(vapply(parsed, is.list, logical(1))))) {
+    stop("Hugging Face Hub API returned an unexpected model-list payload.", call. = FALSE)
+  }
+
+  list(
+    items = parsed,
+    next_url = .hf_next_page_url(httr::headers(response)[["link"]])
+  )
+}
+
+#' Convert Hugging Face provider mappings to records (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_provider_mapping_records <- function(mapping) {
+  if (is.null(mapping) || !length(mapping)) {
+    return(list())
+  }
+  if (is.data.frame(mapping)) {
+    return(lapply(seq_len(nrow(mapping)), function(i) as.list(mapping[i, , drop = FALSE])))
+  }
+  if (!is.list(mapping)) {
+    return(list())
+  }
+  if (any(c("provider", "status", "providerId") %in% names(mapping))) {
+    return(list(mapping))
+  }
+  Filter(is.list, unname(mapping))
+}
+
+#' Return live Hugging Face Inference Provider ids (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_live_provider_names <- function(model_info) {
+  mappings <- .hf_provider_mapping_records(
+    model_info$inferenceProviderMapping %||% model_info$inference_provider_mapping
+  )
+  if (!length(mappings)) {
+    return(character())
+  }
+
+  providers <- vapply(mappings, function(mapping) {
+    status <- tolower(trimws(as.character(mapping$status %||% "")[1]))
+    provider <- trimws(as.character(mapping$provider %||% "")[1])
+    if (!identical(status, "live") || is.na(provider) || !nzchar(provider)) "" else provider
+  }, character(1))
+  unique(providers[nzchar(providers)])
+}
+
+#' Extract a model id from a Hugging Face Hub record (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_model_id <- function(model_info) {
+  if (!is.list(model_info)) {
+    return("")
+  }
+  for (field in c("id", "modelId", "model")) {
+    value <- model_info[[field]]
+    if (is.null(value) || !length(value)) {
+      next
+    }
+    value <- trimws(as.character(value[[1]]))
+    if (!is.na(value) && nzchar(value)) {
+      return(value)
+    }
+  }
+  ""
+}
+
+#' Map a Hugging Face pipeline task to the genflow model type (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_pipeline_type <- function(pipeline_tag) {
+  task <- tolower(trimws(as.character(pipeline_tag %||% "")[1]))
+  if (task %in% c(
+    "image-text-to-text", "visual-question-answering", "image-to-text",
+    "document-question-answering"
+  )) {
+    return("Vision")
+  }
+  if (task %in% c("text-to-image", "image-to-image")) {
+    return("Image")
+  }
+  if (task %in% c(
+    "automatic-speech-recognition", "audio-text-to-text",
+    "text-to-speech", "text-to-audio", "audio-to-audio"
+  )) {
+    return("Audio")
+  }
+  if (task %in% c("feature-extraction", "sentence-similarity")) {
+    return("Embedding")
+  }
+  if (task %in% c(
+    "text-generation", "text2text-generation", "conversational",
+    "question-answering", "summarization", "translation"
+  )) {
+    return("Chat")
+  }
+  "Unknown"
+}
+
+#' Format one Hugging Face model description (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_model_description <- function(model_info, live_providers = character(), local = FALSE) {
+  scalar <- function(value, default = "") {
+    if (is.null(value) || !length(value)) {
+      return(default)
+    }
+    value <- as.character(value[[1]])
+    if (is.na(value) || !nzchar(value)) default else value
+  }
+
+  task <- scalar(model_info$pipeline_tag %||% model_info$pipelineTag)
+  library_name <- scalar(model_info$library_name %||% model_info$libraryName)
+  downloads <- scalar(model_info$downloads)
+  likes <- scalar(model_info$likes)
+  updated <- scalar(model_info$lastModified %||% model_info$last_modified)
+  if (nzchar(updated)) {
+    updated <- substr(updated, 1, 10)
+  }
+  gated <- model_info$gated %||% FALSE
+  gated <- isTRUE(gated) || identical(tolower(scalar(gated)), "true")
+
+  parts <- c(
+    if (nzchar(task)) paste0("task=", task) else NULL,
+    if (nzchar(library_name)) paste0("library=", library_name) else NULL,
+    if (isTRUE(local)) "inference=local" else if (length(live_providers)) {
+      paste0("providers=", paste(sort(live_providers), collapse = "|"))
+    } else NULL,
+    if (nzchar(downloads)) paste0("downloads=", downloads) else NULL,
+    if (nzchar(likes)) paste0("likes=", likes) else NULL,
+    if (nzchar(updated)) paste0("updated=", updated) else NULL,
+    if (gated) "gated=yes" else NULL
+  )
+  description <- paste(parts, collapse = "; ")
+  description <- gsub("[\r\n]+", " ", description)
+  trimws(gsub("\\s+", " ", description))
+}
+
+#' Normalize Hugging Face Hub model records for a genflow catalog (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_models_to_catalog <- function(models, service = "hf", require_live_provider = TRUE) {
+  empty <- tibble::tibble(
+    service = character(),
+    model = character(),
+    type = character(),
+    pricing = character(),
+    description = character()
+  )
+  if (is.null(models) || !length(models)) {
+    return(empty)
+  }
+
+  rows <- lapply(models, function(model_info) {
+    if (!is.list(model_info)) {
+      return(NULL)
+    }
+    model_id <- .hf_model_id(model_info)
+    if (!nzchar(model_id)) {
+      return(NULL)
+    }
+
+    live_providers <- .hf_live_provider_names(model_info)
+    if (isTRUE(require_live_provider) && !length(live_providers)) {
+      return(NULL)
+    }
+    pipeline_tag <- model_info$pipeline_tag %||% model_info$pipelineTag %||% ""
+
+    tibble::tibble(
+      service = service,
+      model = model_id,
+      type = .hf_pipeline_type(pipeline_tag),
+      pricing = "",
+      description = .hf_model_description(
+        model_info,
+        live_providers = live_providers,
+        local = !isTRUE(require_live_provider)
+      )
+    )
+  })
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) {
+    return(empty)
+  }
+
+  output <- dplyr::bind_rows(rows)
+  output <- output[!duplicated(tolower(output$model)), , drop = FALSE]
+  output <- output[order(tolower(output$type), tolower(output$model)), , drop = FALSE]
+  rownames(output) <- NULL
+  output
+}
+
+#' Write a Hugging Face model catalog without exposing a partial file (internal)
+#'
+#' @keywords internal
+#' @noRd
+.hf_write_catalog <- function(output_df, directory, service, verbose = TRUE) {
+  if (!dir.exists(directory)) {
+    if (verbose) message("Creating directory: ", directory)
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!dir.exists(directory)) {
+    stop("Failed to create directory: ", directory, call. = FALSE)
+  }
+
+  file_path <- file.path(directory, paste0(service, ".csv"))
+  temp_path <- tempfile(paste0(".", service, "-"), tmpdir = directory, fileext = ".csv")
+  on.exit(unlink(temp_path, force = TRUE), add = TRUE)
+  tryCatch(
+    utils::write.table(
+      output_df,
+      file = temp_path,
+      sep = ",",
+      quote = TRUE,
+      qmethod = "double",
+      row.names = FALSE,
+      col.names = TRUE,
+      na = "",
+      fileEncoding = "UTF-8"
+    ),
+    error = function(e) {
+      stop("Error writing Hugging Face catalog: ", conditionMessage(e), call. = FALSE)
+    }
+  )
+
+  replaced <- file.rename(temp_path, file_path)
+  if (!isTRUE(replaced)) {
+    replaced <- file.copy(temp_path, file_path, overwrite = TRUE)
+  }
+  if (!isTRUE(replaced)) {
+    stop("Failed to replace Hugging Face catalog: ", file_path, call. = FALSE)
+  }
+  if (verbose) {
+    message("File '", basename(file_path), "' updated successfully with ", nrow(output_df), " models.")
+  }
+  invisible(file_path)
+}
+
+#' Update one Hugging Face Hub-backed catalog (internal)
+#'
+#' @keywords internal
+#' @noRd
+.update_models_hf_catalog <- function(directory,
+                                      service,
+                                      tasks,
+                                      sorts = "downloads",
+                                      featured_models = character(),
+                                      require_live_provider = TRUE,
+                                      limit_per_query = 50L,
+                                      page_size = 50L,
+                                      timeout = 60,
+                                      verbose = TRUE,
+                                      fetch_page = .hf_fetch_models_page) {
+  tasks <- unique(trimws(as.character(tasks)))
+  tasks <- tasks[!is.na(tasks) & nzchar(tasks)]
+  sorts <- unique(trimws(as.character(sorts)))
+  sorts <- sorts[!is.na(sorts) & nzchar(sorts)]
+  featured_models <- unique(trimws(as.character(featured_models)))
+  featured_models <- featured_models[!is.na(featured_models) & nzchar(featured_models)]
+  limit_per_query <- suppressWarnings(as.integer(limit_per_query[[1]]))
+  page_size <- suppressWarnings(as.integer(page_size[[1]]))
+  if (!length(tasks) || !length(sorts)) {
+    stop("Hugging Face catalog tasks and sorts cannot be empty.", call. = FALSE)
+  }
+  if (is.na(limit_per_query) || limit_per_query < 1L) {
+    stop("`limit_per_query` must be a positive integer.", call. = FALSE)
+  }
+  if (is.na(page_size) || page_size < 1L) {
+    stop("`page_size` must be a positive integer.", call. = FALSE)
+  }
+  page_size <- min(page_size, limit_per_query, 100L)
+
+  endpoint <- trimws(Sys.getenv("HF_ENDPOINT", "https://huggingface.co"))
+  if (!nzchar(endpoint)) {
+    endpoint <- "https://huggingface.co"
+  }
+  api_url <- paste0(sub("/+$", "", endpoint), "/api/models")
+
+  token_candidates <- c(
+    Sys.getenv("HUGGINGFACE_API_TOKEN"),
+    Sys.getenv("HF_TOKEN")
+  )
+  token_candidates <- trimws(token_candidates)
+  token <- token_candidates[nzchar(token_candidates)][1]
+  header_values <- list(
+    Accept = "application/json",
+    `User-Agent` = "genflow-model-catalog"
+  )
+  if (length(token) && !is.na(token) && nzchar(token)) {
+    header_values$Authorization <- paste("Bearer", token)
+  }
+  headers <- do.call(httr::add_headers, header_values)
+
+  expand_fields <- c(
+    "pipeline_tag", "downloads", "likes", "library_name", "lastModified",
+    "gated", "inferenceProviderMapping"
+  )
+  all_models <- list()
+  failures <- character()
+
+  for (task in tasks) {
+    for (sort_key in sorts) {
+      query_label <- paste(task, sort_key, sep = "/")
+      if (verbose) {
+        message("Fetching Hugging Face models for ", task, " (", sort_key, ")...")
+      }
+      query <- c(list(
+        pipeline_tag = task,
+        sort = sort_key,
+        direction = -1L,
+        limit = page_size
+      ), stats::setNames(
+        as.list(expand_fields),
+        rep("expand[]", length(expand_fields))
+      ))
+      if (isTRUE(require_live_provider)) {
+        query$inference_provider <- "all"
+      }
+
+      current_url <- api_url
+      current_query <- query
+      seen_urls <- character()
+      query_models <- list()
+
+      repeat {
+        if (current_url %in% seen_urls) {
+          failures[[query_label]] <- "pagination returned the same URL twice"
+          break
+        }
+        seen_urls <- c(seen_urls, current_url)
+
+        page <- tryCatch(
+          fetch_page(
+            url = current_url,
+            query = current_query,
+            headers = headers,
+            timeout = timeout,
+            verbose = verbose
+          ),
+          error = function(e) {
+            failures[[query_label]] <<- conditionMessage(e)
+            NULL
+          }
+        )
+        if (is.null(page)) {
+          break
+        }
+        items <- page$items %||% list()
+        if (!is.list(items)) {
+          failures[[query_label]] <- "page items were not a list"
+          break
+        }
+
+        remaining <- limit_per_query - length(query_models)
+        if (remaining <= 0L) {
+          break
+        }
+        if (length(items)) {
+          query_models <- c(query_models, utils::head(items, remaining))
+        }
+        if (length(query_models) >= limit_per_query) {
+          break
+        }
+
+        next_url <- page$next_url %||% ""
+        if (!length(next_url) || is.na(next_url[[1]]) || !nzchar(next_url[[1]])) {
+          break
+        }
+        current_url <- as.character(next_url[[1]])
+        current_query <- NULL
+      }
+      all_models <- c(all_models, query_models)
+    }
+  }
+
+  fetched_ids <- vapply(all_models, function(model_info) {
+    .hf_model_id(model_info)
+  }, character(1))
+  missing_featured <- featured_models[
+    !tolower(featured_models) %in% tolower(fetched_ids)
+  ]
+  for (model_id in missing_featured) {
+    query_label <- paste0("featured/", model_id)
+    if (verbose) {
+      message("Fetching featured local Hugging Face model ", model_id, "...")
+    }
+    query <- c(list(
+      search = model_id,
+      limit = 20L
+    ), stats::setNames(
+      as.list(expand_fields),
+      rep("expand[]", length(expand_fields))
+    ))
+    page <- tryCatch(
+      fetch_page(
+        url = api_url,
+        query = query,
+        headers = headers,
+        timeout = timeout,
+        verbose = verbose
+      ),
+      error = function(e) {
+        failures[[query_label]] <<- conditionMessage(e)
+        NULL
+      }
+    )
+    if (is.null(page)) {
+      next
+    }
+    candidates <- page$items %||% list()
+    exact <- Filter(function(model_info) {
+      identical(tolower(.hf_model_id(model_info)), tolower(model_id))
+    }, candidates)
+    if (!length(exact)) {
+      failures[[query_label]] <- "exact model id was not returned by Hub search"
+      next
+    }
+    all_models <- c(all_models, list(exact[[1]]))
+  }
+
+  output_df <- .hf_models_to_catalog(
+    all_models,
+    service = service,
+    require_live_provider = require_live_provider
+  )
+  if (!nrow(output_df)) {
+    detail <- if (length(failures)) {
+      paste0(" Failures: ", paste(names(failures), failures, sep = ": ", collapse = "; "))
+    } else {
+      ""
+    }
+    stop("No usable Hugging Face models were returned; the existing catalog was not changed.", detail, call. = FALSE)
+  }
+  if (length(failures)) {
+    warning(
+      "Hugging Face catalog updated partially: ",
+      paste(names(failures), failures, sep = ": ", collapse = "; "),
+      call. = FALSE
+    )
+  }
+
+  .hf_write_catalog(output_df, directory = directory, service = service, verbose = verbose)
+  invisible(output_df)
+}
+
+#' Update remotely routable Hugging Face models (internal)
+#'
+#' Only models with at least one live Hugging Face Inference Provider mapping
+#' are written to `hf.csv`.
+#'
+#' @keywords internal
+#' @noRd
+.update_models_hf <- function(directory = NULL,
+                              verbose = TRUE,
+                              tasks = .hf_catalog_tasks(local = FALSE),
+                              limit_per_query = 50L,
+                              page_size = 50L,
+                              timeout = 60,
+                              fetch_page = .hf_fetch_models_page) {
+  if (is.null(directory) || !length(directory) || is.na(directory[[1]]) || !nzchar(directory[[1]])) {
+    directory <- tools::R_user_dir("agent_models", which = "data")
+  }
+  .update_models_hf_catalog(
+    directory = directory,
+    service = "hf",
+    tasks = tasks,
+    sorts = "downloads",
+    featured_models = character(),
+    require_live_provider = TRUE,
+    limit_per_query = limit_per_query,
+    page_size = page_size,
+    timeout = timeout,
+    verbose = verbose,
+    fetch_page = fetch_page
+  )
+}
+
+#' Update local Hugging Face speech-model candidates (internal)
+#'
+#' Hub-only models are written to the separate `hf-local.csv` catalog with
+#' service `hf-local`; they are never advertised as remotely routable `hf`
+#' models. Download and popularity sorts keep established models while also
+#' surfacing new local speech releases.
+#'
+#' @keywords internal
+#' @noRd
+.update_models_hf_local <- function(directory = NULL,
+                                    verbose = TRUE,
+                                    tasks = .hf_catalog_tasks(local = TRUE),
+                                    sorts = c("downloads", "trendingScore"),
+                                    featured_models = .hf_local_featured_models(),
+                                    limit_per_query = 50L,
+                                    page_size = 50L,
+                                    timeout = 60,
+                                    fetch_page = .hf_fetch_models_page) {
+  if (is.null(directory) || !length(directory) || is.na(directory[[1]]) || !nzchar(directory[[1]])) {
+    directory <- tools::R_user_dir("agent_models", which = "data")
+  }
+  .update_models_hf_catalog(
+    directory = directory,
+    service = "hf-local",
+    tasks = tasks,
+    sorts = sorts,
+    featured_models = featured_models,
+    require_live_provider = FALSE,
+    limit_per_query = limit_per_query,
+    page_size = page_size,
+    timeout = timeout,
+    verbose = verbose,
+    fetch_page = fetch_page
+  )
+}
+
 #' Update Ollama models list (internal)
 #'
 #' Connects to a local Ollama server, retrieves installed models and saves a
@@ -1568,23 +2253,15 @@
 #'
 #' @param directory Character path where the CSV will be saved.
 #' @param verbose Logical flag to print progress messages.
+#' @param base_url Optional Ollama server URL. Defaults to the environment or
+#'   saved local inference configuration.
+#' @param fetch_tags Internal request function used for tests.
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_ollama <- function(directory = NULL, verbose = TRUE) {
-  base_url <- Sys.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "http://127.0.0.1:11434"
-  }
-  base_url <- sub("/+$", "", base_url)
-  api_url <- paste0(base_url, "/api/tags")
-
-  if (verbose) message("Connecting to the Ollama API...")
+.fetch_ollama_tags <- function(api_url, timeout = 30) {
   response <- tryCatch(
-    {
-      httr::GET(url = api_url, httr::timeout(30))
-    },
+    httr::GET(url = api_url, httr::timeout(timeout)),
     error = function(e) {
       stop("Error connecting to the Ollama API: ", e$message)
     }
@@ -1592,17 +2269,36 @@
 
   if (httr::status_code(response) != 200) {
     error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("Ollama API Error (Status: ", httr::status_code(response), "): ", error_content)
+    stop(
+      "Ollama API Error (Status: ",
+      httr::status_code(response),
+      "): ",
+      error_content
+    )
   }
 
-  parsed_content <- tryCatch(
-    {
-      jsonlite::fromJSON(rawToChar(httr::content(response, "raw")), simplifyVector = TRUE)
-    },
+  tryCatch(
+    jsonlite::fromJSON(
+      rawToChar(httr::content(response, "raw")),
+      simplifyVector = TRUE
+    ),
     error = function(e) {
       stop("Error processing JSON from Ollama API: ", e$message)
     }
   )
+}
+
+#' @keywords internal
+#' @noRd
+.update_models_ollama <- function(directory = NULL,
+                                  verbose = TRUE,
+                                  base_url = NULL,
+                                  fetch_tags = .fetch_ollama_tags) {
+  base_url <- .ollama_base_url(base_url = base_url)
+  api_url <- paste0(base_url, "/api/tags")
+
+  if (verbose) message("Connecting to the Ollama API...")
+  parsed_content <- fetch_tags(api_url)
 
   models <- parsed_content$models
   if (is.null(models) || !is.data.frame(models) || nrow(models) == 0) {
@@ -1832,10 +2528,214 @@
   invisible(output_df)
 }
 
+.genflow_catalog_columns <- function() {
+  c("model", "type", "pricing", "description")
+}
+
+.genflow_validate_catalog_file <- function(path, provider) {
+  if (!file.exists(path) || isTRUE(file.info(path)$isdir[[1]])) {
+    stop("Updater did not produce the expected catalog file.", call. = FALSE)
+  }
+  if (!isTRUE(file.info(path)$size[[1]] > 0)) {
+    stop("Updater produced an empty catalog file.", call. = FALSE)
+  }
+
+  catalog <- tryCatch(
+    utils::read.csv(
+      path,
+      stringsAsFactors = FALSE,
+      check.names = FALSE,
+      fileEncoding = "UTF-8"
+    ),
+    error = function(e) {
+      stop(
+        "Updater produced an unreadable catalog CSV: ",
+        conditionMessage(e),
+        call. = FALSE
+      )
+    }
+  )
+  if (!is.data.frame(catalog) || !nrow(catalog)) {
+    stop("Updater produced a catalog without model rows.", call. = FALSE)
+  }
+  if (anyDuplicated(names(catalog))) {
+    stop("Updater produced a catalog with duplicate column names.", call. = FALSE)
+  }
+
+  provider_columns <- intersect(c("service", "provider"), names(catalog))
+  missing_columns <- setdiff(.genflow_catalog_columns(), names(catalog))
+  if (!length(provider_columns) || length(missing_columns)) {
+    required <- c("service/provider", .genflow_catalog_columns())
+    stop(
+      "Updater produced an invalid catalog schema; required columns are: ",
+      paste(required, collapse = ", "),
+      ".",
+      call. = FALSE
+    )
+  }
+
+  model_values <- trimws(as.character(catalog$model))
+  type_values <- trimws(as.character(catalog$type))
+  if (any(is.na(model_values) | !nzchar(model_values))) {
+    stop("Updater produced a catalog with an empty model id.", call. = FALSE)
+  }
+  if (any(is.na(type_values) | !nzchar(type_values))) {
+    stop("Updater produced a catalog with an empty model type.", call. = FALSE)
+  }
+
+  provider_values <- trimws(as.character(catalog[[provider_columns[[1]]]]))
+  if (any(is.na(provider_values) | !nzchar(provider_values))) {
+    stop("Updater produced a catalog with an empty provider id.", call. = FALSE)
+  }
+  normalized_values <- vapply(
+    provider_values,
+    .genflow_normalize_service_alias,
+    character(1),
+    USE.NAMES = FALSE
+  )
+  expected_provider <- .genflow_normalize_service_alias(provider)
+  if (any(normalized_values != expected_provider)) {
+    stop(
+      "Updater produced a catalog for a different provider.",
+      call. = FALSE
+    )
+  }
+
+  invisible(catalog)
+}
+
+.genflow_promote_catalog_file <- function(staged_path,
+                                          final_path,
+                                          rename_fn = file.rename,
+                                          portable_replace = identical(.Platform$OS.type, "windows")) {
+  if (!file.exists(staged_path)) {
+    stop("Validated staged catalog disappeared before publication.", call. = FALSE)
+  }
+  dir.create(dirname(final_path), recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(dirname(final_path))) {
+    stop("Could not create the model catalog directory.", call. = FALSE)
+  }
+
+  lock <- .genflow_acquire_file_lock(
+    final_path,
+    timeout = getOption("genflow.catalog_lock_timeout", 30),
+    poll = getOption("genflow.catalog_lock_poll", 0.05),
+    stale_after = getOption("genflow.catalog_lock_stale_after", 300),
+    lock_label = "model catalog"
+  )
+  on.exit(.genflow_release_file_lock(lock), add = TRUE)
+
+  target_exists <- file.exists(final_path)
+  if (!target_exists || !isTRUE(portable_replace)) {
+    replaced <- tryCatch(
+      rename_fn(staged_path, final_path),
+      error = function(e) FALSE
+    )
+    if (!isTRUE(replaced)) {
+      stop(
+        "Could not atomically publish the validated model catalog; ",
+        "the previous catalog was left unchanged.",
+        call. = FALSE
+      )
+    }
+    return(invisible(TRUE))
+  }
+
+  rollback <- .genflow_unique_sidecar_path(final_path, "rollback", ".tmp")
+  moved_original <- tryCatch(
+    rename_fn(final_path, rollback),
+    error = function(e) FALSE
+  )
+  if (!isTRUE(moved_original)) {
+    stop(
+      "Could not prepare a recoverable model catalog replacement; ",
+      "the previous catalog was left unchanged.",
+      call. = FALSE
+    )
+  }
+
+  replaced <- tryCatch(
+    rename_fn(staged_path, final_path),
+    error = function(e) FALSE
+  )
+  if (!isTRUE(replaced)) {
+    restored <- tryCatch(
+      rename_fn(rollback, final_path),
+      error = function(e) FALSE
+    )
+    if (isTRUE(restored)) {
+      stop(
+        "Could not publish the validated model catalog; ",
+        "the previous catalog was restored.",
+        call. = FALSE
+      )
+    }
+    stop(
+      "Could not publish the validated model catalog; the previous catalog ",
+      "remains in recovery file ",
+      rollback,
+      ".",
+      call. = FALSE
+    )
+  }
+
+  if (file.exists(rollback)) {
+    unlink(rollback, force = TRUE)
+  }
+  invisible(TRUE)
+}
+
+.genflow_run_catalog_update <- function(provider,
+                                        update_function,
+                                        directory,
+                                        verbose = TRUE,
+                                        update_args = list(),
+                                        promote_fn = .genflow_promote_catalog_file) {
+  provider <- as.character(provider)[[1]]
+  safe_provider <- gsub("[^a-z0-9._-]+", "-", tolower(provider), perl = TRUE)
+  staging_dir <- tempfile(
+    pattern = paste0(".", safe_provider, "-staging-"),
+    tmpdir = directory
+  )
+  created <- dir.create(
+    staging_dir,
+    recursive = FALSE,
+    showWarnings = FALSE,
+    mode = "0700"
+  )
+  if (!isTRUE(created) || !dir.exists(staging_dir)) {
+    stop("Could not create an isolated model catalog staging directory.", call. = FALSE)
+  }
+  on.exit(unlink(staging_dir, recursive = TRUE, force = TRUE), add = TRUE)
+
+  call_args <- c(
+    update_args,
+    list(directory = staging_dir, verbose = verbose)
+  )
+  update_result <- do.call(update_function, call_args)
+  staged_path <- file.path(staging_dir, paste0(provider, ".csv"))
+  .genflow_validate_catalog_file(staged_path, provider = provider)
+
+  final_path <- file.path(directory, paste0(provider, ".csv"))
+  promoted <- promote_fn(staged_path, final_path)
+  if (!isTRUE(promoted) || !file.exists(final_path)) {
+    stop("Validated model catalog was not published.", call. = FALSE)
+  }
+  if (verbose) {
+    message("Published validated catalog '", basename(final_path), "'.")
+  }
+  invisible(update_result)
+}
+
 #' Update provider model lists and write CSVs
 #'
 #' High-level convenience function to update model lists from one or several
 #' providers and write normalized CSV files to a directory.
+#'
+#' Each provider runs in an isolated staging directory. Its CSV must contain
+#' `service` or `provider`, plus `model`, `type`, `pricing`, and `description`,
+#' and is atomically published only after validation. A failed update never
+#' truncates the previous provider catalog.
 #'
 #' The interactive interface preflights provider credentials before calling this
 #' helper. When calling it directly, use `fail_on_error = TRUE` if provider
@@ -1845,7 +2745,7 @@
 #'        Otherwise one of the built-ins ("openrouter", "openai", "anthropic",
 #'        "groq", "cerebras", "together", "sambanova", "nebius", "deepseek",
 #'        "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini",
-#'        "fal", "replicate", "ollama", "llamacpp") or a custom provider id
+#'        "fal", "replicate", "hf", "hf-local", "ollama", "llamacpp") or a custom provider id
 #'        configured with [set_provider_openai_compat()].
 #' @param directory Character path where CSVs will be saved. Defaults to working dir.
 #' @param verbose Logical flag to print progress messages.
@@ -1862,21 +2762,29 @@
 #' @export
 gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE, fail_on_error = FALSE) {
   # Set default directory if not provided
-  if (is.null(directory) || is.na(directory)) {
+  if (is.null(directory) || !length(directory) ||
+      (length(directory) == 1L && is.na(directory))) {
     directory <- tools::R_user_dir("agent_models", which = "data")
+  } else if (!is.character(directory) || length(directory) != 1L ||
+             is.na(directory) || !nzchar(trimws(directory))) {
+    stop("`directory` must be one non-empty path.", call. = FALSE)
   }
+  directory <- path.expand(directory)
 
   # Create directory if it doesn't exist
   if (!dir.exists(directory)) {
     if (verbose) message("Creating directory: ", directory)
     dir.create(directory, recursive = TRUE, showWarnings = FALSE)
   }
+  if (!dir.exists(directory)) {
+    stop("Failed to create model directory: ", directory, call. = FALSE)
+  }
 
   # Define all available built-in providers
   builtin_providers <- c(
     "openrouter", "openai", "anthropic", "groq", "cerebras", "together", "sambanova",
     "nebius", "deepseek", "perplexity", "fireworks", "deepinfra", "hyperbolic",
-    "gemini", "fal", "replicate", "ollama", "llamacpp"
+    "gemini", "fal", "replicate", "hf", "hf-local", "ollama", "llamacpp"
   )
   custom_provider_cfgs <- .genflow_list_custom_provider_configs()
   custom_providers <- names(custom_provider_cfgs)
@@ -1887,15 +2795,13 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     providers_to_update <- all_providers
     if (verbose) message("Updating all models...")
   } else {
-    provider <- tolower(provider)
-    provider[provider %in% c("claude")] <- "anthropic"
-    provider[provider %in% c("togetherai", "together-ai", "together_ai")] <- "together"
-    provider[provider %in% c("samba-nova", "samba_nova")] <- "sambanova"
-    provider[provider %in% c("deep-seek", "deep_seek")] <- "deepseek"
-    provider[provider %in% c("deep-infra", "deep_infra")] <- "deepinfra"
-    provider[provider %in% c("fireworks-ai", "fireworks_ai", "firework")] <- "fireworks"
-    provider[provider %in% c("pplx")] <- "perplexity"
-    provider[provider %in% c("llama-cpp", "llama_cpp")] <- "llamacpp"
+    provider <- vapply(
+      as.character(provider),
+      .genflow_normalize_service_alias,
+      character(1),
+      USE.NAMES = FALSE
+    )
+    provider <- unique(provider)
     invalid_providers <- setdiff(provider, all_providers)
     if (length(invalid_providers) > 0) {
       stop("Invalid provider(s): ", paste(invalid_providers, collapse = ", "),
@@ -1923,6 +2829,8 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     "gemini"     = list(func = ".update_models_gemini",     name = "Gemini"),
     "fal"        = list(func = ".update_models_fal",        name = "Fal"),
     "replicate"  = list(func = ".update_models_replicate",  name = "Replicate"),
+    "hf"         = list(func = ".update_models_hf",         name = "Hugging Face"),
+    "hf-local"   = list(func = ".update_models_hf_local",   name = "Hugging Face local"),
     "ollama"     = list(func = ".update_models_ollama",     name = "Ollama"),
     "llamacpp"   = list(func = ".update_models_llamacpp",   name = "llama-cpp")
   )
@@ -1940,7 +2848,12 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
       update_info <- update_functions[[prov]]
       if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, update_info$name))
       tryCatch({
-        do.call(update_info$func, list(directory = directory, verbose = verbose))
+        .genflow_run_catalog_update(
+          provider = prov,
+          update_function = update_info$func,
+          directory = directory,
+          verbose = verbose
+        )
         updated_providers <- c(updated_providers, prov)
       }, error = function(e) {
         failures[[prov]] <<- e$message
@@ -1953,7 +2866,13 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     custom_name <- custom_cfg$label %||% prov
     if (verbose) message(sprintf("%d/%d - Updating %s...", current_provider, total_providers, custom_name))
     tryCatch({
-      .update_models_custom_openai_compat(provider_id = prov, directory = directory, verbose = verbose)
+      .genflow_run_catalog_update(
+        provider = prov,
+        update_function = ".update_models_custom_openai_compat",
+        directory = directory,
+        verbose = verbose,
+        update_args = list(provider_id = prov)
+      )
       updated_providers <- c(updated_providers, prov)
     }, error = function(e) {
       failures[[prov]] <<- e$message

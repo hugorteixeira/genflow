@@ -14,8 +14,9 @@ Date objects, "YYYYMMDD", or ISO "YYYY-MM-DD" strings.}
 Invisibly returns the data.frame of logs for the date (or empty if none).
 }
 \description{
-Loads and prints the saved stats for a given date from
-\code{tools::R_user_dir("genflow", which = "data")}.
+Loads and prints the saved stats for a given date from the directory set by
+option \code{genflow.log_dir}, or from
+\code{tools::R_user_dir("genflow", which = "data")} when the option is unset.
 }
 \examples{
 # gen_stats()              # show today's logs

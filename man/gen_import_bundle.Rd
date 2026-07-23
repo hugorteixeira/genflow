@@ -12,7 +12,10 @@ gen_import_bundle(
   include_models = TRUE,
   models_dir = NULL,
   overwrite = FALSE,
-  quiet = FALSE
+  quiet = FALSE,
+  max_entries = 10000L,
+  max_file_bytes = 128 * 1024^2,
+  max_bundle_bytes = 512 * 1024^2
 )
 }
 \arguments{
@@ -26,6 +29,12 @@ flags indicating which components should be imported.}
 \item{overwrite}{Overwrite existing files if they already exist.}
 
 \item{quiet}{Suppress informational messages.}
+
+\item{max_entries}{Maximum number of archive entries accepted.}
+
+\item{max_file_bytes}{Maximum expanded size of one archive file.}
+
+\item{max_bundle_bytes}{Maximum total expanded size of archive files.}
 }
 \value{
 Invisibly returns a list with \code{counts}, \code{includes}, \code{metadata}, and

@@ -6,6 +6,8 @@
 \usage{
 gen_interface(
   launch.browser = getOption("shiny.launch.browser", interactive()),
+  host = "127.0.0.1",
+  allow_remote = FALSE,
   ...
 )
 }
@@ -14,8 +16,14 @@ gen_interface(
 browser? Defaults to the value of \code{getOption("shiny.launch.browser")}
 or \code{interactive()} when unset.}
 
+\item{host}{Interface bind address. Defaults to the IPv4 loopback address.}
+
+\item{allow_remote}{Logical; explicitly acknowledge the security risk of
+binding to a non-loopback address. The interface can read local paths and
+manage credentials, so genflow does not expose it remotely by default.}
+
 \item{...}{Additional arguments passed through to \code{shiny::runApp()},
-such as \code{port}, \code{host}, or \code{display.mode}.}
+such as \code{port} or \code{display.mode}.}
 }
 \value{
 Invisibly returns the result of \code{shiny::runApp()}.

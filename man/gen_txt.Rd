@@ -23,6 +23,7 @@ gen_txt(context, ...)
   plugins = NULL,
   my_tools = NULL,
   timeout_api = 240,
+  base_url = NULL,
   null_repeat = TRUE,
   persist = TRUE,
   ...
@@ -34,7 +35,8 @@ gen_txt(context, ...)
 \item{context}{Character or object; main prompt or context. Non-character values
 are stringified.}
 
-\item{...}{Additional arguments passed to method-specific implementations.}
+\item{...}{Reserved for future provider-specific arguments. Supplying values
+currently raises an error instead of silently ignoring them.}
 
 \item{res_context}{Logical; whether to persist the original \code{context} alongside
 the response when saving.}
@@ -54,8 +56,9 @@ sanitized derivation of \code{context}.}
 \item{service}{Character; provider identifier (e.g. \code{"openai"},
 \code{"openrouter"}, \code{"anthropic"}, \code{"groq"}, \code{"cerebras"}, \code{"together"},
 \code{"sambanova"}, \code{"nebius"}, \code{"deepseek"}, \code{"perplexity"}, \code{"fireworks"},
-\code{"deepinfra"}, \code{"hyperbolic"}, \code{"hf"}, \code{"ollama"}, \code{"llamacpp"}), or a
-custom id configured with \code{\link[=set_provider_openai_compat]{set_provider_openai_compat()}}.}
+\code{"deepinfra"}, \code{"hyperbolic"}, \code{"gemini"}, \code{"hf"}, \code{"ollama"},
+\code{"llamacpp"}), or a custom id configured with
+\code{\link[=set_provider_openai_compat]{set_provider_openai_compat()}}.}
 
 \item{model}{Character; model identifier for the chosen \code{service}.}
 
@@ -75,8 +78,13 @@ plugins/extensions to include in the request.}
 \item{timeout_api}{Numeric; request timeout (seconds) passed to the provider
 call.}
 
+\item{base_url}{Optional explicit base URL for local Ollama or llama-cpp
+services. Explicit values take precedence over environment variables,
+local inference configuration, and built-in defaults.}
+
 \item{null_repeat}{Logical; if \code{TRUE}, retries on empty responses with
-progressive waits (10s, 60s, 600s).}
+progressive waits. Hugging Face model-loading responses use shorter
+retries and remain structured errors if the model is still unavailable.}
 
 \item{persist}{Logical; whether to save the response artifact and generation
 statistics. Set to \code{FALSE} when another package owns result persistence.}
@@ -91,6 +99,10 @@ High-level helper to send a prompt (and optional additional content and image)
 to a selected provider/model using a unified interface. Handles timeouts,
 retries on empty results, basic token estimation, and optional persistence of
 requests and responses through \code{.save_response}.
+}
+\details{
+For a \code{genflow_agent}, supply \code{context_override} through \code{...} to
+replace the saved context for one call.
 }
 \examples{
 \dontrun{

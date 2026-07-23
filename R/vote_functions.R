@@ -19,12 +19,13 @@
 #'   `"Option"`).
 #' @param title Optional character title printed before the ranking (default
 #'   `"Vote Count"`). Use `NULL` or `""` to skip the title.
-#' @param return_winner Logical. When `TRUE`, the function invisibly returns only
-#'   the winning option instead of the full ranking.
+#' @param return_winner Return mode: `"ranking"` (default), `"scoreboard"`,
+#'   `"id"`, or `"content"`. Logical `TRUE`/`FALSE` remains accepted as a
+#'   compatibility alias for `"id"`/`"ranking"`.
 #'
-#' @return Invisibly returns the ranking (character vector) or, when
-#'   `return_winner = TRUE`, the winning option. A message is printed when no
-#'   votes are found.
+#' @return Invisibly returns the value selected by `return_winner`: a named
+#'   ranking, a scoreboard data frame, the winning id, or the corresponding
+#'   content. A message is printed when no votes are found.
 #' @examples
 #' votes <- list(
 #'   list(response_value = "I choose option 2", model = "model-a"),
@@ -48,25 +49,49 @@ gen_vote <- function(voting_list,
   if (missing(voting_list)) {
     stop("`voting_list` must be provided.", call. = FALSE)
   }
-  if (missing(trigger) || !nzchar(trigger)) {
-    stop("`trigger` must be a non-empty string.", call. = FALSE)
+  if (!is.list(voting_list) && !is.character(voting_list)) {
+    stop("`voting_list` must be a list or character vector.", call. = FALSE)
   }
+  if (missing(trigger) ||
+      !is.character(trigger) ||
+      length(trigger) != 1L ||
+      is.na(trigger) ||
+      !nzchar(trimws(trigger))) {
+    stop("`trigger` must be one non-empty string.", call. = FALSE)
+  }
+  trigger <- trimws(trigger)
 
   type <- match.arg(type)
+  if (length(return_winner) == 1L && is.logical(return_winner)) {
+    if (is.na(return_winner)) {
+      stop("`return_winner` cannot be NA.", call. = FALSE)
+    }
+    return_winner <- if (isTRUE(return_winner)) "id" else "ranking"
+  }
+  return_mode <- match.arg(
+    return_winner,
+    c("ranking", "content", "scoreboard", "id")
+  )
+  if (identical(return_mode, "content") && is.null(underlying_list)) {
+    stop(
+      "`underlying_list` must be provided when `return_winner = \"content\"`.",
+      call. = FALSE
+    )
+  }
 
   normalize_text <- function(text) {
     tolower(iconv(text, to = "ASCII//TRANSLIT", sub = ""))
   }
 
   trigger_norm <- normalize_text(trigger)
-  if (!nzchar(trigger_norm)) {
+  if (is.na(trigger_norm) || !nzchar(trigger_norm)) {
     stop("`trigger` could not be normalised to ASCII; please use a different value.", call. = FALSE)
   }
 
   pattern <- if (type == "number") {
-    paste0("\\Q", trigger_norm, "\\E[^a-z0-9]*([0-9]+)")
+    paste0(.genflow_regex_escape(trigger_norm), "[^a-z0-9]*([0-9]+)")
   } else {
-    paste0("\\Q", trigger_norm, "\\E[^a-z0-9]*([a-z])")
+    paste0(.genflow_regex_escape(trigger_norm), "[^a-z0-9]*([a-z])")
   }
 
   vote_values <- character(0)
@@ -173,14 +198,6 @@ gen_vote <- function(voting_list,
   }
 
   cat(paste(ranking, collapse = "\n"), "\n", sep = "")
-
-  if (length(return_winner) == 1L && is.logical(return_winner)) {
-    return_winner <- if (isTRUE(return_winner)) "id" else "ranking"
-  }
-  return_mode <- match.arg(return_winner, c("ranking", "content", "scoreboard", "id"))
-  if (identical(return_mode, "content") && is.null(underlying_list)) {
-    stop("`underlying_list` must be provided when `return_winner = \"content\"`.", call. = FALSE)
-  }
 
   winner_value <- names(counts)[1]
 

@@ -11,6 +11,10 @@ Provider runtime code continues to read configuration with `Sys.getenv()`.
 The interface does not store secrets in genflow setup, agent, content, bundle,
 or model catalog files.
 
+Where a provider has supported aliases, the credential preflight treats them
+as one requirement. For Gemini, `GOOGLE_API_KEY` takes precedence and
+`GEMINI_API_KEY` remains accepted.
+
 ## Credentials Panel
 
 Launch the interface:
@@ -29,8 +33,11 @@ In the **Models > Credentials** panel, choose a provider and use:
 - **Delete** to remove that provider's managed variables from `.Renviron` and
   unset them in the current R session.
 
-Every write backs up the current `.Renviron` first and also loads the new values
-into the active R session with `Sys.setenv()`.
+Every write takes an inter-process lock, stages a private replacement, backs up
+the current `.Renviron`, commits atomically, and then loads the new values into
+the active R session with `Sys.setenv()`. On Unix-like systems, managed files
+and recovery copies use mode `0600`. Interrupted portable replacements retain
+or recover the original instead of silently truncating it.
 
 ## Base URLs
 
@@ -64,3 +71,24 @@ gen_update_models(provider = "openai", fail_on_error = TRUE)
 
 The default remains compatible with prior behavior, but UI calls use checked
 mode so provider failures are visible instead of being reported as success.
+
+## Hugging Face Catalogs
+
+Hugging Face has two different execution surfaces, so genflow keeps two
+catalogs:
+
+- `provider = "hf"` writes `hf.csv` with models that currently advertise at
+  least one live Hugging Face Inference Provider mapping.
+- `provider = "hf-local"` writes `hf-local.csv` with Hub models intended for
+  local discovery, including compatible speech-to-text candidates.
+
+```r
+gen_update_models(
+  provider = c("hf", "hf-local"),
+  fail_on_error = TRUE
+)
+```
+
+A local-only Hub model is deliberately excluded from `hf.csv`; otherwise the
+app could offer it for a remote `service = "hf"` call that cannot execute it.
+See [Local inference](local-inference.md) for local STT configuration.

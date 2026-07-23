@@ -1,7 +1,7 @@
 #' Generate an image via a selected provider
 #'
 #' High-level image generation wrapper that dispatches to provider-specific
-#' implementations (Hugging Face, FAL, Replicate, OpenAI, etc.) and saves the
+#' implementations (Hugging Face, FAL, Replicate, and OpenAI) and saves the
 #' resulting image to disk.
 #'
 #' @param prompt Character. Main text prompt describing the desired image.
@@ -9,13 +9,23 @@
 #'   character, it will be concatenated to `prompt`.
 #' @param directory Optional output directory. Defaults to `getwd()/imgs` if NULL.
 #' @param label Optional short label to be used in filenames. If NULL, derived from prompt.
-#' @param service Provider identifier (e.g., "hf", "fal", "replicate", "together", "cloudflare", "bfl").
-#' @param model Provider model identifier (e.g., "black-forest-labs/FLUX.1-schnell").
+#' @param service Provider identifier: `"hf"`, `"fal"`, `"replicate"`, or
+#'   `"openai"`.
+#' @param model Provider model identifier. When NULL, a provider-specific
+#'   default is selected.
 #' @param temp Numeric guidance/temperature parameter (provider-specific meaning).
 #' @param steps Integer inference steps (if supported by provider/model).
 #' @param h Integer output height in pixels.
 #' @param y Integer output width in pixels (named `y` here to match internal calls).
-#' @param ... Additional arguments forwarded to method-specific implementations.
+#' @param model_version Optional Replicate model version. It can also be
+#'   supplied as part of `model` using `"owner/name:version"`.
+#' @param replicate_input Optional named list of Replicate input overrides.
+#'   Unknown Replicate models receive only `prompt` by default; use this
+#'   argument for model-specific schema fields.
+#' @param poll_interval Polling interval in seconds for asynchronous providers.
+#' @param max_poll_seconds Maximum time in seconds to poll an asynchronous
+#'   provider before returning an error.
+#' @param ... Reserved for S3 methods.
 #'
 #' @return Invisibly returns a list with fields such as `response_value` (saved file path
 #'   on success or NULL on error), `status_api`, `status_msg`, `service`, `model`, `temp`,
@@ -34,13 +44,40 @@ gen_img <- function(prompt, ...) {
 #' @rdname gen_img
 #' @method gen_img default
 #' @export
-gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, service = "hf", model = "black-forest-labs/FLUX.1-schnell", temp = 5, steps = 18, h = 1072, y = 1920, ...) { # Ensure 'y' matches internal calls (or use 'w')
+gen_img.default <- function(prompt,
+                            add = NULL,
+                            directory = NULL,
+                            label = NULL,
+                            service = "hf",
+                            model = NULL,
+                            temp = 5,
+                            steps = 18,
+                            h = 1072,
+                            y = 1920,
+                            model_version = NULL,
+                            replicate_input = NULL,
+                            poll_interval = 3,
+                            max_poll_seconds = 600,
+                            ...) {
 
   start_time <- Sys.time()
 
-  # --- Input Processing & Setup (Keep existing code) ---
-  if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
-  if (is.list(model)) model <- as.character(model$model %||% model$model %||% model[[1]]) else if (is.vector(model)) model <- as.character(model[1])
+  # --- Input Processing & Setup ---
+  if (is.list(service)) {
+    service <- service$service %||% if (length(service)) service[[1]] else NULL
+  }
+  if (is.vector(service)) service <- as.character(service[1])
+  service <- tolower(trimws(as.character(service %||% "")[1]))
+  if (is.na(service) || !nzchar(service)) {
+    stop("`service` must be a non-empty provider identifier.", call. = FALSE)
+  }
+  if (is.list(model)) {
+    model <- model$model %||% if (length(model)) model[[1]] else NULL
+  }
+  if (is.vector(model)) model <- as.character(model[1])
+  if (is.null(model) || length(model) == 0L || is.na(model) || !nzchar(model)) {
+    model <- .gen_img_default_model(service)
+  }
   if (is.list(temp)) temp <- as.numeric(temp$temperature %||% temp$temp %||% temp[[1]]) else if (is.vector(temp)) temp <- as.numeric(temp[1])
   if (length(temp) != 1 || !is.numeric(temp) || is.na(temp)) temp <- 7.0 # Default guidance
   if (is.list(steps)) steps <- as.numeric(steps$steps %||% steps[[1]]) else if (is.vector(steps)) steps <- as.numeric(steps[1])
@@ -58,7 +95,6 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
   label_processed <- label %||% paste(strsplit(final_prompt, "[[:space:]]+")[[1]][1:min(5, length(strsplit(final_prompt, "[[:space:]]+")[[1]]))], collapse = "_")
   label_processed <- substr(label_processed, 1, 36)
   label_sanitized <- .sanitize_filename(label_processed)
-  model_sanitized_name <- .sanitize_filename(model) # For filename
 
   # --- Call Service Function ---
   cat("Generating image via", service, "/", model, "...\n" )
@@ -67,16 +103,36 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
   api_call_error_msg <- "" # Store specific error
 
   tryCatch({
-    # Switch calls the appropriate internal function
-    file_path <- switch(tolower(service),
-                    #    "cloudflare" = gen_img_cloudflare(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-                        "hf" = .gen_img_hf(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-                        "fal" = .gen_img_fal(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-                     #   "together" = gen_img_together(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-                        "replicate" = .gen_img_replicate(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-                      #  "bfl" = gen_img_bfl(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-                        # Add other image services here
-                        stop(paste0("Image service not supported: ", service)) # Use stop for unsupported
+    file_path <- switch(service,
+      "hf" = .gen_img_hf(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
+      "fal" = .gen_img_fal(
+        final_prompt,
+        model,
+        temp,
+        steps,
+        h,
+        y,
+        directory,
+        label_sanitized,
+        poll_interval = poll_interval,
+        max_poll_seconds = max_poll_seconds
+      ),
+      "openai" = .gen_img_openai(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
+      "replicate" = .gen_img_replicate(
+        final_prompt,
+        model,
+        temp,
+        steps,
+        h,
+        y,
+        directory,
+        label_sanitized,
+        model_version = model_version,
+        replicate_input = replicate_input,
+        poll_interval = poll_interval,
+        max_poll_seconds = max_poll_seconds
+      ),
+      stop(paste0("Image service not supported: ", service))
     )
   }, error = function(e) {
     error_occurred <<- TRUE
@@ -131,12 +187,14 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
     service          = service,
     model           = model,
     temp             = temp, # Guidance scale
+    steps            = steps,
     duration            = duration_response,
     status_api       = final_status,
     status_msg  = final_msg_status, # "OK" or error message
     prompt_usado     = final_prompt,
     saved_file    = if(final_status == "SUCCESS") file_path else NA_character_,
-    dimensoes        = if(final_status == "SUCCESS") paste0(y, "x", h) else NA_character_ # WxH
+    dimensoes        = if(final_status == "SUCCESS") paste0(y, "x", h) else NA_character_, # WxH
+    content_type     = "image"
     # Add other relevant attributes like 'steps' if needed
   )
 
@@ -158,6 +216,21 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
 
   return(invisible(resultado_com_atributos)) # Return the LIST in both success/error cases
 }
+
+#' Resolve the default image model for a provider
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_default_model <- function(service) {
+  switch(tolower(service),
+    "hf" = "black-forest-labs/FLUX.1-schnell",
+    "fal" = "fal-ai/flux/schnell",
+    "replicate" = "black-forest-labs/flux-schnell",
+    "openai" = "gpt-image-2",
+    "default"
+  )
+}
+
 #' Hugging Face image generation (internal)
 #'
 #' @keywords internal
@@ -166,7 +239,7 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
   service_name <- "hf"
   # Get HF token
   hf_token <- Sys.getenv("HUGGINGFACE_API_TOKEN")
-  if (hf_token == "") stop("HUGGINGFACE_API_TOKEN must be set.")
+  if (!nzchar(hf_token)) stop("HUGGINGFACE_API_TOKEN must be set.")
 
   # Use 'model' directly as the model path
   model_path <- model
@@ -192,7 +265,9 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
     httr::timeout(300)
   )
   # Process response & get binary
-  content_type <- httr::headers(response)[["content-type"]]
+  content_type <- tolower(
+    as.character(httr::headers(response)[["content-type"]] %||% "")[1]
+  )
   img_binary <- NULL
   if (httr::status_code(response) >= 200 && httr::status_code(response) < 300) {
     if (grepl("^image/", content_type)) {
@@ -217,7 +292,7 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
     stop(sprintf("HuggingFace API error (%s): %s", httr::status_code(response), error_detail))
   }
 
-  if (is.null(img_binary) || length(img_binary) == 0) {
+  if (!is.raw(img_binary) || length(img_binary) == 0L) {
     stop("Empty or invalid HuggingFace image content.")
   }
 
@@ -240,16 +315,24 @@ gen_img.default <- function(prompt, add = NULL, directory = NULL, label = NULL, 
 
 #' @rdname gen_img
 #' @method gen_img genflow_agent
+#' @details For a `genflow_agent`, a saved `context` is used as the image prompt
+#'   when the agent has no explicit `prompt`. Supply `prompt_override` through
+#'   `...` to replace the saved prompt for one call.
 #' @export
 gen_img.genflow_agent <- function(prompt, ...) {
   agent <- prompt
+  if (is.null(agent$prompt) && !is.null(agent$context)) {
+    agent$prompt <- agent$context
+  }
   overrides <- list(...)
   formals_default <- formals(gen_img.default)
   agent_args <- .genflow_prepare_agent_args(
     agent = agent,
     overrides = overrides,
     target_formals = formals_default,
-    required = "prompt"
+    required = "prompt",
+    override_aliases = c(prompt_override = "prompt"),
+    override_label = "gen_img()"
   )
   do.call(gen_img.default, agent_args, quote = TRUE)
 }
@@ -257,103 +340,151 @@ gen_img.genflow_agent <- function(prompt, ...) {
 #'
 #' @keywords internal
 #' @noRd
-.gen_img_fal <- function(prompt, model = "flux-1/schnell", temp, steps = 18, h, y, directory, label_sanitized) {
-  # (Internal logic matches the _srv version; mapping removed)
+.gen_img_fal <- function(prompt,
+                         model = "fal-ai/flux/schnell",
+                         temp,
+                         steps = 18,
+                         h,
+                         y,
+                         directory,
+                         label_sanitized,
+                         poll_interval = 3,
+                         max_poll_seconds = 600,
+                         request = .gen_img_fal_request,
+                         sleep = Sys.sleep,
+                         clock = Sys.time) {
   service_name <- "fal"
   fal_token <- Sys.getenv("FAL_API_KEY")
-  if (fal_token == "") stop("FAL_API_KEY must be set.")
+  if (!nzchar(fal_token)) stop("FAL_API_KEY must be set.")
 
-  model_path <- model
+  poll_interval <- suppressWarnings(as.numeric(poll_interval)[1])
+  max_poll_seconds <- suppressWarnings(as.numeric(max_poll_seconds)[1])
+  if (is.na(poll_interval) || !is.finite(poll_interval) ||
+      poll_interval < 0) {
+    stop("`poll_interval` must be a non-negative number.", call. = FALSE)
+  }
+  if (is.na(max_poll_seconds) || !is.finite(max_poll_seconds) ||
+      max_poll_seconds <= 0) {
+    stop("`max_poll_seconds` must be a positive number.", call. = FALSE)
+  }
+
+  model_path <- .gen_img_fal_model_path(model)
   model_sanitized_name <- .sanitize_filename(model)
-
   url <- sprintf("https://queue.fal.run/fal-ai/%s", model_path)
-  hx <- round(h / 8) * 8
-  wx <- round(y / 8) * 8
-  safety = FALSE
+  body <- .gen_img_fal_input(model_path, prompt, temp, steps, h, y)
 
-  # model  -> string containing the model id/name
-  # hx, wx  -> desired height and width
-
-  body <- if (grepl("imagen|kontext", model, ignore.case = TRUE)) {
-
-    ## --- model contains 'imagen'/'kontext' -> use aspect_ratio ---------------
-    list(
-      prompt              = prompt,
-      guidance_scale      = temp,
-      num_inference_steps = steps,
-      enable_safety_checker = FALSE,
-      image_size          = list(height = hx, width = wx),
-      aspect_ratio = "16:9"
-    )
-
-  } else {
-
-    ## --- other models -> use image_size -------------------------
-    list(
-      prompt              = prompt,
-      guidance_scale      = temp,
-      num_inference_steps = steps,
-      enable_safety_checker = FALSE,
-      image_size          = list(height = hx, width = wx)
-    )
+  response <- request(
+    method = "POST",
+    url = url,
+    token = fal_token,
+    body = body,
+    timeout_secs = 300
+  )
+  response_status <- suppressWarnings(as.integer(response$status)[1])
+  if (is.na(response_status) ||
+      !(response_status %in% c(200L, 201L, 202L))) {
+    stop(sprintf(
+      "Initial FAL API error (%s): %s",
+      response$status %||% "unknown",
+      .gen_img_fal_error_detail(response)
+    ))
   }
-  response <- httr::POST(url, httr::add_headers('Content-Type' = 'application/json', 'Authorization' = paste("Key", fal_token)),
-                         body = jsonlite::toJSON(body, auto_unbox = TRUE), encode = "json")
 
-  if (httr::status_code(response) >= 400) {
-    erro <- httr::content(response, "text", encoding = "UTF-8")
-      stop(sprintf("Initial FAL API error (%s): %s", httr::status_code(response), tryCatch(jsonlite::fromJSON(erro)$detail, error=function(e) erro)))
+  content <- response$content
+  if (!is.list(content)) {
+    stop("FAL returned an invalid queue submission response.", call. = FALSE)
   }
-  content <- httr::content(response, as = "parsed", simplifyVector = TRUE)
+  status_url <- as.character(content$status_url %||% "")[1]
+  response_url <- as.character(content$response_url %||% "")[1]
+  if (is.na(status_url) || !nzchar(status_url) ||
+      is.na(response_url) || !nzchar(response_url)) {
+    stop("FAL response is missing `status_url` or `response_url`.")
+  }
 
-  # DEBUG: Print the initial response structure if links are missing
-  status_url <- content$`_links`$status$href
-  response_url <- content$`_links`$response$href
-  if (is.null(status_url) || is.null(response_url)) {
-    # Try alternative common structure (older API?)
-    status_url <- content$status_url
-    response_url <- content$response_url
-    if (is.null(status_url) || is.null(response_url)){
-      stop("Status/response links not found in FAL API (see debug above).")
-    } else {
-      #warning("Usando campos 'status_url'/'response_url' legados da API FAL.")
-    }
-  }
-  status <- content$status
-  #cat("Initial FAL status:", status, "\nWaiting for completion...\n")
+  status <- .gen_img_fal_status(content[["status"]] %||% "IN_QUEUE")
+  status_content <- content
+  started <- clock()
   while (status %in% c("IN_QUEUE", "IN_PROGRESS")) {
-    Sys.sleep(3)
-    status_response <- httr::GET(status_url, httr::add_headers('Authorization' = paste("Key", fal_token)))
-    if (httr::status_code(status_response) >= 400) {
-      erro <- httr::content(status_response, "text", encoding = "UTF-8")
-      stop(sprintf("FAL API status error (%s): %s", httr::status_code(status_response), tryCatch(jsonlite::fromJSON(erro)$detail, error=function(e) erro)))
+    elapsed <- as.numeric(difftime(clock(), started, units = "secs"))
+    if (elapsed >= max_poll_seconds) {
+      stop(
+        "FAL image generation timed out after ",
+        max_poll_seconds,
+        " seconds."
+      )
     }
-    status_content <- httr::content(status_response, as = "parsed", simplifyVector = TRUE)
-    status <- status_content$status
-    #cat("Current FAL status:", status, "\n")
-    if (status == "FAILED" || status == "CANCELLED") stop("FAL generation failed: ", status_content$error %||% status)
+
+    sleep(poll_interval)
+    status_response <- request(
+      method = "POLL",
+      url = status_url,
+      token = fal_token,
+      body = NULL,
+      timeout_secs = 300
+    )
+    poll_status <- suppressWarnings(as.integer(status_response$status)[1])
+    if (is.na(poll_status) || !identical(poll_status, 200L)) {
+      stop(sprintf(
+        "FAL API status error (%s): %s",
+        status_response$status %||% "unknown",
+        .gen_img_fal_error_detail(status_response)
+      ))
+    }
+    status_content <- status_response$content
+    if (!is.list(status_content)) {
+      stop("FAL returned an invalid queue status response.", call. = FALSE)
+    }
+    status <- .gen_img_fal_status(status_content[["status"]])
   }
-  if (status != "COMPLETED") stop("FAL generation did not complete. Final status: ", status)
 
-  #cat("Imagem FAL gerada. Buscando resultado...\n")
-  response_response <- httr::GET(response_url, httr::add_headers('Authorization' = paste("Key", fal_token)))
-  if (httr::status_code(response_response) >= 400) {
-    erro <- httr::content(response_response, "text", encoding = "UTF-8")
-    stop(sprintf("FAL API result error (%s): %s", httr::status_code(response_response), tryCatch(jsonlite::fromJSON(erro)$detail, error=function(e) erro)))
+  if (status %in% c("FAILED", "CANCELLED", "CANCELED")) {
+    stop(
+      "FAL generation failed: ",
+      status_content$error %||% status_content$detail %||% status
+    )
   }
-  response_content <- httr::content(response_response, as = "parsed", simplifyVector = TRUE)
+  if (!identical(status, "COMPLETED")) {
+    stop("FAL generation did not complete. Final status: ", status)
+  }
+  if (!is.null(status_content$error)) {
+    stop("FAL generation failed: ", status_content$error)
+  }
 
-  img_url <- NULL
-  if (!is.null(response_content$images) && is.data.frame(response_content$images) && "url" %in% names(response_content$images)) img_url <- response_content$images$url[1]
-  else if (!is.null(response_content$image$url)) img_url <- response_content$image$url
-  else if (is.list(response_content) && length(response_content)>0 && !is.null(response_content[[1]]$url)) img_url <- response_content[[1]]$url # Another possible structure
+  result_response <- request(
+    method = "RESULT",
+    url = response_url,
+    token = fal_token,
+    body = NULL,
+    timeout_secs = 300
+  )
+  result_status <- suppressWarnings(as.integer(result_response$status)[1])
+  if (is.na(result_status) || !identical(result_status, 200L)) {
+    stop(sprintf(
+      "FAL API result error (%s): %s",
+      result_response$status %||% "unknown",
+      .gen_img_fal_error_detail(result_response)
+    ))
+  }
+  img_url <- .gen_img_fal_output_url(result_response$content)
 
-  if (is.null(img_url)) { message("DEBUG FAL: Final response structure without URL:"); print(str(response_content)); stop("Image URL not found in FAL response.") }
-  #cat("Baixando imagem FAL de:", img_url, "\n")
-  img_response <- httr::GET(img_url)
-  if (img_response$status_code != 200) stop("Error downloading FAL image: ", img_response$status_code)
-  img_binary <- httr::content(img_response, as = "raw")
-  if (is.null(img_binary) || length(img_binary) == 0) stop("Empty FAL image content.")
+  img_response <- request(
+    method = "DOWNLOAD",
+    url = img_url,
+    token = NULL,
+    body = NULL,
+    timeout_secs = 300
+  )
+  download_status <- suppressWarnings(as.integer(img_response$status)[1])
+  if (is.na(download_status) || !identical(download_status, 200L)) {
+    stop(
+      "Error downloading FAL image: ",
+      img_response$status %||% "unknown"
+    )
+  }
+  img_binary <- img_response$raw
+  if (!is.raw(img_binary) || length(img_binary) == 0L) {
+    stop("Empty or invalid FAL image content.")
+  }
 
   datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
   filename <- paste(label_sanitized, service_name, model_sanitized_name, datetime_str, sep = "_")
@@ -366,88 +497,233 @@ gen_img.genflow_agent <- function(prompt, ...) {
   }, error = function(e) stop("Failed to save FAL image: ", e$message))
   return(file_path)
 }
+
+#' Normalize a FAL model id for queue URLs
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_fal_model_path <- function(model) {
+  value <- trimws(as.character(model)[1])
+  value <- sub("^fal-ai/", "", value, ignore.case = TRUE)
+  if (is.na(value) || !nzchar(value) || grepl("[[:space:]]", value) ||
+      grepl("^/|/$", value)) {
+    stop(
+      "FAL `model` must be a path such as \"fal-ai/flux/schnell\".",
+      call. = FALSE
+    )
+  }
+  value
+}
+
+#' Build the FAL image request body
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_fal_input <- function(model, prompt, temp, steps, h, y) {
+  height <- max(8L, as.integer(round(as.numeric(h)[1] / 8) * 8))
+  width <- max(8L, as.integer(round(as.numeric(y)[1] / 8) * 8))
+  step_count <- suppressWarnings(as.numeric(steps)[1])
+  if (is.na(step_count) || !is.finite(step_count)) step_count <- 18
+
+  if (identical(tolower(model), "flux/schnell")) {
+    step_count <- min(max(round(step_count), 1L), 12L)
+  }
+
+  input <- list(
+    prompt = prompt,
+    guidance_scale = temp,
+    num_inference_steps = as.integer(step_count),
+    enable_safety_checker = FALSE,
+    image_size = list(height = height, width = width)
+  )
+  if (identical(tolower(model), "flux/schnell")) {
+    input$num_images <- 1L
+    input$output_format <- "png"
+  }
+  if (grepl("imagen|kontext", model, ignore.case = TRUE)) {
+    input$aspect_ratio <- .gen_img_replicate_aspect_ratio(
+      width = width,
+      height = height
+    )
+  }
+  input
+}
+
+#' Normalize a FAL queue status
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_fal_status <- function(status) {
+  toupper(trimws(as.character(status %||% "")[1]))
+}
+
+#' Extract a FAL image URL from a result response
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_fal_output_url <- function(content) {
+  if (!is.list(content)) {
+    stop("FAL returned an invalid result response.", call. = FALSE)
+  }
+  content <- content$data %||% content
+  images <- content$images
+  img_url <- if (is.data.frame(images) && "url" %in% names(images) &&
+                 nrow(images) > 0L) {
+    images$url[[1]]
+  } else if (is.list(images) && length(images) > 0L) {
+    first <- images[[1]]
+    if (is.character(first)) first[[1]] else first$url %||% first$uri
+  } else {
+    content$image$url %||% content$image$uri
+  }
+  img_url <- as.character(img_url %||% "")[1]
+  if (is.na(img_url) || !nzchar(img_url)) {
+    stop("Image URL not found in FAL response.")
+  }
+  img_url
+}
+
+#' Extract a readable FAL API error
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_fal_error_detail <- function(response) {
+  content <- response$content
+  if (is.list(content)) {
+    detail <- content$detail %||% content$error
+    if (!is.null(detail)) return(paste(as.character(detail), collapse = "; "))
+  }
+  text <- as.character(response$text %||% "")[1]
+  if (is.na(text) || !nzchar(text)) "unknown error" else text
+}
+
+#' Execute one FAL image HTTP request
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_fal_request <- function(method,
+                                 url,
+                                 token = NULL,
+                                 body = NULL,
+                                 timeout_secs = 300) {
+  method <- match.arg(
+    toupper(method),
+    c("POST", "POLL", "RESULT", "DOWNLOAD")
+  )
+  if (identical(method, "POST")) {
+    response <- httr::POST(
+      url,
+      httr::add_headers(
+        `Content-Type` = "application/json",
+        Authorization = paste("Key", token)
+      ),
+      body = body,
+      encode = "json",
+      httr::timeout(timeout_secs)
+    )
+  } else if (method %in% c("POLL", "RESULT")) {
+    response <- httr::GET(
+      url,
+      httr::add_headers(Authorization = paste("Key", token)),
+      httr::timeout(timeout_secs)
+    )
+  } else {
+    response <- httr::GET(url, httr::timeout(timeout_secs))
+    return(list(
+      status = httr::status_code(response),
+      raw = httr::content(response, as = "raw")
+    ))
+  }
+
+  list(
+    status = httr::status_code(response),
+    content = httr::content(response, as = "parsed", simplifyVector = FALSE),
+    text = httr::content(response, "text", encoding = "UTF-8")
+  )
+}
 #' OpenAI image generation (internal)
 #'
 #' @keywords internal
 #' @noRd
-.gen_img_openai <- function(prompt, model, temp, steps = NULL, h, y, directory, label_sanitized) {
-  # checa API key
+.gen_img_openai <- function(prompt,
+                            model,
+                            temp,
+                            steps = NULL,
+                            h,
+                            y,
+                            directory,
+                            label_sanitized,
+                            request = .gen_img_openai_request) {
   openai_key <- Sys.getenv("OPENAI_API_KEY")
-  if (openai_key == "") stop("OPENAI_API_KEY must be set.")
+  if (!nzchar(openai_key)) stop("OPENAI_API_KEY must be set.")
 
-  if(is.null(h)){
-    h = 1024
-  }
-  if(is.null(y))
-  {
-    y = 1536
-  }
-  # force dimensions to 256, 512, or 1024
-  allowed <- c(256, 512, 1024, 1536)
-  hx <- allowed[which.min(abs(allowed - round(h/8)*8))]
-  wx <- allowed[which.min(abs(allowed - round(y/8)*8))]
-  size_str <- paste0(wx, "x", hx)
-
-  # monta body (sem response_format!)
+  size_str <- .gen_img_openai_size(model, width = y, height = h)
   body <- list(
-    model  = model,   # ex: "gpt-image-1" ou "dall-e-3"
+    model = model,
     prompt = prompt,
-    n      = 1,
-    size   = size_str
+    n = 1L,
+    size = size_str
   )
 
   url_api <- "https://api.openai.com/v1/images/generations"
-  resp <- httr::POST(
-    url_api,
-    httr::add_headers(
-      Authorization  = paste("Bearer", openai_key),
-      `Content-Type` = "application/json"
-    ),
-    body   = jsonlite::toJSON(body, auto_unbox = TRUE),
-    encode = "json",
-    httr::timeout(300)
+  response <- request(
+    method = "POST",
+    url = url_api,
+    api_key = openai_key,
+    body = body,
+    timeout_secs = 300
   )
 
-  status   <- httr::status_code(resp)
-  resp_txt <- httr::content(resp, "text", encoding = "UTF-8")
+  status <- as.integer(response$status %||% 0L)
+  resp_txt <- as.character(response$text %||% "")[1]
   if (status < 200 || status >= 300) {
     stop(sprintf("OpenAI API error (%s): %s", status, resp_txt))
   }
 
-  # parse JSON de forma segura
-  cont <- jsonlite::fromJSON(resp_txt, simplifyVector = FALSE)
+  cont <- tryCatch(
+    jsonlite::fromJSON(resp_txt, simplifyVector = FALSE),
+    error = function(e) {
+      stop("OpenAI returned invalid JSON: ", conditionMessage(e), call. = FALSE)
+    }
+  )
   if (!is.null(cont$error)) {
-    stop("OpenAI API error: ", cont$error$message)
+    stop("OpenAI API error: ", cont$error$message %||% "unknown error")
   }
 
-  # extrai url ou b64_json
   if (!is.list(cont$data) || length(cont$data) < 1) {
-    stop("OpenAI response missing 'data' field")
+    stop("OpenAI response missing 'data' field.")
   }
   item <- cont$data[[1]]
   img_bin <- NULL
 
   if (!is.null(item$url)) {
-    # baixa a imagem da URL
-    dl <- httr::GET(item$url, httr::timeout(300))
-    if (httr::status_code(dl) != 200) {
+    download <- request(
+      method = "GET",
+      url = as.character(item$url)[1],
+      api_key = NULL,
+      body = NULL,
+      timeout_secs = 300
+    )
+    if (!identical(as.integer(download$status), 200L)) {
       stop("Failed to download the image from the returned URL.")
     }
-    img_bin <- httr::content(dl, as = "raw")
-
+    img_bin <- download$raw
   } else if (!is.null(item$b64_json)) {
+    if (!requireNamespace("base64enc", quietly = TRUE)) {
+      stop("Package 'base64enc' is required to decode OpenAI image output.")
+    }
     img_bin <- base64enc::base64decode(item$b64_json)
-
   } else {
     stop("Unexpected response: neither url nor b64_json.")
   }
+  if (!is.raw(img_bin) || length(img_bin) == 0L) {
+    stop("OpenAI returned empty or invalid image content.")
+  }
 
-  # monta nome e salva em disco
   datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  model_sani    <- .sanitize_filename(model)
-  filename      <- paste(label_sanitized, "openai", model_sani, datetime_str, sep = "_")
-  filename      <- paste0(filename, ".png")
-  file_path     <- file.path(directory, filename)
+  model_sani <- .sanitize_filename(model)
+  filename <- paste(label_sanitized, "openai", model_sani, datetime_str, sep = "_")
+  file_path <- file.path(directory, paste0(filename, ".png"))
 
   writeBin(img_bin, file_path)
   if (!file.exists(file_path) || file.info(file_path)$size == 0) {
@@ -456,86 +732,234 @@ gen_img.genflow_agent <- function(prompt, ...) {
 
   return(file_path)
 }
+
+#' Resolve an OpenAI image size for the selected model family
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_openai_size <- function(model, width, height) {
+  model_id <- tolower(trimws(as.character(model)[1]))
+  candidates <- if (grepl("^(gpt-image-|chatgpt-image-)", model_id)) {
+    data.frame(
+      size = c("1024x1024", "1024x1536", "1536x1024"),
+      width = c(1024, 1024, 1536),
+      height = c(1024, 1536, 1024)
+    )
+  } else if (grepl("^dall-e-3($|-)", model_id)) {
+    data.frame(
+      size = c("1024x1024", "1792x1024", "1024x1792"),
+      width = c(1024, 1792, 1024),
+      height = c(1024, 1024, 1792)
+    )
+  } else if (grepl("^dall-e-2($|-)", model_id)) {
+    data.frame(
+      size = c("256x256", "512x512", "1024x1024"),
+      width = c(256, 512, 1024),
+      height = c(256, 512, 1024)
+    )
+  } else {
+    stop(
+      "Unsupported OpenAI image model: ", model,
+      ". Use a GPT Image, DALL-E 3, or DALL-E 2 model id.",
+      call. = FALSE
+    )
+  }
+
+  distance <- (candidates$width - as.numeric(width))^2 +
+    (candidates$height - as.numeric(height))^2
+  candidates$size[[which.min(distance)]]
+}
+
+#' Execute one OpenAI image HTTP request
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_openai_request <- function(method,
+                                    url,
+                                    api_key = NULL,
+                                    body = NULL,
+                                    timeout_secs = 300) {
+  method <- match.arg(toupper(method), c("POST", "GET"))
+  if (identical(method, "POST")) {
+    response <- httr::POST(
+      url,
+      httr::add_headers(
+        Authorization = paste("Bearer", api_key),
+        `Content-Type` = "application/json"
+      ),
+      body = body,
+      encode = "json",
+      httr::timeout(timeout_secs)
+    )
+    return(list(
+      status = httr::status_code(response),
+      text = httr::content(response, "text", encoding = "UTF-8")
+    ))
+  }
+
+  response <- httr::GET(url, httr::timeout(timeout_secs))
+  list(
+    status = httr::status_code(response),
+    raw = httr::content(response, as = "raw")
+  )
+}
 #' Replicate image generation (internal)
 #'
 #' @keywords internal
 #' @noRd
-.gen_img_replicate <- function(prompt, model = "black-forest-labs/flux-schnell", temp, steps = 18, h, y, directory, label_sanitized) {
+.gen_img_replicate <- function(prompt,
+                               model = "black-forest-labs/flux-schnell",
+                               temp,
+                               steps = 18,
+                               h,
+                               y,
+                               directory,
+                               label_sanitized,
+                               model_version = NULL,
+                               replicate_input = NULL,
+                               poll_interval = 3,
+                               max_poll_seconds = 600,
+                               request = .gen_img_replicate_request,
+                               sleep = Sys.sleep,
+                               clock = Sys.time) {
   service_name <- "replicate"
   replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
-  if (replicate_token == "") stop("REPLICATE_API_TOKEN must be set.")
+  if (!nzchar(replicate_token)) stop("REPLICATE_API_TOKEN must be set.")
 
-  model_version <- NULL
-  model_path <- model
-  if (grepl(":", model)) {
-    parts <- strsplit(model, ":")[[1]]
-    model_path <- parts[1]
-    model_version <- parts[2]
+  poll_interval <- suppressWarnings(as.numeric(poll_interval)[1])
+  max_poll_seconds <- suppressWarnings(as.numeric(max_poll_seconds)[1])
+  if (is.na(poll_interval) || !is.finite(poll_interval) || poll_interval < 0) {
+    stop("`poll_interval` must be a non-negative number.", call. = FALSE)
   }
+  if (is.na(max_poll_seconds) || !is.finite(max_poll_seconds) ||
+      max_poll_seconds <= 0) {
+    stop("`max_poll_seconds` must be a positive number.", call. = FALSE)
+  }
+
+  model_ref <- .gen_img_replicate_model_ref(model, model_version)
+  model_path <- model_ref$model
   model_sanitized_name <- .sanitize_filename(model)
 
-  url <- paste0("https://api.replicate.com/v1/models/", model_path, "/predictions")
-  body_list <- list()
-
-  hx <- round(h / 8) * 8
-  wx <- round(y / 8) * 8
-  if(wx > 1440){
-    wx = 1440
-  }
-
-  if(model == "black-forest-labs/flux-schnell"){
-    steps = 4
-  }
-
-  input_params <- list(prompt = prompt, height = hx, width = wx, num_outputs = 1,
-                       output_format = "png", aspect_ratio = "16:9", safety_tolerance = 6, guidance_scale = temp, num_inference_steps = steps)
-  body_list$input <- input_params
-
-  #cat("Sending initial request to Replicate (model:", model_path, ")...\n")
-  response <- httr::POST(
-    url,
-    httr::add_headers('Content-Type' = 'application/json', 'Authorization' = paste("Token", replicate_token)),
-    body = jsonlite::toJSON(body_list, auto_unbox = TRUE, null = "null"), # Era null="json"
-    encode = "json"
+  input_params <- .gen_img_replicate_input(
+    model = model_path,
+    prompt = prompt,
+    temp = temp,
+    steps = steps,
+    h = h,
+    y = y,
+    overrides = replicate_input
+  )
+  url <- "https://api.replicate.com/v1/predictions"
+  body_list <- list(
+    version = model_ref$reference,
+    input = input_params
   )
 
-  if (!(httr::status_code(response) %in% c(200, 201))) {
-    erro <- httr::content(response, "text", encoding = "UTF-8")
-    # Tentativa de extrair o detalhe do erro JSON
-    detail_error <- tryCatch(jsonlite::fromJSON(erro)$detail, error = function(e) erro)
-    stop(sprintf("Initial Replicate API error (%s): %s", httr::status_code(response), detail_error))
+  response <- request(
+    method = "POST",
+    url = url,
+    token = replicate_token,
+    body = body_list,
+    timeout_secs = 300
+  )
+  response_status <- suppressWarnings(as.integer(response$status)[1])
+  if (is.na(response_status) ||
+      !(response_status %in% c(200L, 201L))) {
+    stop(sprintf(
+      "Initial Replicate API error (%s): %s",
+      response$status %||% "unknown",
+      .gen_img_replicate_error_detail(response)
+    ))
   }
-  content <- httr::content(response, as = "parsed", simplifyVector = TRUE)
-  get_url <- content$urls$get
-  if(is.null(get_url)) { print(content); stop("Polling URL (urls$get) not found in Replicate response.") }
 
-  status <- content$status
-  #cat("Status inicial Replicate:", status, ". Aguardando...\n")
-  while (status %in% c("starting", "processing")) {
-    Sys.sleep(3)
-    poll_response <- httr::GET(get_url, httr::add_headers('Authorization' = paste("Token", replicate_token)))
-    if (httr::status_code(poll_response) != 200) {
-      erro <- httr::content(poll_response, "text", encoding = "UTF-8")
-      detail_error <- tryCatch(jsonlite::fromJSON(erro)$detail, error = function(e) erro)
-      stop(sprintf("Replicate API status error (%s): %s", httr::status_code(poll_response), detail_error))
-    }
-    poll_content <- httr::content(poll_response, as = "parsed", simplifyVector = TRUE)
-    status <- poll_content$status
-    #cat("Status atual Replicate:", status, "\n")
-    if (status == "failed") stop("Replicate prediction failed: ", poll_content$error)
-    if (status == "canceled") stop("Replicate prediction canceled.")
+  poll_content <- response$content
+  if (!is.list(poll_content)) {
+    stop("Replicate returned an invalid prediction object.", call. = FALSE)
   }
-  if (status != "succeeded") { print(poll_content); stop("Replicate prediction did not succeed. Final status: ", status) }
+  status <- .gen_img_replicate_status(poll_content$status)
+  get_url <- poll_content$urls$get
+  started <- clock()
+
+  while (status %in% c("starting", "processing")) {
+    if (is.null(get_url) || !nzchar(as.character(get_url)[1])) {
+      stop("Polling URL (urls$get) not found in Replicate response.")
+    }
+    elapsed <- as.numeric(difftime(clock(), started, units = "secs"))
+    if (elapsed >= max_poll_seconds) {
+      stop(
+        "Replicate image generation timed out after ",
+        max_poll_seconds,
+        " seconds."
+      )
+    }
+
+    sleep(poll_interval)
+    poll_response <- request(
+      method = "POLL",
+      url = as.character(get_url)[1],
+      token = replicate_token,
+      body = NULL,
+      timeout_secs = 300
+    )
+    poll_status <- suppressWarnings(as.integer(poll_response$status)[1])
+    if (is.na(poll_status) || !identical(poll_status, 200L)) {
+      stop(sprintf(
+        "Replicate API status error (%s): %s",
+        poll_response$status %||% "unknown",
+        .gen_img_replicate_error_detail(poll_response)
+      ))
+    }
+    poll_content <- poll_response$content
+    if (!is.list(poll_content)) {
+      stop("Replicate returned an invalid prediction object while polling.")
+    }
+    status <- .gen_img_replicate_status(poll_content$status)
+  }
+
+  if (identical(status, "failed")) {
+    stop("Replicate prediction failed: ", poll_content$error %||% "unknown error")
+  }
+  if (identical(status, "canceled")) {
+    stop("Replicate prediction canceled.")
+  }
+  if (!identical(status, "succeeded")) {
+    stop("Replicate prediction did not succeed. Final status: ", status)
+  }
 
   result <- poll_content$output
-  if (is.null(result) || length(result) == 0) { print(poll_content); stop("Output not found in Replicate response.") }
-  img_url <- result[[1]]
-  if (!is.character(img_url) || nchar(img_url) == 0) { print(poll_content); stop("Invalid image URL in Replicate result.") }
-  #cat("Baixando imagem Replicate de:", img_url, "\n")
-  img_response <- httr::GET(img_url)
-  if (img_response$status_code != 200) stop("Error downloading Replicate image: ", img_response$status_code)
-  img_binary <- httr::content(img_response, as = "raw")
-  if (is.null(img_binary) || length(img_binary) == 0) stop("Empty Replicate image content.")
+  if (is.null(result) || length(result) == 0L) {
+    stop("Output not found in Replicate response.")
+  }
+  first_output <- if (is.list(result)) result[[1]] else result[[1]]
+  img_url <- if (is.character(first_output)) {
+    first_output[[1]]
+  } else if (is.list(first_output)) {
+    first_output$url %||% first_output$uri
+  } else {
+    NULL
+  }
+  if (is.null(img_url) || !is.character(img_url) || !nzchar(img_url[[1]])) {
+    stop("Invalid image URL in Replicate result.")
+  }
+
+  img_response <- request(
+    method = "DOWNLOAD",
+    url = img_url[[1]],
+    token = replicate_token,
+    body = NULL,
+    timeout_secs = 300
+  )
+  download_status <- suppressWarnings(as.integer(img_response$status)[1])
+  if (is.na(download_status) || !identical(download_status, 200L)) {
+    stop(
+      "Error downloading Replicate image: ",
+      img_response$status %||% "unknown"
+    )
+  }
+  img_binary <- img_response$raw
+  if (!is.raw(img_binary) || length(img_binary) == 0L) {
+    stop("Empty or invalid Replicate image content.")
+  }
 
   datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
   filename <- paste(label_sanitized, service_name, model_sanitized_name, datetime_str, sep = "_")
@@ -547,4 +971,194 @@ gen_img.genflow_agent <- function(prompt, ...) {
     if (!file.exists(file_path) || file.info(file_path)$size == 0) stop("Failed to validate saved file.")
   }, error = function(e) stop("Failed to save Replicate image: ", e$message))
   return(file_path)
+}
+
+#' Parse a Replicate model id and optional pinned version
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_replicate_model_ref <- function(model, model_version = NULL) {
+  model_value <- trimws(as.character(model)[1])
+  parts <- strsplit(model_value, ":", fixed = TRUE)[[1]]
+  if (length(parts) > 2L || !nzchar(parts[[1]])) {
+    stop(
+      "`model` must use \"owner/name\" or \"owner/name:version\".",
+      call. = FALSE
+    )
+  }
+  model_path <- parts[[1]]
+  embedded_version <- if (length(parts) == 2L) trimws(parts[[2]]) else NULL
+  explicit_version <- if (is.null(model_version) || length(model_version) == 0L) {
+    NULL
+  } else {
+    trimws(as.character(model_version)[1])
+  }
+  if (!is.null(explicit_version) &&
+      (is.na(explicit_version) || !nzchar(explicit_version))) {
+    explicit_version <- NULL
+  }
+  if (!is.null(embedded_version) && !nzchar(embedded_version)) {
+    stop("Embedded Replicate model version cannot be empty.", call. = FALSE)
+  }
+  if (!is.null(embedded_version) && !is.null(explicit_version) &&
+      !identical(embedded_version, explicit_version)) {
+    stop(
+      "`model_version` conflicts with the version embedded in `model`.",
+      call. = FALSE
+    )
+  }
+  if (!grepl("^[^/[:space:]]+/[^/[:space:]]+$", model_path)) {
+    stop("Replicate `model` must use the form \"owner/name\".", call. = FALSE)
+  }
+
+  version <- explicit_version %||% embedded_version
+  list(
+    model = model_path,
+    version = version,
+    reference = if (is.null(version)) model_path else
+      paste0(model_path, ":", version)
+  )
+}
+
+#' Build model-aware Replicate image inputs
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_replicate_input <- function(model,
+                                     prompt,
+                                     temp,
+                                     steps,
+                                     h,
+                                     y,
+                                     overrides = NULL) {
+  input <- list(prompt = prompt)
+
+  if (identical(tolower(model), "black-forest-labs/flux-schnell")) {
+    step_count <- suppressWarnings(as.numeric(steps)[1])
+    if (is.na(step_count) || !is.finite(step_count)) step_count <- 4
+    input <- list(
+      prompt = prompt,
+      go_fast = TRUE,
+      megapixels = "1",
+      num_outputs = 1L,
+      aspect_ratio = .gen_img_replicate_aspect_ratio(
+        width = y,
+        height = h
+      ),
+      output_format = "png",
+      output_quality = 100L,
+      num_inference_steps = as.integer(
+        min(max(round(step_count), 1L), 4L)
+      ),
+      disable_safety_checker = FALSE
+    )
+  }
+
+  if (!is.null(overrides)) {
+    if (!is.list(overrides) || is.null(names(overrides)) ||
+        any(!nzchar(names(overrides)))) {
+      stop("`replicate_input` must be a named list.", call. = FALSE)
+    }
+    input <- utils::modifyList(input, overrides, keep.null = TRUE)
+  }
+  input
+}
+
+#' Choose the closest supported FLUX aspect ratio
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_replicate_aspect_ratio <- function(width, height) {
+  labels <- c(
+    "1:1", "16:9", "21:9", "3:2", "2:3", "4:5",
+    "5:4", "3:4", "4:3", "9:16", "9:21"
+  )
+  ratios <- c(
+    1, 16 / 9, 21 / 9, 3 / 2, 2 / 3, 4 / 5,
+    5 / 4, 3 / 4, 4 / 3, 9 / 16, 9 / 21
+  )
+  width <- suppressWarnings(as.numeric(width)[1])
+  height <- suppressWarnings(as.numeric(height)[1])
+  if (is.na(width) || !is.finite(width) || width <= 0 ||
+      is.na(height) || !is.finite(height) || height <= 0) {
+    stop("Replicate image dimensions must be positive numbers.", call. = FALSE)
+  }
+  requested <- width / height
+  labels[[which.min(abs(log(ratios) - log(requested)))]]
+}
+
+#' Normalize a Replicate prediction status
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_replicate_status <- function(status) {
+  value <- tolower(trimws(as.character(status %||% "")[1]))
+  if (identical(value, "successful")) "succeeded" else value
+}
+
+#' Extract a readable Replicate API error
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_replicate_error_detail <- function(response) {
+  content <- response$content
+  if (is.list(content)) {
+    detail <- content$detail %||% content$error
+    if (!is.null(detail)) return(paste(as.character(detail), collapse = "; "))
+  }
+  text <- as.character(response$text %||% "")[1]
+  if (is.na(text) || !nzchar(text)) "unknown error" else text
+}
+
+#' Execute one Replicate image HTTP request
+#'
+#' @keywords internal
+#' @noRd
+.gen_img_replicate_request <- function(method,
+                                       url,
+                                       token = NULL,
+                                       body = NULL,
+                                       timeout_secs = 300) {
+  method <- match.arg(toupper(method), c("POST", "POLL", "DOWNLOAD"))
+  if (identical(method, "POST")) {
+    response <- httr::POST(
+      url,
+      httr::add_headers(
+        `Content-Type` = "application/json",
+        Authorization = paste("Bearer", token)
+      ),
+      body = body,
+      encode = "json",
+      httr::timeout(timeout_secs)
+    )
+    return(list(
+      status = httr::status_code(response),
+      content = httr::content(response, as = "parsed", simplifyVector = FALSE),
+      text = httr::content(response, "text", encoding = "UTF-8")
+    ))
+  }
+
+  if (identical(method, "POLL")) {
+    response <- httr::GET(
+      url,
+      httr::add_headers(Authorization = paste("Bearer", token)),
+      httr::timeout(timeout_secs)
+    )
+    return(list(
+      status = httr::status_code(response),
+      content = httr::content(response, as = "parsed", simplifyVector = FALSE),
+      text = httr::content(response, "text", encoding = "UTF-8")
+    ))
+  }
+
+  headers <- if (is.null(token) || !nzchar(as.character(token)[1])) {
+    NULL
+  } else {
+    httr::add_headers(Authorization = paste("Bearer", token))
+  }
+  response <- httr::GET(url, headers, httr::timeout(timeout_secs))
+  list(
+    status = httr::status_code(response),
+    raw = httr::content(response, as = "raw")
+  )
 }

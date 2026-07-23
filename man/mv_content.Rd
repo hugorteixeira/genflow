@@ -4,12 +4,14 @@
 \alias{mv_content}
 \title{Rename cached content}
 \usage{
-mv_content(from, to)
+mv_content(from, to, update_agents = TRUE)
 }
 \arguments{
 \item{from}{Current content name.}
 
 \item{to}{New content name.}
+
+\item{update_agents}{Update saved agents that reference the content.}
 }
 \value{
 Invisible TRUE when renamed.

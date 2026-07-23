@@ -4,9 +4,17 @@
 \name{genflow-package}
 \alias{genflow}
 \alias{genflow-package}
-\title{genflow: Generate texts, images and more with multiple AI API providers}
+\title{genflow: Unified Cloud and Local Generative AI Workflows}
 \description{
-R library for easy text and images generation from OpenAI, OpenRouter and HuggingFace APIs.
+Provides normalized workflows for text, image, speech-to-text, and text-to-speech generation across cloud APIs and local inference backends. Includes reusable agent configuration, parallel batches, checkpointing, model catalogs, diagnostics, statistics, validated portable bundles, and an interactive management application.
+}
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/hugorteixeira/genflow}
+  \item Report bugs at \url{https://github.com/hugorteixeira/genflow/issues}
+}
+
 }
 \author{
 \strong{Maintainer}: Hugo Rzepian Teixeira \email{hugorteixeira@senhormercado.com.br}

@@ -15,7 +15,10 @@
     fireworks = "Fireworks",
     deepinfra = "DeepInfra",
     hyperbolic = "Hyperbolic",
-    hf = "Hugging Face",
+    hf = "Hugging Face (API)",
+    `hf-local` = "Hugging Face (local)",
+    `local-native` = "Native STT (local)",
+    `local-openai` = "OpenAI-compatible STT (local)",
     ollama = "Ollama",
     llamacpp = "llama-cpp",
     gemini = "Gemini",
@@ -51,6 +54,21 @@
     "fireworks_ai" = "fireworks",
     "firework" = "fireworks",
     "pplx" = "perplexity",
+    "huggingface" = "hf",
+    "hugging-face" = "hf",
+    "hugging_face" = "hf",
+    "huggingface-local" = "hf-local",
+    "huggingface_local" = "hf-local",
+    "hf_local" = "hf-local",
+    "transformers" = "hf-local",
+    "local_native" = "local-native",
+    "native-stt" = "local-native",
+    "native_stt" = "local-native",
+    "moss-cpp" = "local-native",
+    "moss_cpp" = "local-native",
+    "local_openai" = "local-openai",
+    "openai-local" = "local-openai",
+    "openai_local" = "local-openai",
     service_id
   )
 }
@@ -599,6 +617,16 @@
 #' @param overwrite Logical; overwrite existing custom provider with same id.
 #'
 #' @return Invisibly returns the normalized provider configuration.
+#' @examples
+#' \dontrun{
+#' set_provider_openai_compat(
+#'   id = "mycloud",
+#'   label = "My Cloud",
+#'   base_urls = "https://llm.example.com",
+#'   api_key_env = "MYCLOUD_API_KEY",
+#'   default_model = "my-model"
+#' )
+#' }
 #' @export
 set_provider_openai_compat <- function(id,
                                        label = NULL,
@@ -663,6 +691,8 @@ set_provider_openai_compat <- function(id,
 #' @param include_custom Logical; include custom providers.
 #'
 #' @return Data frame with provider metadata.
+#' @examples
+#' list_providers()
 #' @export
 list_providers <- function(include_builtin = TRUE, include_custom = TRUE) {
   rows <- list()
@@ -723,6 +753,8 @@ list_providers <- function(include_builtin = TRUE, include_custom = TRUE) {
 #' @param id Provider id.
 #'
 #' @return A list describing the provider.
+#' @examples
+#' get_provider("openai")
 #' @export
 get_provider <- function(id) {
   id_norm <- .genflow_normalize_provider_id(.genflow_normalize_service_alias(id))
@@ -750,6 +782,10 @@ get_provider <- function(id) {
 #'
 #' @return Invisibly returns `TRUE` when removed, `FALSE` when absent and
 #'   `missing_ok = TRUE`.
+#' @examples
+#' \dontrun{
+#' rm_provider("mycloud", missing_ok = TRUE)
+#' }
 #' @export
 rm_provider <- function(id, missing_ok = FALSE) {
   id_norm <- .genflow_normalize_provider_id(id)

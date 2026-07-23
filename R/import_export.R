@@ -111,6 +111,284 @@
   length(files)
 }
 
+.genflow_validate_zip_entries <- function(entries,
+                                          max_entries = 10000L,
+                                          max_file_bytes = 128 * 1024^2,
+                                          max_bundle_bytes = 512 * 1024^2) {
+  limits <- c(
+    max_entries = suppressWarnings(as.numeric(max_entries)[1]),
+    max_file_bytes = suppressWarnings(as.numeric(max_file_bytes)[1]),
+    max_bundle_bytes = suppressWarnings(as.numeric(max_bundle_bytes)[1])
+  )
+  if (anyNA(limits) || any(!is.finite(limits)) || any(limits <= 0)) {
+    stop("Bundle safety limits must be positive finite numbers.", call. = FALSE)
+  }
+  max_entries <- limits[["max_entries"]]
+  max_file_bytes <- limits[["max_file_bytes"]]
+  max_bundle_bytes <- limits[["max_bundle_bytes"]]
+
+  if (!is.data.frame(entries) || !all(c("Name", "Length") %in% names(entries))) {
+    stop("Could not read the bundle archive directory.", call. = FALSE)
+  }
+  if (!nrow(entries)) {
+    stop("The bundle archive is empty.", call. = FALSE)
+  }
+  if (nrow(entries) > max_entries) {
+    stop(
+      "The bundle contains too many entries (", nrow(entries), ").",
+      call. = FALSE
+    )
+  }
+
+  archive_names <- as.character(entries$Name)
+  lengths <- suppressWarnings(as.numeric(entries$Length))
+  if (anyNA(archive_names) || anyNA(lengths) || any(lengths < 0)) {
+    stop("The bundle archive has an invalid directory entry.", call. = FALSE)
+  }
+  if (any(grepl(intToUtf8(92L), archive_names, fixed = TRUE))) {
+    stop("Bundle paths must use forward slashes.", call. = FALSE)
+  }
+  normalized <- sub("^\\./+", "", archive_names)
+  normalized <- sub("/+$", "", normalized)
+  path_parts <- strsplit(normalized, "/", fixed = TRUE)
+  invalid_path <- vapply(seq_along(normalized), function(i) {
+    path <- normalized[[i]]
+    parts <- path_parts[[i]]
+    !nzchar(path) ||
+      startsWith(path, "/") ||
+      grepl("^[A-Za-z]:", path) ||
+      grepl("[[:cntrl:]]", path) ||
+      any(parts %in% c("", ".", ".."))
+  }, logical(1))
+  if (any(invalid_path)) {
+    stop(
+      "Unsafe path in bundle archive: ",
+      archive_names[[which(invalid_path)[1]]],
+      call. = FALSE
+    )
+  }
+  if (anyDuplicated(normalized)) {
+    stop("The bundle archive contains duplicate paths.", call. = FALSE)
+  }
+
+  roots <- unique(vapply(path_parts, `[[`, character(1), 1L))
+  if (length(roots) != 1L) {
+    stop("The bundle archive must contain exactly one root directory.", call. = FALSE)
+  }
+  root <- roots[[1]]
+  root_pattern <- .genflow_regex_escape(root)
+  is_directory <- grepl("/$", archive_names)
+  file_paths <- normalized[!is_directory]
+  file_lengths <- lengths[!is_directory]
+  allowed <- grepl(
+    paste0(
+      "^", root_pattern,
+      "/(?:metadata\\.json|",
+      "cache/(?:setups|agents|content)/[^/]+\\.rds|",
+      "models/(?:[^/]+/)*[^/]+\\.(?:csv|json|rds))$"
+    ),
+    file_paths,
+    perl = TRUE,
+    ignore.case = TRUE
+  )
+  if (any(!allowed)) {
+    stop(
+      "Unexpected file in bundle archive: ",
+      file_paths[[which(!allowed)[1]]],
+      call. = FALSE
+    )
+  }
+  if (any(file_lengths > max_file_bytes)) {
+    stop(
+      "A bundle entry exceeds the per-file size limit: ",
+      file_paths[[which(file_lengths > max_file_bytes)[1]]],
+      call. = FALSE
+    )
+  }
+  if (sum(file_lengths) > max_bundle_bytes) {
+    stop("The expanded bundle exceeds the allowed size.", call. = FALSE)
+  }
+  metadata_name <- paste0(root, "/metadata.json")
+  if (!metadata_name %in% file_paths) {
+    stop("The bundle is missing metadata.json.", call. = FALSE)
+  }
+
+  list(
+    names = normalized,
+    original_names = archive_names,
+    lengths = lengths,
+    is_directory = is_directory,
+    root = root
+  )
+}
+
+.genflow_safe_extract_zip <- function(path,
+                                      destination,
+                                      max_entries = 10000L,
+                                      max_file_bytes = 128 * 1024^2,
+                                      max_bundle_bytes = 512 * 1024^2) {
+  entries <- tryCatch(
+    utils::unzip(path, list = TRUE),
+    error = function(e) {
+      stop("Could not inspect bundle archive: ", conditionMessage(e), call. = FALSE)
+    }
+  )
+  validated <- .genflow_validate_zip_entries(
+    entries,
+    max_entries = max_entries,
+    max_file_bytes = max_file_bytes,
+    max_bundle_bytes = max_bundle_bytes
+  )
+  dir.create(destination, recursive = TRUE, showWarnings = FALSE)
+
+  for (index in seq_len(nrow(entries))) {
+    if (validated$is_directory[[index]]) {
+      next
+    }
+    relative <- validated$names[[index]]
+    target <- do.call(
+      file.path,
+      as.list(c(destination, strsplit(relative, "/", fixed = TRUE)[[1]]))
+    )
+    dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
+
+    input <- unz(path, validated$original_names[[index]], open = "rb")
+    output <- file(target, open = "wb")
+    bytes_written <- 0
+    copy_error <- NULL
+    tryCatch(
+      {
+        repeat {
+          chunk <- readBin(input, what = "raw", n = 64L * 1024L)
+          if (!length(chunk)) {
+            break
+          }
+          bytes_written <- bytes_written + length(chunk)
+          if (bytes_written > max_file_bytes) {
+            stop("Expanded entry exceeded its size limit.")
+          }
+          writeBin(chunk, output)
+        }
+      },
+      error = function(e) {
+        copy_error <<- e
+      },
+      finally = {
+        close(input)
+        close(output)
+      }
+    )
+    if (!is.null(copy_error)) {
+      stop(
+        "Could not safely extract ", relative, ": ",
+        conditionMessage(copy_error),
+        call. = FALSE
+      )
+    }
+    declared <- validated$lengths[[index]]
+    if (!identical(as.numeric(bytes_written), as.numeric(declared))) {
+      stop(
+        "Expanded size does not match the archive directory for ",
+        relative,
+        ".",
+        call. = FALSE
+      )
+    }
+  }
+  validated
+}
+
+.genflow_validate_bundle_rds <- function(path, type) {
+  value <- tryCatch(
+    readRDS(path),
+    error = function(e) {
+      stop(
+        "Invalid ", type, " RDS file ", basename(path), ": ",
+        conditionMessage(e),
+        call. = FALSE
+      )
+    }
+  )
+  valid <- switch(type,
+    setups = is.list(value) &&
+      is.character(value$sname) && length(value$sname) == 1L &&
+      !is.null(value$service) && !is.null(value$model),
+    agents = is.list(value) &&
+      is.character(value$name) && length(value$name) == 1L &&
+      !is.null(value$service) && !is.null(value$model),
+    content = is.list(value) &&
+      is.character(value$cname) && length(value$cname) == 1L &&
+      is.list(value$data),
+    FALSE
+  )
+  if (!isTRUE(valid)) {
+    stop(
+      "Bundle contains an invalid ", type, " object: ",
+      basename(path),
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
+.genflow_validate_bundle_tree <- function(bundle_root) {
+  metadata_path <- file.path(bundle_root, "metadata.json")
+  metadata <- tryCatch(
+    jsonlite::fromJSON(metadata_path, simplifyVector = TRUE),
+    error = function(e) {
+      stop("Invalid bundle metadata: ", conditionMessage(e), call. = FALSE)
+    }
+  )
+  if (!is.list(metadata) || is.null(metadata$includes) || is.null(metadata$counts)) {
+    stop("Bundle metadata is missing required fields.", call. = FALSE)
+  }
+
+  for (type in c("setups", "agents", "content")) {
+    directory <- file.path(bundle_root, "cache", type)
+    files <- if (dir.exists(directory)) {
+      list.files(directory, pattern = "\\.rds$", full.names = TRUE)
+    } else {
+      character()
+    }
+    for (path in files) {
+      .genflow_validate_bundle_rds(path, type)
+    }
+  }
+
+  models_dir <- file.path(bundle_root, "models")
+  if (dir.exists(models_dir)) {
+    model_files <- list.files(models_dir, recursive = TRUE, full.names = TRUE)
+    for (path in model_files) {
+      extension <- tolower(tools::file_ext(path))
+      if (extension == "csv") {
+        header <- tryCatch(
+          utils::read.csv(path, nrows = 1L, stringsAsFactors = FALSE),
+          error = function(e) NULL
+        )
+        if (
+          is.null(header) ||
+          !any(tolower(names(header)) %in% c("model", "id"))
+        ) {
+          stop("Invalid model catalog: ", basename(path), call. = FALSE)
+        }
+      } else if (extension == "json") {
+        tryCatch(
+          jsonlite::fromJSON(path, simplifyVector = FALSE),
+          error = function(e) {
+            stop("Invalid model JSON file: ", basename(path), call. = FALSE)
+          }
+        )
+      } else if (extension == "rds") {
+        value <- tryCatch(readRDS(path), error = function(e) NULL)
+        if (!is.data.frame(value)) {
+          stop("Invalid model RDS file: ", basename(path), call. = FALSE)
+        }
+      }
+    }
+  }
+  metadata
+}
+
 #' Export a genflow resource bundle
 #'
 #' Creates a portable `.zip` archive containing cached setups, agents, content,
@@ -261,6 +539,9 @@ gen_export_bundle <- function(path,
 #' @param models_dir Optional models directory to receive imported files.
 #' @param overwrite Overwrite existing files if they already exist.
 #' @param quiet Suppress informational messages.
+#' @param max_entries Maximum number of archive entries accepted.
+#' @param max_file_bytes Maximum expanded size of one archive file.
+#' @param max_bundle_bytes Maximum total expanded size of archive files.
 #'
 #' @return Invisibly returns a list with `counts`, `includes`, `metadata`, and
 #'   the resolved `paths`.
@@ -272,7 +553,10 @@ gen_import_bundle <- function(path,
                               include_models = TRUE,
                               models_dir = NULL,
                               overwrite = FALSE,
-                              quiet = FALSE) {
+                              quiet = FALSE,
+                              max_entries = 10000L,
+                              max_file_bytes = 128 * 1024^2,
+                              max_bundle_bytes = 512 * 1024^2) {
   if (missing(path) || is.null(path) || !file.exists(path)) {
     stop("Provide a valid path to a genflow bundle (.zip).", call. = FALSE)
   }
@@ -291,19 +575,15 @@ gen_import_bundle <- function(path,
   dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(tmp_dir, recursive = TRUE, force = TRUE), add = TRUE)
 
-  utils::unzip(path, exdir = tmp_dir)
-
-  candidate_root <- file.path(tmp_dir, "genflow_bundle")
-  if (dir.exists(candidate_root)) {
-    bundle_root <- candidate_root
-  } else {
-    top_entries <- list.files(tmp_dir, full.names = TRUE)
-    dirs <- top_entries[file.info(top_entries, extra_cols = FALSE)$isdir]
-    if (length(dirs) != 1L) {
-      stop("Could not locate the bundle root inside the archive.", call. = FALSE)
-    }
-    bundle_root <- dirs[[1]]
-  }
+  archive <- .genflow_safe_extract_zip(
+    path,
+    destination = tmp_dir,
+    max_entries = max_entries,
+    max_file_bytes = max_file_bytes,
+    max_bundle_bytes = max_bundle_bytes
+  )
+  bundle_root <- file.path(tmp_dir, archive$root)
+  metadata <- .genflow_validate_bundle_tree(bundle_root)
 
   cache_dir <- normalizePath(.genflow_cache_dir(), winslash = "/", mustWork = TRUE)
   models_dir_resolved <- .genflow_resolve_models_dir(models_dir)
@@ -349,13 +629,6 @@ gen_import_bundle <- function(path,
     }
   }
 
-  metadata_path <- file.path(bundle_root, "metadata.json")
-  metadata <- if (file.exists(metadata_path)) {
-    tryCatch(jsonlite::fromJSON(metadata_path, simplifyVector = TRUE), error = function(e) NULL)
-  } else {
-    NULL
-  }
-
   if (!quiet) {
     message(sprintf("genflow bundle imported from %s", path))
   }
@@ -371,4 +644,3 @@ gen_import_bundle <- function(path,
     )
   ))
 }
-

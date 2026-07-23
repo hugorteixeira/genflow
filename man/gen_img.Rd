@@ -14,11 +14,15 @@ gen_img(prompt, ...)
   directory = NULL,
   label = NULL,
   service = "hf",
-  model = "black-forest-labs/FLUX.1-schnell",
+  model = NULL,
   temp = 5,
   steps = 18,
   h = 1072,
   y = 1920,
+  model_version = NULL,
+  replicate_input = NULL,
+  poll_interval = 3,
+  max_poll_seconds = 600,
   ...
 )
 
@@ -27,7 +31,7 @@ gen_img(prompt, ...)
 \arguments{
 \item{prompt}{Character. Main text prompt describing the desired image.}
 
-\item{...}{Additional arguments forwarded to method-specific implementations.}
+\item{...}{Reserved for S3 methods.}
 
 \item{add}{Optional character or object(s) to append to the prompt. If provided and
 character, it will be concatenated to \code{prompt}.}
@@ -36,9 +40,11 @@ character, it will be concatenated to \code{prompt}.}
 
 \item{label}{Optional short label to be used in filenames. If NULL, derived from prompt.}
 
-\item{service}{Provider identifier (e.g., "hf", "fal", "replicate", "together", "cloudflare", "bfl").}
+\item{service}{Provider identifier: \code{"hf"}, \code{"fal"}, \code{"replicate"}, or
+\code{"openai"}.}
 
-\item{model}{Provider model identifier (e.g., "black-forest-labs/FLUX.1-schnell").}
+\item{model}{Provider model identifier. When NULL, a provider-specific
+default is selected.}
 
 \item{temp}{Numeric guidance/temperature parameter (provider-specific meaning).}
 
@@ -47,6 +53,18 @@ character, it will be concatenated to \code{prompt}.}
 \item{h}{Integer output height in pixels.}
 
 \item{y}{Integer output width in pixels (named \code{y} here to match internal calls).}
+
+\item{model_version}{Optional Replicate model version. It can also be
+supplied as part of \code{model} using \code{"owner/name:version"}.}
+
+\item{replicate_input}{Optional named list of Replicate input overrides.
+Unknown Replicate models receive only \code{prompt} by default; use this
+argument for model-specific schema fields.}
+
+\item{poll_interval}{Polling interval in seconds for asynchronous providers.}
+
+\item{max_poll_seconds}{Maximum time in seconds to poll an asynchronous
+provider before returning an error.}
 }
 \value{
 Invisibly returns a list with fields such as \code{response_value} (saved file path
@@ -55,8 +73,13 @@ on success or NULL on error), \code{status_api}, \code{status_msg}, \code{servic
 }
 \description{
 High-level image generation wrapper that dispatches to provider-specific
-implementations (Hugging Face, FAL, Replicate, OpenAI, etc.) and saves the
+implementations (Hugging Face, FAL, Replicate, and OpenAI) and saves the
 resulting image to disk.
+}
+\details{
+For a \code{genflow_agent}, a saved \code{context} is used as the image prompt
+when the agent has no explicit \code{prompt}. Supply \code{prompt_override} through
+\code{...} to replace the saved prompt for one call.
 }
 \examples{
 # Minimal example (requires valid provider credentials)

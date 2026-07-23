@@ -16,7 +16,7 @@ gen_update_models(
 Otherwise one of the built-ins ("openrouter", "openai", "anthropic",
 "groq", "cerebras", "together", "sambanova", "nebius", "deepseek",
 "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini",
-"fal", "replicate", "ollama", "llamacpp") or a custom provider id
+"fal", "replicate", "hf", "hf-local", "ollama", "llamacpp") or a custom provider id
 configured with \code{\link[=set_provider_openai_compat]{set_provider_openai_compat()}}.}
 
 \item{directory}{Character path where CSVs will be saved. Defaults to working dir.}
@@ -33,6 +33,11 @@ High-level convenience function to update model lists from one or several
 providers and write normalized CSV files to a directory.
 }
 \details{
+Each provider runs in an isolated staging directory. Its CSV must contain
+\code{service} or \code{provider}, plus \code{model}, \code{type}, \code{pricing}, and \code{description},
+and is atomically published only after validation. A failed update never
+truncates the previous provider catalog.
+
 The interactive interface preflights provider credentials before calling this
 helper. When calling it directly, use \code{fail_on_error = TRUE} if provider
 failures should stop the call instead of being reported only as warnings.

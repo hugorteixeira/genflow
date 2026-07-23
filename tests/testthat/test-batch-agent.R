@@ -4,6 +4,53 @@ test_that("worker limits are independent from task quantity", {
   expect_error(genflow:::.genflow_resolve_workers(0, 5), "positive integer")
   expect_error(genflow:::.genflow_resolve_workers(1.5, 5), "positive integer")
   expect_error(genflow:::.genflow_resolve_workers(NA, 5), "positive integer")
+  expect_error(genflow:::.genflow_resolve_workers(1e20, 5), "positive integer")
+  expect_error(genflow:::.genflow_resolve_workers(1, 1e20), "`qty`")
+})
+
+test_that("automatic worker detection has a safe configurable cap", {
+  old <- options(genflow.batch_max_workers = NULL)
+  on.exit(options(old), add = TRUE)
+
+  expect_lte(genflow:::.genflow_resolve_workers(NULL, 100), 4L)
+
+  options(genflow.batch_max_workers = 1L)
+  expect_identical(genflow:::.genflow_resolve_workers(NULL, 100), 1L)
+  expect_identical(
+    genflow:::.genflow_resolve_workers(3L, 100),
+    3L
+  )
+
+  options(genflow.batch_max_workers = 0L)
+  expect_warning(
+    workers <- genflow:::.genflow_resolve_workers(NULL, 100),
+    "using 4"
+  )
+  expect_lte(workers, 4L)
+})
+
+test_that("batch scalar validation fails with stable user-facing errors", {
+  expect_error(
+    gen_batch(qty = 1e20, agent_prefix = "agent", verbose = FALSE),
+    "`qty` must be a positive integer"
+  )
+  expect_error(
+    gen_batch(qty = 1L, agent_prefix = NA_character_, verbose = FALSE),
+    "`agent_prefix` is required"
+  )
+  expect_error(
+    gen_batch(qty = 1L, agent_prefix = "agent", log = NA, verbose = FALSE),
+    "`log` must be TRUE or FALSE"
+  )
+  expect_error(
+    gen_batch(
+      qty = 1L,
+      agent_prefix = "agent",
+      always_fix_errors = NA,
+      verbose = FALSE
+    ),
+    "`always_fix_errors` must be TRUE or FALSE"
+  )
 })
 
 test_that("PSOCK is the safe default parallel backend", {
@@ -449,4 +496,169 @@ test_that("always_fix_errors retries only failures without duplicate persistence
   expect_identical(second$combined_stats$executed_indices, 2L)
   expect_identical(second$combined_stats$reused_indices, c(1L, 3L))
   expect_identical(unname(sort(persisted)), sort(c("one.jpg", "two.jpg", "three.jpg")))
+})
+
+test_that("retry batches only provision workers for pending indices", {
+  agent <- set_agent(
+    "retry_worker_limit_agent",
+    setup = list(service = "mock", model = "mock-model", type = "Chat"),
+    content = list(context = "Test"),
+    save = FALSE,
+    assign = FALSE
+  )
+  testthat::local_mocked_bindings(
+    gen_txt.default = function(...) stop("simulated provider failure"),
+    .package = "genflow"
+  )
+  cache <- genflow:::.batch_cache_env
+  keys_before <- ls(cache, all.names = TRUE)
+
+  invisible(gen_batch_agent(
+    agent,
+    qty = 3L,
+    workers = 1L,
+    persist = FALSE,
+    verbose = FALSE,
+    always_fix_errors = TRUE
+  ))
+  new_keys <- setdiff(ls(cache, all.names = TRUE), keys_before)
+  expect_length(new_keys, 1L)
+  cache_key <- new_keys[[1]]
+  on.exit(genflow:::.batch_cache_clear(cache_key), add = TRUE)
+
+  entry <- genflow:::.batch_cache_get(cache_key)
+  for (idx in c(1L, 3L)) {
+    entry$results[idx] <- list(list(
+      response_value = paste0("cached-", idx),
+      status_api = "SUCCESS"
+    ))
+    entry$errors[idx] <- list(NULL)
+    entry$agent_types[idx] <- "Chat"
+    entry$durations[idx] <- 0
+    entry$logs[idx] <- list("cached")
+  }
+  genflow:::.batch_cache_set(cache_key, entry)
+
+  retried <- gen_batch_agent(
+    agent,
+    qty = 3L,
+    workers = 3L,
+    persist = FALSE,
+    verbose = FALSE,
+    always_fix_errors = TRUE
+  )
+
+  expect_identical(retried$combined_stats$executed_indices, 2L)
+  expect_identical(retried$combined_stats$reused_indices, c(1L, 3L))
+  expect_identical(retried$combined_stats$workers_used, 1L)
+  expect_identical(retried$combined_stats$parallel_mode, "serial")
+})
+
+test_that("batch cache keys hash the complete task payload", {
+  common <- strrep("a", 2500)
+  key_one <- genflow:::.batch_cache_make_key(
+    agent_prefix = "agent",
+    qty = 1,
+    instructions = "test",
+    add = paste0(common, "one"),
+    one_item_each = NULL,
+    add_img = NULL,
+    directory = "texts",
+    directory_img = "images"
+  )
+  key_two <- genflow:::.batch_cache_make_key(
+    agent_prefix = "agent",
+    qty = 1,
+    instructions = "test",
+    add = paste0(common, "two"),
+    one_item_each = NULL,
+    add_img = NULL,
+    directory = "texts",
+    directory_img = "images"
+  )
+
+  expect_false(identical(key_one, key_two))
+  expect_lte(nchar(key_one), 80L)
+})
+
+test_that("batch cache evicts its oldest failed runs", {
+  cache <- genflow:::.batch_cache_env
+  existing <- ls(cache, all.names = TRUE)
+  if (length(existing)) rm(list = existing, envir = cache)
+  old_limit <- getOption("genflow.batch_cache_max_entries")
+  options(genflow.batch_cache_max_entries = 2L)
+  on.exit(options(genflow.batch_cache_max_entries = old_limit), add = TRUE)
+  on.exit({
+    keys <- ls(cache, all.names = TRUE)
+    if (length(keys)) rm(list = keys, envir = cache)
+  }, add = TRUE)
+
+  genflow:::.batch_cache_set(
+    "old",
+    list(timestamp = as.POSIXct(1, origin = "1970-01-01"))
+  )
+  genflow:::.batch_cache_set(
+    "middle",
+    list(timestamp = as.POSIXct(2, origin = "1970-01-01"))
+  )
+  genflow:::.batch_cache_set(
+    "new",
+    list(timestamp = as.POSIXct(3, origin = "1970-01-01"))
+  )
+
+  expect_setequal(ls(cache, all.names = TRUE), c("middle", "new"))
+})
+
+test_that("batch tasks reject unknown modalities and unsupported files", {
+  base_args <- list(
+    i = 1L,
+    one_item_each = NULL,
+    instructions = NULL,
+    add_img = NULL,
+    directory = tempfile("genflow-text-"),
+    directory_img = tempfile("genflow-img-"),
+    agent_prefix = "agent",
+    suffix_type = "numeric",
+    append_modes = list(instructions = "replace", add = "replace"),
+    persist = FALSE
+  )
+
+  unknown <- do.call(
+    genflow:::.execute_agent_task,
+    c(
+      base_args,
+      list(
+        add = NULL,
+        agent = list(
+          service = "mock",
+          model = "mock",
+          type = "video",
+          context = "test"
+        )
+      )
+    )
+  )
+  expect_match(unknown$erro, "not supported")
+  expect_null(unknown$response)
+
+  unsupported <- tempfile(fileext = ".pdf")
+  writeBin(charToRaw("not a real PDF"), unsupported)
+  on.exit(unlink(unsupported), add = TRUE)
+  bad_file <- do.call(
+    genflow:::.execute_agent_task,
+    c(
+      base_args,
+      list(
+        add = unsupported,
+        agent = list(
+          service = "mock",
+          model = "mock",
+          type = "Chat",
+          context = "test"
+        )
+      )
+    )
+  )
+  expect_match(bad_file$erro, "Unsupported file format")
+  expect_null(bad_file$response)
 })

@@ -60,8 +60,9 @@ from the previous run with the same signature and only re-executes failed
 indices until the batch completes without errors.}
 
 \item{workers}{Maximum number of tasks to execute simultaneously. \code{NULL}
-preserves automatic detection. An explicit value is capped by \code{qty}, not
-by the number of CPU cores, because API calls are generally I/O-bound.}
+uses automatic detection capped by option \code{genflow.batch_max_workers}
+(default: 4). An explicit value is capped by \code{qty}, not by the number of
+CPU cores, because API calls are generally I/O-bound.}
 
 \item{backend}{Parallel process backend. \code{"psock"} (the default) starts
 independent R worker processes and is safe for HTTP clients such as

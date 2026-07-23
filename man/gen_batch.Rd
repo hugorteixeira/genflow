@@ -60,8 +60,9 @@ indices until the batch completes without errors.}
 \code{\link[=gen_batch_agent]{gen_batch_agent()}} when starting from an agent object.}
 
 \item{workers}{Maximum number of tasks to execute simultaneously. \code{NULL}
-preserves automatic detection. An explicit value is capped by \code{qty}, not
-by the number of CPU cores, because API calls are generally I/O-bound.}
+uses automatic detection capped by option \code{genflow.batch_max_workers}
+(default: 4). An explicit value is capped by \code{qty}, not by the number of
+CPU cores, because API calls are generally I/O-bound.}
 
 \item{backend}{Parallel process backend. \code{"psock"} (the default) starts
 independent R worker processes and is safe for HTTP clients such as
@@ -100,6 +101,12 @@ been initialized. On Unix-like systems, \code{backend = "fork"} remains
 available as an explicit opt-in for workloads known to be fork-safe.
 Interrupting an opted-in fork batch forcefully cleans up its child
 processes. Completed per-task checkpoints remain recoverable.
+
+\code{always_fix_errors} reuses successful results from a matching failed batch
+within the current R session. Files in \code{checkpoint_each} provide durable,
+caller-owned recovery after an interruption; they are not loaded
+automatically because a file path alone cannot prove that a checkpoint
+belongs to the current task payload.
 }
 \examples{
 # gen_batch(2, instructions = "Describe a cat", agent_prefix = "agent")

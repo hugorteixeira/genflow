@@ -1,5 +1,3 @@
-`%||%` <- function(x, y) if (!is.null(x)) x else y
-
 .MODEL_PROVIDER_LABELS <- c(
   openai = "OpenAI",
   openrouter = "OpenRouter",
@@ -14,6 +12,10 @@
   fireworks = "Fireworks",
   deepinfra = "DeepInfra",
   hyperbolic = "Hyperbolic",
+  hf = "Hugging Face (API)",
+  `hf-local` = "Hugging Face (local)",
+  `local-native` = "Native STT (local)",
+  `local-openai` = "OpenAI-compatible STT (local)",
   gemini = "Gemini",
   fal = "FAL",
   replicate = "Replicate",
@@ -33,7 +35,79 @@
 .DEFAULT_MODEL_NAME <- "gpt-5"
 .DEFAULT_MODEL_TYPE <- "Chat"
 .DEFAULT_THINKING_LEVEL <- "medium"
-.THINKING_LEVEL_CHOICES <- c("minimal", "low", "medium", "high")
+.THINKING_LEVEL_CHOICES <- c("minimal", "low", "medium", "high", "xhigh")
+.LOCAL_HF_STT_MODEL_CHOICES <- c(
+  "Whisper Large v3 Turbo (recommended)" = "openai/whisper-large-v3-turbo",
+  "Whisper Tiny (smoke test)" = "openai/whisper-tiny",
+  "MOSS Transcribe + Diarize (advanced)" =
+    "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+)
+
+.local_hf_stt_model_choices <- function(selected = "") {
+  selected <- trimws(as.character(selected %||% "")[1])
+  choices <- .LOCAL_HF_STT_MODEL_CHOICES
+  if (!is.na(selected) &&
+      nzchar(selected) &&
+      !selected %in% unname(choices)) {
+    choices <- c(choices, stats::setNames(selected, selected))
+  }
+  choices
+}
+
+.normalize_setup_reasoning <- function(setup) {
+  candidates <- list(
+    setup$reasoning,
+    setup$reasoning_effort,
+    setup$thinking_budget,
+    setup$thinking_level
+  )
+  level <- .DEFAULT_THINKING_LEVEL
+  has_level <- FALSE
+  for (candidate in candidates) {
+    if (is.null(candidate) || !length(candidate)) {
+      next
+    }
+    candidate <- tolower(trimws(as.character(candidate[[1]])))
+    if (!is.na(candidate) && candidate %in% .THINKING_LEVEL_CHOICES) {
+      level <- candidate
+      has_level <- TRUE
+      break
+    }
+  }
+  enabled <- has_level ||
+    isTRUE(setup$reasoning) ||
+    isTRUE(setup$thinking)
+  list(enabled = enabled, level = level)
+}
+
+.openrouter_model_state <- function(model) {
+  model <- trimws(as.character(model %||% "")[1])
+  online <- nzchar(model) && endsWith(model, ":online")
+  list(
+    model = model,
+    base = if (online) sub(":online$", "", model) else model,
+    online = online
+  )
+}
+
+.entity_select_attributes <- function(trigger, name) {
+  trigger <- as.character(trigger)[1]
+  if (!trigger %in% c(
+    "setup_select_trigger",
+    "content_select_trigger",
+    "agent_select_trigger"
+  )) {
+    stop("Unsupported entity selection trigger.", call. = FALSE)
+  }
+  list(
+    `data-name` = as.character(name)[1],
+    onclick = paste0(
+      "Shiny.setInputValue('", trigger, "', ",
+      "{name: this.dataset.name, nonce: Math.random()}, ",
+      "{priority: 'event'});"
+    )
+  )
+}
 
 .model_provider_labels <- function() {
   labels <- .MODEL_PROVIDER_LABELS
@@ -87,10 +161,15 @@
   if (!"type" %in% names(favs)) {
     favs$type <- NA_character_
   }
-  favs$service <- tolower(as.character(favs$service %||% ""))
-  favs$model <- as.character(favs$model %||% "")
+  favs$service <- tolower(trimws(as.character(favs$service %||% "")))
+  favs$model <- trimws(as.character(favs$model %||% ""))
   favs$type <- as.character(favs$type %||% "")
-  favs[!nzchar(favs$service) | !nzchar(favs$model), ] <- NULL
+  favs$type[is.na(favs$type)] <- ""
+  valid <- !is.na(favs$service) &
+    nzchar(favs$service) &
+    !is.na(favs$model) &
+    nzchar(favs$model)
+  favs <- favs[valid, , drop = FALSE]
   if (!nrow(favs)) {
     return(.empty_favorites())
   }
@@ -105,10 +184,47 @@
 }
 
 .normalize_favorites <- function(favorites, catalog) {
-  if (!nrow(favorites) || !nrow(catalog)) {
-    return(favorites[ , c("service", "model", "type"), drop = FALSE])
+  if (!is.data.frame(favorites) ||
+      !all(c("service", "model") %in% names(favorites))) {
+    return(.empty_favorites())
   }
-  catalog_keys <- paste(tolower(catalog$service), catalog$model, sep = "||")
+  if (!"type" %in% names(favorites)) {
+    favorites$type <- ""
+  }
+  favorites <- favorites[, c("service", "model", "type"), drop = FALSE]
+  favorites$service <- tolower(trimws(as.character(favorites$service)))
+  favorites$model <- trimws(as.character(favorites$model))
+  favorites$type <- as.character(favorites$type)
+  favorites$type[is.na(favorites$type)] <- ""
+  valid <- !is.na(favorites$service) &
+    nzchar(favorites$service) &
+    !is.na(favorites$model) &
+    nzchar(favorites$model)
+  favorites <- favorites[valid, , drop = FALSE]
+  if (!nrow(favorites)) {
+    return(.empty_favorites())
+  }
+  if (!is.data.frame(catalog) ||
+      !nrow(catalog) ||
+      !all(c("service", "model") %in% names(catalog))) {
+    return(unique(favorites))
+  }
+
+  catalog_service <- tolower(trimws(as.character(catalog$service)))
+  catalog_model <- trimws(as.character(catalog$model))
+  catalog_valid <- !is.na(catalog_service) &
+    nzchar(catalog_service) &
+    !is.na(catalog_model) &
+    nzchar(catalog_model)
+  catalog_service <- catalog_service[catalog_valid]
+  catalog_model <- catalog_model[catalog_valid]
+  catalog_types <- if ("type" %in% names(catalog)) {
+    as.character(catalog$type[catalog_valid])
+  } else {
+    rep("", length(catalog_service))
+  }
+  catalog_types[is.na(catalog_types)] <- ""
+  catalog_keys <- paste(catalog_service, catalog_model, sep = "||")
   fav_keys <- paste(tolower(favorites$service), favorites$model, sep = "||")
   keep <- fav_keys %in% catalog_keys
   favorites <- favorites[keep, , drop = FALSE]
@@ -116,8 +232,9 @@
     return(.empty_favorites())
   }
   matched_idx <- match(paste(tolower(favorites$service), favorites$model, sep = "||"), catalog_keys)
-  catalog_types <- catalog$type[matched_idx]
-  favorites$type[!nzchar(favorites$type) | is.na(favorites$type)] <- catalog_types[!nzchar(favorites$type) | is.na(favorites$type)]
+  matched_types <- catalog_types[matched_idx]
+  missing_type <- !nzchar(favorites$type)
+  favorites$type[missing_type] <- matched_types[missing_type]
   favorites$type[is.na(favorites$type)] <- ""
   unique(favorites)
 }
@@ -191,11 +308,19 @@
       return(NULL)
     }
     names(df) <- tolower(names(df))
+    fallback_service <- tolower(tools::file_path_sans_ext(basename(path)))
     if (!"service" %in% names(df)) {
-      df$service <- tools::file_path_sans_ext(basename(path))
+      df$service <- fallback_service
     }
-    df$service <- tolower(as.character(df$service))
-    df$service[df$service == ""] <- tools::file_path_sans_ext(basename(path))
+    df$service <- tolower(trimws(as.character(df$service)))
+    missing_service <- is.na(df$service) | !nzchar(df$service)
+    df$service[missing_service] <- fallback_service
+    df$service <- vapply(
+      df$service,
+      .genflow_normalize_service_alias,
+      character(1),
+      USE.NAMES = FALSE
+    )
 
     if (!"model" %in% names(df)) {
       if ("id" %in% names(df)) {
@@ -204,7 +329,12 @@
         df$model <- ""
       }
     }
-    df$model <- as.character(df$model)
+    df$model <- trimws(as.character(df$model))
+    valid_model <- !is.na(df$model) & nzchar(df$model)
+    df <- df[valid_model, , drop = FALSE]
+    if (!nrow(df)) {
+      return(NULL)
+    }
 
     if (!"type" %in% names(df)) {
       df$type <- NA_character_
@@ -224,7 +354,14 @@
     }
 
     df$source_file <- basename(path)
-    df
+    df[, c(
+      "service",
+      "model",
+      "type",
+      "pricing",
+      "description",
+      "source_file"
+    ), drop = FALSE]
   })
 
   catalogs <- Filter(Negate(is.null), catalogs)
@@ -243,7 +380,8 @@
     services <- unique(catalog$service)
   }
   services <- c(services, include)
-  services <- services[nzchar(services)]
+  services <- trimws(as.character(services))
+  services <- services[!is.na(services) & nzchar(services)]
   if (!length(services)) {
     return(character())
   }
@@ -255,7 +393,8 @@
 
 .model_model_choices <- function(catalog, service = NULL, include = character()) {
   rows <- catalog
-  if (!is.null(service) && nzchar(service) && nrow(catalog) > 0) {
+  service <- .normalize_choice_value(service)
+  if (nzchar(service) && nrow(catalog) > 0) {
     rows <- rows[tolower(rows$service) == tolower(service), , drop = FALSE]
   }
   models <- character()
@@ -263,7 +402,8 @@
     models <- rows$model
   }
   models <- c(models, include)
-  models <- models[nzchar(models)]
+  models <- trimws(as.character(models))
+  models <- models[!is.na(models) & nzchar(models)]
   if (!length(models)) {
     return(character())
   }
@@ -273,10 +413,12 @@
 
 .model_type_choices <- function(catalog, service = NULL, model = NULL, include = character()) {
   rows <- catalog
-  if (!is.null(service) && nzchar(service) && nrow(rows) > 0) {
+  service <- .normalize_choice_value(service)
+  model <- .normalize_choice_value(model)
+  if (nzchar(service) && nrow(rows) > 0) {
     rows <- rows[tolower(rows$service) == tolower(service), , drop = FALSE]
   }
-  if (!is.null(model) && nzchar(model) && nrow(rows) > 0) {
+  if (nzchar(model) && nrow(rows) > 0) {
     rows_model <- rows[tolower(rows$model) == tolower(model), , drop = FALSE]
     if (nrow(rows_model) > 0) {
       rows <- rows_model
@@ -485,7 +627,8 @@
 }
 
 .theme_css <- "
-  body.gf-app { background-color: #f4f6fb; color: #1f2937; }
+  body.gf-app { background-color: #f4f6fb; color: #1f2937; font-family: \"Segoe UI\", system-ui, -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", Arial, sans-serif; }
+  .gf-app h1, .gf-app h2, .gf-app h3, .gf-app h4, .gf-app h5, .gf-app h6 { font-family: \"Segoe UI\", system-ui, -apple-system, BlinkMacSystemFont, \"Helvetica Neue\", Arial, sans-serif; }
   .gf-header { margin-bottom: 16px; }
   .gf-header h1 { margin: 0; font-size: 1.8rem; font-weight: 600; }
   .gf-subtitle { color: #4b5563; margin-top: 4px; }
@@ -515,9 +658,49 @@
   .gf-status-missing { color: #b45309; font-weight: 600; }
   .gf-status-detected { color: #2563eb; font-weight: 600; }
   #main_tabs .nav-link { font-weight: 600; }
+  .gf-diagnostics-table { width: 100%; max-width: 100%; overflow-x: auto; }
+  .gf-diagnostics-table .dataTables_wrapper,
+  .gf-diagnostics-table table.dataTable { width: 100% !important; max-width: 100%; }
+  .gf-diagnostics-table table.dataTable { table-layout: fixed; }
+  .gf-diagnostics-table table.dataTable th,
+  .gf-diagnostics-table table.dataTable td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
   .gf-cell-scroll { max-height: 96px; overflow-y: auto; padding-right: 4px; white-space: normal; word-break: break-word; }
   .gf-cell-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .gf-cell-scroll::-webkit-scrollbar-thumb { background: rgba(79, 70, 229, 0.35); border-radius: 4px; }
+  .gf-local-page { max-width: 1120px; margin: 0 auto; }
+  .gf-local-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 20px; margin-bottom: 14px; background: #ffffff; border: 1px solid #dbe1ea; border-radius: 14px; }
+  .gf-local-heading h2 { margin: 0; font-size: 1.25rem; font-weight: 650; }
+  .gf-local-heading p { margin: 5px 0 0; color: #64748b; }
+  .gf-local-toolbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+  .gf-local-status { min-height: 20px; margin: -4px 4px 12px; color: #64748b; font-size: 0.8rem; overflow-wrap: anywhere; }
+  .gf-local-shell { overflow: hidden; background: #ffffff; border: 1px solid #dbe1ea; border-radius: 14px; }
+  .gf-local-shell > .nav { gap: 4px; margin: 0; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; background: #f8fafc; }
+  .gf-local-shell > .nav .nav-link { border-radius: 9px; padding: 8px 13px; color: #475569; font-size: 0.9rem; }
+  .gf-local-shell > .nav .nav-link.active { background: #4f46e5; color: #ffffff; }
+  .gf-local-shell > .tab-content { padding: 24px; }
+  .gf-local-pane { max-width: 820px; margin: 0 auto; }
+  .gf-local-adapter-header { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 5px; }
+  .gf-local-adapter-header h3 { margin: 0; font-size: 1.08rem; font-weight: 650; }
+  .gf-service-badge { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; background: rgba(79, 70, 229, 0.09); color: #4f46e5; font-size: 0.75rem; font-weight: 600; }
+  .gf-local-description { margin: 0 0 18px; color: #64748b; }
+  .gf-local-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; row-gap: 2px; }
+  .gf-local-form-grid .shiny-input-container { width: 100%; max-width: none; }
+  .gf-local-field-wide { grid-column: 1 / -1; }
+  .gf-local-note { margin: 6px 0 0; padding: 10px 12px; border-left: 3px solid #a5b4fc; border-radius: 0 8px 8px 0; background: #f8fafc; color: #526173; font-size: 0.84rem; }
+  .gf-local-advanced { margin-top: 16px; border-top: 1px solid #e5e7eb; }
+  .gf-local-advanced summary { padding: 13px 0 4px; color: #475569; cursor: pointer; font-size: 0.86rem; font-weight: 600; user-select: none; }
+  .gf-local-advanced[open] summary { margin-bottom: 7px; }
+  .gf-local-diagnostics { margin-top: 14px; padding: 18px 20px; background: #ffffff; border: 1px solid #dbe1ea; border-radius: 14px; }
+  .gf-local-diagnostics h3 { margin: 0 0 12px; font-size: 1rem; font-weight: 650; }
+  @media (max-width: 768px) {
+    .gf-local-toolbar { flex-direction: column; }
+    .gf-local-toolbar-actions { justify-content: flex-start; }
+    .gf-local-shell > .nav { overflow-x: auto; flex-wrap: nowrap; }
+    .gf-local-shell > .nav .nav-link { white-space: nowrap; }
+    .gf-local-shell > .tab-content { padding: 18px 16px; }
+    .gf-local-form-grid { grid-template-columns: 1fr; }
+    .gf-local-field-wide { grid-column: auto; }
+  }
   .favorite-star { cursor: pointer; color: #cfd8f3; font-size: 1.1rem; transition: color 0.15s ease-in-out; }
   .favorite-star:hover { color: #facc15; }
   .favorite-star.is-fav { color: #facc15; }
@@ -867,6 +1050,393 @@
   )
 }
 
+.local_inference_tab_ui <- function() {
+  tabPanel(
+    "Local inference",
+    div(
+      class = "gf-tab-body gf-local-page",
+      div(
+        class = "gf-local-toolbar",
+        div(
+          class = "gf-local-heading",
+          h2("Local adapters"),
+          tags$p(
+            "Configure only the adapter you use. Each one runs independently."
+          )
+        ),
+        div(
+          class = "gf-local-toolbar-actions",
+          actionButton(
+            "local_config_save",
+            "Save",
+            icon = icon("floppy-disk"),
+            class = "btn-primary"
+          ),
+          actionButton(
+            "local_config_reload",
+            "Reload",
+            icon = icon("rotate"),
+            class = "btn-outline-secondary"
+          ),
+          actionButton(
+            "local_diagnostics_run",
+            "Check adapter",
+            icon = icon("stethoscope"),
+            class = "btn-outline-secondary"
+          )
+        )
+      ),
+      div(
+        class = "gf-local-status",
+        textOutput("local_config_status", inline = TRUE)
+      ),
+      div(
+        class = "gf-local-shell",
+        tabsetPanel(
+          id = "local_adapter_tabs",
+          type = "pills",
+          selected = "ollama",
+          tabPanel(
+            "Ollama",
+            value = "ollama",
+            div(
+              class = "gf-local-pane",
+              div(
+                class = "gf-local-adapter-header",
+                h3("Ollama"),
+                span('service = "ollama"', class = "gf-service-badge")
+              ),
+              tags$p(
+                class = "gf-local-description",
+                "Connect genflow to an Ollama server for local text and vision models."
+              ),
+              div(
+                class = "gf-local-form-grid",
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_ollama_base_url",
+                    "Server URL",
+                    value = "http://127.0.0.1:11434"
+                  )
+                )
+              ),
+              tags$p(
+                class = "gf-local-note",
+                "Ollama owns model files and GPU execution. Python settings do not affect it."
+              ),
+              tags$details(
+                class = "gf-local-advanced",
+                tags$summary("Advanced settings"),
+                div(
+                  class = "gf-local-form-grid",
+                  div(
+                    class = "gf-local-field-wide",
+                    textInput(
+                      "local_ollama_model",
+                      "Fallback model",
+                      value = "",
+                      placeholder = "Discover automatically from /api/tags"
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          tabPanel(
+            "llama.cpp",
+            value = "llamacpp",
+            div(
+              class = "gf-local-pane",
+              div(
+                class = "gf-local-adapter-header",
+                h3("llama.cpp"),
+                span('service = "llamacpp"', class = "gf-service-badge")
+              ),
+              tags$p(
+                class = "gf-local-description",
+                "Connect to a running llama-server through its OpenAI-compatible API."
+              ),
+              div(
+                class = "gf-local-form-grid",
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_llamacpp_base_url",
+                    "Server URL",
+                    value = "http://127.0.0.1:8080"
+                  )
+                )
+              ),
+              tags$p(
+                class = "gf-local-note",
+                "llama-server owns Vulkan, GPU layers, context size, and model loading."
+              ),
+              tags$details(
+                class = "gf-local-advanced",
+                tags$summary("Advanced settings"),
+                div(
+                  class = "gf-local-form-grid",
+                  div(
+                    class = "gf-local-field-wide",
+                    textInput(
+                      "local_llamacpp_model",
+                      "Fallback model",
+                      value = "",
+                      placeholder = "Discover automatically from /v1/models"
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          tabPanel(
+            "Hugging Face STT",
+            value = "hf-local",
+            div(
+              class = "gf-local-pane",
+              div(
+                class = "gf-local-adapter-header",
+                h3("Hugging Face speech-to-text"),
+                span('service = "hf-local"', class = "gf-service-badge")
+              ),
+              tags$p(
+                class = "gf-local-description",
+                "Run a supported Transformers speech model in an isolated Python process."
+              ),
+              div(
+                class = "gf-local-form-grid",
+                div(
+                  class = "gf-local-field-wide",
+                  selectizeInput(
+                    "local_hf_stt_model",
+                    "Model",
+                    choices = .local_hf_stt_model_choices(),
+                    selected = "openai/whisper-large-v3-turbo",
+                    options = list(
+                      create = TRUE,
+                      createOnBlur = TRUE,
+                      persist = FALSE
+                    )
+                  )
+                ),
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_python",
+                    "Python executable",
+                    value = "",
+                    placeholder = "python3 or /path/to/venv/bin/python"
+                  )
+                ),
+                selectInput(
+                  "local_device",
+                  "Accelerator",
+                  choices = c(
+                    "Automatic" = "auto",
+                    "AMD ROCm / HIP" = "rocm",
+                    "NVIDIA CUDA" = "cuda",
+                    "CPU" = "cpu",
+                    "Apple Metal (MPS)" = "mps"
+                  ),
+                  selected = "auto",
+                  selectize = FALSE
+                )
+              ),
+              tags$p(
+                class = "gf-local-note",
+                "Recommended: openai/whisper-large-v3-turbo. For a quick CPU smoke test, use openai/whisper-tiny. This adapter uses PyTorch and does not use Vulkan; MOSS is an advanced profile with extra dependencies."
+              ),
+              tags$details(
+                class = "gf-local-advanced",
+                tags$summary("Advanced settings"),
+                div(
+                  class = "gf-local-form-grid",
+                  selectInput(
+                    "local_hf_stt_profile",
+                    "Model adapter",
+                    choices = c(
+                      "Detect automatically" = "auto",
+                      "Generic Transformers ASR" = "transformers",
+                      "MOSS Transcribe + Diarize" = "moss"
+                    ),
+                    selected = "auto",
+                    selectize = FALSE
+                  ),
+                  selectInput(
+                    "local_dtype",
+                    "Precision",
+                    choices = c(
+                      "Automatic" = "auto",
+                      "Float 32" = "float32",
+                      "Float 16" = "float16",
+                      "BFloat 16" = "bfloat16"
+                    ),
+                    selected = "auto",
+                    selectize = FALSE
+                  ),
+                  textInput(
+                    "local_hf_revision",
+                    "Revision",
+                    value = "",
+                    placeholder = "Optional tag, branch, or commit SHA"
+                  ),
+                  textInput(
+                    "local_hf_cache_dir",
+                    "Cache directory",
+                    value = "",
+                    placeholder = "Use the Hugging Face default"
+                  )
+                )
+              )
+            )
+          ),
+          tabPanel(
+            "Native STT",
+            value = "local-native",
+            div(
+              class = "gf-local-pane",
+              div(
+                class = "gf-local-adapter-header",
+                h3("Native speech-to-text"),
+                span('service = "local-native"', class = "gf-service-badge")
+              ),
+              tags$p(
+                class = "gf-local-description",
+                "Run a supported C++ speech engine directly, without Python or PyTorch."
+              ),
+              div(
+                class = "gf-local-form-grid",
+                selectInput(
+                  "local_stt_native_engine",
+                  "Engine",
+                  choices = c(
+                    "Detect automatically" = "auto",
+                    "CrispASR (multiple GGUF families)" = "crispasr",
+                    "moss-transcribe.cpp (MOSS only)" = "moss-transcribe"
+                  ),
+                  selected = "auto",
+                  selectize = FALSE
+                ),
+                selectInput(
+                  "local_stt_native_device",
+                  "Device",
+                  choices = c(
+                    "Automatic" = "auto",
+                    "Vulkan" = "vulkan",
+                    "CPU" = "cpu",
+                    "AMD HIP / ROCm" = "hip",
+                    "NVIDIA CUDA" = "cuda",
+                    "Apple Metal" = "metal"
+                  ),
+                  selected = "auto",
+                  selectize = FALSE
+                ),
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_stt_native_model",
+                    "Model",
+                    value = "",
+                    placeholder = "auto, /path/model.gguf, or hf://owner/repo/model.gguf"
+                  )
+                )
+              ),
+              tags$p(
+                class = "gf-local-note",
+                "For AMD GPUs, prefer a Vulkan-enabled CrispASR build. Model support depends on the selected engine and GGUF architecture."
+              ),
+              tags$details(
+                class = "gf-local-advanced",
+                tags$summary("Advanced settings"),
+                div(
+                  class = "gf-local-form-grid",
+                  div(
+                    class = "gf-local-field-wide",
+                    textInput(
+                      "local_stt_native_executable",
+                      "Executable",
+                      value = "",
+                      placeholder = "Find on PATH, or enter an absolute path"
+                    )
+                  ),
+                  div(
+                    class = "gf-local-field-wide",
+                    textInput(
+                      "local_stt_native_backend",
+                      "Model architecture",
+                      value = "",
+                      placeholder = "Required with model = auto; for example whisper"
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          tabPanel(
+            "STT server",
+            value = "local-openai",
+            div(
+              class = "gf-local-pane",
+              div(
+                class = "gf-local-adapter-header",
+                h3("OpenAI-compatible STT server"),
+                span('service = "local-openai"', class = "gf-service-badge")
+              ),
+              tags$p(
+                class = "gf-local-description",
+                "Use any local server that exposes /v1/audio/transcriptions."
+              ),
+              div(
+                class = "gf-local-form-grid",
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_stt_server_base_url",
+                    "Server URL",
+                    value = "http://127.0.0.1:8000"
+                  )
+                )
+              ),
+              tags$p(
+                class = "gf-local-note",
+                "If authentication is required, set GENFLOW_STT_API_KEY outside the saved configuration."
+              ),
+              tags$details(
+                class = "gf-local-advanced",
+                tags$summary("Advanced settings"),
+                div(
+                  class = "gf-local-form-grid",
+                  div(
+                    class = "gf-local-field-wide",
+                    textInput(
+                      "local_stt_server_model",
+                      "Fallback model",
+                      value = "",
+                      placeholder = "Server-defined model id"
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      ),
+      conditionalPanel(
+        condition = "output.local_diagnostics_visible",
+        div(
+          class = "gf-local-diagnostics",
+          h3("Adapter diagnostics"),
+          div(
+            class = "gf-diagnostics-table",
+            DTOutput("local_diagnostics_table")
+          )
+        )
+      )
+    )
+  )
+}
+
 .transfer_tab_ui <- function() {
   tabPanel(
     "Import / Export",
@@ -931,8 +1501,25 @@
   fluidPage(
     theme = bs_theme(
       version = 5L,
-      base_font = "Segoe UI",
-      heading_font = "Segoe UI Semibold",
+      base_font = bslib::font_collection(
+        "Segoe UI",
+        "system-ui",
+        "-apple-system",
+        "BlinkMacSystemFont",
+        "Helvetica Neue",
+        "Arial",
+        "sans-serif"
+      ),
+      heading_font = bslib::font_collection(
+        "Segoe UI Semibold",
+        "Segoe UI",
+        "system-ui",
+        "-apple-system",
+        "BlinkMacSystemFont",
+        "Helvetica Neue",
+        "Arial",
+        "sans-serif"
+      ),
       bg = "#f4f6fb",
       fg = "#1f2937",
       primary = "#4f46e5",
@@ -956,6 +1543,7 @@
       .content_tab_ui(),
       .agents_tab_ui(),
       .models_tab_ui(),
+      .local_inference_tab_ui(),
       .transfer_tab_ui()
     )
   )
@@ -1310,6 +1898,83 @@
   })
 }
 
+.update_local_config_inputs <- function(session, config) {
+  if (!is.list(config)) {
+    stop("`config` must be a local inference configuration list.", call. = FALSE)
+  }
+
+  updateTextInput(session, "local_python", value = config$python)
+  updateSelectInput(session, "local_device", selected = config$device)
+  updateSelectInput(session, "local_dtype", selected = config$dtype)
+  updateTextInput(session, "local_hf_cache_dir", value = config$hf_cache_dir)
+  updateSelectizeInput(
+    session,
+    "local_hf_stt_model",
+    choices = .local_hf_stt_model_choices(config$hf_stt_model),
+    selected = config$hf_stt_model,
+    server = FALSE
+  )
+  updateTextInput(session, "local_hf_revision", value = config$hf_revision)
+  updateSelectInput(
+    session,
+    "local_hf_stt_profile",
+    selected = config$hf_stt_profile
+  )
+  updateTextInput(
+    session,
+    "local_ollama_base_url",
+    value = config$ollama_base_url
+  )
+  updateTextInput(session, "local_ollama_model", value = config$ollama_model)
+  updateTextInput(
+    session,
+    "local_llamacpp_base_url",
+    value = config$llamacpp_base_url
+  )
+  updateTextInput(
+    session,
+    "local_llamacpp_model",
+    value = config$llamacpp_model
+  )
+  updateTextInput(
+    session,
+    "local_stt_server_base_url",
+    value = config$stt_server_base_url
+  )
+  updateTextInput(
+    session,
+    "local_stt_server_model",
+    value = config$stt_server_model
+  )
+  updateTextInput(
+    session,
+    "local_stt_native_executable",
+    value = config$stt_native_executable
+  )
+  updateTextInput(
+    session,
+    "local_stt_native_model",
+    value = config$stt_native_model
+  )
+  updateTextInput(
+    session,
+    "local_stt_native_backend",
+    value = config$stt_native_backend
+  )
+  updateSelectInput(
+    session,
+    "local_stt_native_engine",
+    selected = config$stt_native_engine
+  )
+  updateSelectInput(
+    session,
+    "local_stt_native_device",
+    selected = config$stt_native_device
+  )
+
+  invisible(config)
+}
+
 ui <- .app_ui()
 
 server <- function(input, output, session) {
@@ -1395,6 +2060,72 @@ server <- function(input, output, session) {
     export_summary = NULL,
     import_summary = NULL
   )
+
+  initial_local_config <- tryCatch(
+    gen_local_config(),
+    error = function(e) .genflow_local_config_defaults()
+  )
+
+  local_state <- reactiveValues(
+    config = initial_local_config,
+    status = paste("Configuration:", .genflow_local_config_path()),
+    diagnostics = data.frame(
+      component = character(),
+      status = character(),
+      detail = character(),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  local_config_from_inputs <- function() {
+    current <- local_state$config %||% .genflow_local_config_defaults()
+    input_or_current <- function(input_id, field) {
+      value <- input[[input_id]]
+      if (is.null(value) || !length(value) || is.na(value[[1]])) {
+        return(current[[field]] %||% "")
+      }
+      as.character(value[[1]])
+    }
+    list(
+      python = input_or_current("local_python", "python"),
+      device = input_or_current("local_device", "device"),
+      dtype = input_or_current("local_dtype", "dtype"),
+      hf_cache_dir = input_or_current("local_hf_cache_dir", "hf_cache_dir"),
+      hf_stt_model = input_or_current("local_hf_stt_model", "hf_stt_model"),
+      hf_revision = input_or_current("local_hf_revision", "hf_revision"),
+      hf_stt_profile = input_or_current("local_hf_stt_profile", "hf_stt_profile"),
+      ollama_base_url = input_or_current("local_ollama_base_url", "ollama_base_url"),
+      ollama_model = input_or_current("local_ollama_model", "ollama_model"),
+      llamacpp_base_url = input_or_current("local_llamacpp_base_url", "llamacpp_base_url"),
+      llamacpp_model = input_or_current("local_llamacpp_model", "llamacpp_model"),
+      stt_server_base_url = input_or_current("local_stt_server_base_url", "stt_server_base_url"),
+      stt_server_model = input_or_current("local_stt_server_model", "stt_server_model"),
+      stt_native_engine = input_or_current(
+        "local_stt_native_engine",
+        "stt_native_engine"
+      ),
+      stt_native_executable = input_or_current(
+        "local_stt_native_executable",
+        "stt_native_executable"
+      ),
+      stt_native_model = input_or_current(
+        "local_stt_native_model",
+        "stt_native_model"
+      ),
+      stt_native_backend = input_or_current(
+        "local_stt_native_backend",
+        "stt_native_backend"
+      ),
+      stt_native_device = input_or_current(
+        "local_stt_native_device",
+        "stt_native_device"
+      )
+    )
+  }
+
+  session$onFlushed(function() {
+    .update_local_config_inputs(session, initial_local_config)
+  }, once = TRUE)
 
   current_models_dir <- function() {
     dir <- models_state$directory %||% ""
@@ -2753,7 +3484,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$models_update_all, {
-    dir <- trimws(input$models_directory)
+    dir <- trimws(input$models_directory %||% "")
     if (!nzchar(dir)) {
       showNotification("Provide a directory for model CSV files.", type = "warning")
       return()
@@ -2768,7 +3499,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$models_update_selected, {
-    dir <- trimws(input$models_directory)
+    dir <- trimws(input$models_directory %||% "")
     provider <- input$models_update_provider %||% ""
     if (!nzchar(dir)) {
       showNotification("Provide a directory for model CSV files.", type = "warning")
@@ -3041,6 +3772,173 @@ server <- function(input, output, session) {
     models_state$custom_status
   })
 
+  observeEvent(input$local_config_reload, {
+    config <- tryCatch(
+      gen_local_config(),
+      error = function(e) {
+        local_state$status <- paste("Could not reload configuration:", conditionMessage(e))
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(config)) {
+      return()
+    }
+    local_state$config <- config
+    local_state$status <- paste(
+      "Reloaded configuration from",
+      .genflow_local_config_path()
+    )
+    .update_local_config_inputs(session, config)
+    showNotification("Local inference configuration reloaded.", type = "message")
+  })
+
+  observeEvent(input$local_config_save, {
+    config <- tryCatch(
+      gen_local_config(config = local_config_from_inputs()),
+      error = function(e) {
+        local_state$status <- paste("Could not save configuration:", conditionMessage(e))
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(config)) {
+      return()
+    }
+    local_state$config <- config
+    local_state$status <- paste(
+      "Saved configuration to",
+      .genflow_local_config_path()
+    )
+    .update_local_config_inputs(session, config)
+    showNotification("Local inference configuration saved.", type = "message")
+  })
+
+  local_adapter_label <- function(adapter) {
+    switch(
+      as.character(adapter %||% "ollama")[1],
+      ollama = "Ollama",
+      llamacpp = "llama.cpp",
+      `hf-local` = "Hugging Face STT",
+      `local-native` = "Native STT",
+      `local-openai` = "STT server",
+      "local adapter"
+    )
+  }
+
+  observeEvent(input$local_adapter_tabs, {
+    adapter <- input$local_adapter_tabs %||% "ollama"
+    adapter_label <- local_adapter_label(adapter)
+    updateActionButton(
+      session,
+      "local_diagnostics_run",
+      label = paste("Check", adapter_label),
+      icon = icon("stethoscope")
+    )
+    local_state$diagnostics <- data.frame(
+      component = character(),
+      status = character(),
+      detail = character(),
+      stringsAsFactors = FALSE
+    )
+    local_state$status <- paste(
+      "Editing",
+      adapter_label,
+      "settings. Configuration:",
+      .genflow_local_config_path()
+    )
+  }, ignoreInit = FALSE)
+
+  observeEvent(input$local_diagnostics_run, {
+    adapter <- isolate(input$local_adapter_tabs %||% "ollama")
+    adapter_label <- local_adapter_label(adapter)
+    preview <- tryCatch(
+      .genflow_validate_local_config(local_config_from_inputs()),
+      error = function(e) {
+        local_state$status <- paste("Invalid configuration:", conditionMessage(e))
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(preview)) {
+      return()
+    }
+
+    withProgress(message = paste("Checking", adapter_label, "..."), value = 0, {
+      diagnostics <- tryCatch(
+        {
+          incProgress(0.2, detail = "Checking the selected adapter")
+          result <- gen_local_diagnostics(
+            config = preview,
+            check_endpoints = TRUE,
+            timeout = 10,
+            adapters = adapter
+          )
+          incProgress(0.8, detail = "Finished")
+          result
+        },
+        error = function(e) {
+          local_state$status <- paste("Diagnostics failed:", conditionMessage(e))
+          showNotification(conditionMessage(e), type = "error")
+          NULL
+        }
+      )
+    })
+    if (is.null(diagnostics)) {
+      return()
+    }
+    local_state$diagnostics <- diagnostics
+    issues <- sum(!diagnostics$status %in% "ok")
+    local_state$status <- sprintf(
+      "%s check completed at %s: %d component(s), %d item(s) need attention.",
+      adapter_label,
+      format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+      nrow(diagnostics),
+      issues
+    )
+  })
+
+  output$local_config_status <- renderText({
+    local_state$status
+  })
+
+  output$local_diagnostics_visible <- reactive({
+    nrow(local_state$diagnostics) > 0
+  })
+  outputOptions(
+    output,
+    "local_diagnostics_visible",
+    suspendWhenHidden = FALSE
+  )
+
+  output$local_diagnostics_table <- renderDT({
+    diagnostics <- local_state$diagnostics
+    if (!nrow(diagnostics)) {
+      diagnostics <- data.frame(
+        component = "Not run",
+        status = "info",
+        detail = "Save or review the settings, then run diagnostics.",
+        stringsAsFactors = FALSE
+      )
+    }
+    datatable(
+      diagnostics,
+      rownames = FALSE,
+      escape = TRUE,
+      options = list(
+        dom = "t",
+        paging = FALSE,
+        ordering = FALSE,
+        autoWidth = FALSE,
+        columnDefs = list(
+          list(width = "22%", targets = 0),
+          list(width = "16%", targets = 1),
+          list(width = "62%", targets = 2)
+        )
+      )
+    )
+  })
+
   output$models_summary <- renderText({
     catalog <- models_state$catalog
     if (nrow(catalog) == 0) {
@@ -3128,9 +4026,9 @@ server <- function(input, output, session) {
     star_html <- sprintf(
       "<span class='favorite-star %s' data-service='%s' data-model='%s' data-type='%s' title='%s'>&#9733;</span>",
       ifelse(is_fav, "is-fav", ""),
-      htmltools::htmlEscape(row_service),
-      htmltools::htmlEscape(row_model),
-      htmltools::htmlEscape(row_type),
+      htmltools::htmlEscape(row_service, attribute = TRUE),
+      htmltools::htmlEscape(row_model, attribute = TRUE),
+      htmltools::htmlEscape(row_type, attribute = TRUE),
       ifelse(is_fav, "Remove from favorites", "Add to favorites")
     )
 
@@ -3159,9 +4057,9 @@ server <- function(input, output, session) {
     display <- data.frame(
       Favorite = star_html,
       FavoriteRank = as.integer(is_fav),
-      Provider = .model_label(row_service),
-      Model = row_model,
-      Type = row_type,
+      Provider = htmltools::htmlEscape(.model_label(row_service)),
+      Model = htmltools::htmlEscape(row_model),
+      Type = htmltools::htmlEscape(row_type),
       Pricing = format_scroll_cell(pricing_raw),
       Description = format_scroll_cell(description_raw),
       stringsAsFactors = FALSE
@@ -3323,9 +4221,9 @@ server <- function(input, output, session) {
           Filter(Negate(is.null), list(name_node, summary_node))
         )
         if (!is_unsaved) {
-          item_args$onclick <- sprintf(
-            "Shiny.setInputValue('%s', {name: '%s', nonce: Math.random()}, {priority: 'event'});",
-            "setup_select_trigger", name
+          item_args <- c(
+            item_args,
+            .entity_select_attributes("setup_select_trigger", name)
           )
         }
         do.call(div, item_args)
@@ -3423,9 +4321,9 @@ server <- function(input, output, session) {
           Filter(Negate(is.null), list(name_node, preview_node))
         )
         if (!is_unsaved) {
-          item_args$onclick <- sprintf(
-            "Shiny.setInputValue('%s', {name: '%s', nonce: Math.random()}, {priority: 'event'});",
-            "content_select_trigger", name
+          item_args <- c(
+            item_args,
+            .entity_select_attributes("content_select_trigger", name)
           )
         }
         do.call(div, item_args)
@@ -3523,9 +4421,9 @@ server <- function(input, output, session) {
           Filter(Negate(is.null), list(name_node, summary_node))
         )
         if (!is_unsaved) {
-          item_args$onclick <- sprintf(
-            "Shiny.setInputValue('%s', {name: '%s', nonce: Math.random()}, {priority: 'event'});",
-            "agent_select_trigger", name
+          item_args <- c(
+            item_args,
+            .entity_select_attributes("agent_select_trigger", name)
           )
         }
         do.call(div, item_args)
@@ -3642,10 +4540,9 @@ server <- function(input, output, session) {
     online_enabled <- FALSE
     base_model_value <- model_value %||% ""
     if (identical(tolower(service_value), "openrouter") && nzchar(model_value)) {
-      if (grepl(":online$", model_value, fixed = TRUE)) {
-        online_enabled <- TRUE
-        base_model_value <- sub(":online$", "", model_value)
-      }
+      openrouter_state <- .openrouter_model_state(model_value)
+      online_enabled <- openrouter_state$online
+      base_model_value <- openrouter_state$base
     }
     if (!nzchar(base_model_value)) {
       base_model_value <- ""
@@ -3665,14 +4562,9 @@ server <- function(input, output, session) {
     update_setup_model_choices()
     update_setup_type_choices()
     updateNumericInput(session, "setup_temp", value = setup$temp %||% NA)
-    thinking_flag <- setup$thinking %||% setup$reasoning %||% FALSE
-    thinking_level <- setup$thinking_budget %||% setup$thinking_level %||% setup$reasoning_effort %||% .DEFAULT_THINKING_LEVEL
-    thinking_level <- tolower(thinking_level)
-    if (!thinking_level %in% .THINKING_LEVEL_CHOICES) {
-      thinking_level <- .DEFAULT_THINKING_LEVEL
-    }
-    setup_state$thinking_enabled <- isTRUE(thinking_flag)
-    setup_state$thinking_level <- thinking_level
+    reasoning_settings <- .normalize_setup_reasoning(setup)
+    setup_state$thinking_enabled <- reasoning_settings$enabled
+    setup_state$thinking_level <- reasoning_settings$level
     updateCheckboxInput(session, "setup_thinking_enabled", value = setup_state$thinking_enabled)
     updateSelectInput(session, "setup_thinking_level", selected = setup_state$thinking_level)
     setup_state$extras <- .build_setup_extras(setup)
@@ -3745,6 +4637,8 @@ server <- function(input, output, session) {
     })
     if (isTRUE(res)) {
       showNotification(sprintf("Setup '%s' deleted.", name), type = "message")
+    } else {
+      return()
     }
     setup_state$selected <- NULL
     setup_state$original <- NULL
@@ -3770,8 +4664,8 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$setup_extra_action, {
-    action <- input$setup_extra_action$action
-    field_id <- input$setup_extra_action$field
+    action <- .normalize_choice_value(input$setup_extra_action$action)
+    field_id <- .normalize_choice_value(input$setup_extra_action$field)
     if (!nzchar(field_id)) {
       return()
     }
@@ -3797,7 +4691,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$setup_save, {
-    name <- trimws(input$setup_name)
+    name <- trimws(input$setup_name %||% "")
     if (!nzchar(name)) {
       showNotification("Setup name is required.", type = "error")
       return()
@@ -3809,7 +4703,11 @@ server <- function(input, output, session) {
       return()
     }
     temp <- input$setup_temp
-    if (is.na(temp)) temp <- NULL
+    if (is.null(temp) || !length(temp) || is.na(temp[[1]])) {
+      temp <- NULL
+    } else {
+      temp <- temp[[1]]
+    }
     type_input <- trimws(input$setup_type %||% "")
     resolved <- tryCatch(
       .resolve_favorite_selection(service, model, type_input, models_state$favorites, models_state$catalog),
@@ -3825,8 +4723,9 @@ server <- function(input, output, session) {
     if (!nzchar(type)) type <- NULL
 
     if (identical(tolower(service), "openrouter")) {
-      has_suffix <- grepl(":online$", model, fixed = TRUE)
-      base_model <- if (has_suffix) sub(":online$", "", model) else model
+      openrouter_state <- .openrouter_model_state(model)
+      has_suffix <- openrouter_state$online
+      base_model <- openrouter_state$base
       if (isTRUE(input$setup_openrouter_online)) {
         model <- if (has_suffix) model else paste0(base_model, ":online")
       } else {
@@ -3894,8 +4793,7 @@ server <- function(input, output, session) {
       thinking_level <- .DEFAULT_THINKING_LEVEL
     }
     if (thinking_enabled) {
-      extras$thinking <- TRUE
-      extras$thinking_budget <- thinking_level
+      extras$reasoning <- thinking_level
     }
 
     args <- c(
@@ -3907,7 +4805,8 @@ server <- function(input, output, session) {
         type = type,
         save = TRUE,
         assign = FALSE,
-        overwrite = TRUE
+        overwrite = !is.null(setup_state$selected) &&
+          identical(setup_state$selected, name)
       ),
       extras
     )
@@ -3922,7 +4821,24 @@ server <- function(input, output, session) {
 
     original_name <- setup_state$selected
     if (!is.null(original_name) && !identical(original_name, name)) {
-      rm_setup(original_name)
+      renamed <- tryCatch(
+        {
+          .genflow_retarget_agent_references("sname", original_name, name)
+          rm_setup(original_name)
+          TRUE
+        },
+        error = function(e) {
+          try(rm_setup(name, force = TRUE), silent = TRUE)
+          showNotification(
+            paste("Could not rename setup:", conditionMessage(e)),
+            type = "error"
+          )
+          FALSE
+        }
+      )
+      if (!isTRUE(renamed)) {
+        return()
+      }
       if (exists(original_name, envir = setup_summary_cache, inherits = FALSE)) {
         rm(list = original_name, envir = setup_summary_cache)
       }
@@ -4033,6 +4949,8 @@ server <- function(input, output, session) {
     })
     if (isTRUE(res)) {
       showNotification(sprintf("Content '%s' deleted.", name), type = "message")
+    } else {
+      return()
     }
     content_state$selected <- NULL
     content_state$original <- NULL
@@ -4237,7 +5155,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$content_save, {
-    name <- trimws(input$content_name)
+    name <- trimws(input$content_name %||% "")
     if (!nzchar(name)) {
       showNotification("Content name is required.", type = "error")
       return()
@@ -4245,12 +5163,22 @@ server <- function(input, output, session) {
 
     fields <- content_state$fields
     payload <- list()
+    seen_content_names <- character()
     for (field in fields) {
       field_name <- if (isTRUE(field$locked)) field$name else trimws(input[[paste0("content_field_", field$id, "_label")]] %||% field$name)
       if (!nzchar(field_name)) {
         showNotification("Field names cannot be empty.", type = "error")
         return()
       }
+      field_key <- tolower(field_name)
+      if (field_key %in% seen_content_names) {
+        showNotification(
+          sprintf("Field '%s' is duplicated. Use unique names.", field_name),
+          type = "error"
+        )
+        return()
+      }
+      seen_content_names <- c(seen_content_names, field_key)
       mode <- input[[paste0("content_field_", field$id, "_mode")]] %||% field$mode
       if (mode == "null") {
         next
@@ -4277,7 +5205,8 @@ server <- function(input, output, session) {
         cname = name,
         save = TRUE,
         assign = FALSE,
-        overwrite = TRUE
+        overwrite = !is.null(content_state$selected) &&
+          identical(content_state$selected, name)
       ),
       payload
     )
@@ -4292,7 +5221,24 @@ server <- function(input, output, session) {
     }
     original_name <- content_state$selected
     if (!is.null(original_name) && !identical(original_name, name)) {
-      rm_content(original_name)
+      renamed <- tryCatch(
+        {
+          .genflow_retarget_agent_references("cname", original_name, name)
+          rm_content(original_name)
+          TRUE
+        },
+        error = function(e) {
+          try(rm_content(name, force = TRUE), silent = TRUE)
+          showNotification(
+            paste("Could not rename content:", conditionMessage(e)),
+            type = "error"
+          )
+          FALSE
+        }
+      )
+      if (!isTRUE(renamed)) {
+        return()
+      }
       if (exists(original_name, envir = content_preview_cache, inherits = FALSE)) {
         rm(list = original_name, envir = content_preview_cache)
       }
@@ -4543,6 +5489,8 @@ server <- function(input, output, session) {
     })
     if (isTRUE(res)) {
       showNotification(sprintf("Agent '%s' deleted.", name), type = "message")
+    } else {
+      return()
     }
     agent_state$selected <- NULL
     agent_state$original <- NULL
@@ -4926,12 +5874,22 @@ server <- function(input, output, session) {
     } else if (content_mode == "custom") {
       fields <- agent_state$custom_content_fields
       custom_content <- list()
+      seen_content_names <- character()
       for (field in fields) {
         field_name <- if (isTRUE(field$locked)) field$name else trimws(input[[paste0("agent_content_field_", field$id, "_label")]] %||% field$name)
         if (!nzchar(field_name)) {
           showNotification("Custom content field names cannot be empty.", type = "error")
           return()
         }
+        field_key <- tolower(field_name)
+        if (field_key %in% seen_content_names) {
+          showNotification(
+            sprintf("Custom content field '%s' is duplicated.", field_name),
+            type = "error"
+          )
+          return()
+        }
+        seen_content_names <- c(seen_content_names, field_key)
         mode <- input[[paste0("agent_content_field_", field$id, "_mode")]] %||% field$mode
         if (mode == "null") next
         if (mode == "na") {
@@ -5001,7 +5959,8 @@ server <- function(input, output, session) {
         content = content_argument,
         save = TRUE,
         assign = FALSE,
-        overwrite = TRUE
+        overwrite = !is.null(agent_state$selected) &&
+          identical(agent_state$selected, name)
       ),
       overrides
     )

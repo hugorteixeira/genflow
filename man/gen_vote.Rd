@@ -34,13 +34,14 @@ example, \code{"option"}).}
 \item{title}{Optional character title printed before the ranking (default
 \code{"Vote Count"}). Use \code{NULL} or \code{""} to skip the title.}
 
-\item{return_winner}{Logical. When \code{TRUE}, the function invisibly returns only
-the winning option instead of the full ranking.}
+\item{return_winner}{Return mode: \code{"ranking"} (default), \code{"scoreboard"},
+\code{"id"}, or \code{"content"}. Logical \code{TRUE}/\code{FALSE} remains accepted as a
+compatibility alias for \code{"id"}/\code{"ranking"}.}
 }
 \value{
-Invisibly returns the ranking (character vector) or, when
-\code{return_winner = TRUE}, the winning option. A message is printed when no
-votes are found.
+Invisibly returns the value selected by \code{return_winner}: a named
+ranking, a scoreboard data frame, the winning id, or the corresponding
+content. A message is printed when no votes are found.
 }
 \description{
 Scans a list of texts (typically the output lists returned by

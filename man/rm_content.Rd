@@ -4,10 +4,14 @@
 \alias{rm_content}
 \title{Delete cached content}
 \usage{
-rm_content(cname)
+rm_content(cname, force = FALSE)
 }
 \arguments{
 \item{cname}{Content identifier.}
+
+\item{force}{Delete even when saved agents reference the content. Referencing
+agents keep their flattened runtime fields, but the stale \code{cname} metadata
+is removed.}
 }
 \value{
 Invisible TRUE when removed.

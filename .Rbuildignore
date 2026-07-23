@@ -1,0 +1,6 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^README\.html$
+^AGENTS\.md$
+^\.agents$
+^\.codex$

@@ -21,6 +21,23 @@ gen_stt(audio, ...)
   timeout_api = 240,
   poll_interval = 5,
   max_poll_seconds = 600,
+  local_profile = NULL,
+  device = NULL,
+  dtype = NULL,
+  python = NULL,
+  executable = NULL,
+  native_engine = NULL,
+  native_backend = NULL,
+  native_device = NULL,
+  hf_cache_dir = NULL,
+  trust_remote_code = NULL,
+  chunk_length_s = NULL,
+  return_timestamps = FALSE,
+  max_new_tokens = NULL,
+  base_url = NULL,
+  api_key = NULL,
+  response_format = "json",
+  revision = NULL,
   ...
 )
 
@@ -32,10 +49,14 @@ gen_stt(audio, ...)
 \item{...}{Reserved for future provider-specific arguments.}
 
 \item{service}{Provider identifier (e.g., "openai", "groq", "assemblyai",
-"cloudflare", "voicegain", "hf", "replicate").}
+"cloudflare", "voicegain", "hf", "replicate", "hf-local",
+\code{"local-native"}, or \code{"local-openai"}).}
 
 \item{model}{Provider model identifier. If NULL, a sensible default is used
-per provider.}
+per provider. For \code{service = "local-native"}, this is normally a local
+model file. The CrispASR engine also accepts \code{"auto"} or an explicit
+\verb{hf://OWNER/REPO:FILE} reference. For copy-and-paste convenience,
+\verb{hf://OWNER/REPO/FILE} is accepted and normalized to the same form.}
 
 \item{language}{Optional language code (e.g., "en", "pt"). If NULL, provider
 auto-detection is used when supported.}
@@ -57,6 +78,72 @@ audio formats.}
 \item{poll_interval}{Numeric; polling interval (seconds) for async providers.}
 
 \item{max_poll_seconds}{Numeric; max polling time for async providers.}
+
+\item{local_profile}{Local inference profile. \code{"auto"} selects the dedicated
+MOSS-Transcribe-Diarize integration for its official model id and the
+generic Transformers ASR pipeline otherwise. Explicit alternatives are
+\code{"transformers"} and \code{"moss"}.}
+
+\item{device}{Device for local Python inference: \code{"auto"}, \code{"cpu"},
+\code{"cuda"}, \code{"cuda:N"}, \code{"rocm"}, \code{"hip"}, or \code{"mps"}. PyTorch uses the
+\code{"cuda"} device name for both CUDA and ROCm; \code{"rocm"} and \code{"hip"} are
+accepted aliases.}
+
+\item{dtype}{Numeric precision for local inference: \code{"auto"}, \code{"float32"},
+\code{"float16"}, or \code{"bfloat16"}.}
+
+\item{python}{Optional Python executable for \code{service = "hf-local"}.
+Defaults to \code{GENFLOW_PYTHON}, then \code{python3}/\code{python} on \code{PATH}.}
+
+\item{executable}{Optional executable for \code{service = "local-native"}.
+Resolution uses \code{GENFLOW_STT_NATIVE_EXECUTABLE}, the saved local inference
+configuration, and finally the selected engine's executable on \code{PATH}.}
+
+\item{native_engine}{Native runtime for \code{service = "local-native"}:
+\code{"auto"}, \code{"crispasr"}, or \code{"moss-transcribe"}. Engines support model
+architectures explicitly; no native runtime can execute every model in
+the Hugging Face catalog.}
+
+\item{native_backend}{Optional model architecture/backend understood by the
+selected engine, such as \code{"whisper"}, \code{"parakeet"}, \code{"canary"},
+\code{"granite-4.1"}, or \code{"moss-diarize"} for CrispASR. Leave NULL to use
+model auto-detection for an explicit local or \verb{hf://} model.
+CrispASR \code{model = "auto"} requires a backend.}
+
+\item{native_device}{Native accelerator for \code{service = "local-native"}:
+\code{"auto"}, \code{"cpu"}, \code{"vulkan"}, \code{"hip"}, \code{"cuda"}, or \code{"metal"}.
+Support is engine-specific; CrispASR does not expose HIP and should use a
+Vulkan-enabled build on AMD hardware.}
+
+\item{hf_cache_dir}{Optional Hugging Face cache root for local inference.
+Defaults to \code{HF_HOME}, then the saved local inference configuration.}
+
+\item{trust_remote_code}{Logical or NULL. Controls whether Transformers may
+execute model-repository code. NULL enables it only for genflow's known
+MOSS profile; generic local models default to FALSE.}
+
+\item{chunk_length_s}{Optional chunk length in seconds for the generic
+Transformers ASR pipeline.}
+
+\item{return_timestamps}{Logical or \code{"word"} for generic Transformers ASR.
+MOSS always emits its native timestamped, speaker-aware transcript.}
+
+\item{max_new_tokens}{Optional generation limit. This is especially useful
+for long MOSS transcriptions and compatible local servers.}
+
+\item{base_url}{Optional base URL for \code{service = "local-openai"}. Defaults
+to \code{GENFLOW_STT_BASE_URL}, then \verb{http://127.0.0.1:8000}.}
+
+\item{api_key}{Optional bearer token for \code{service = "local-openai"}.
+Defaults to \code{GENFLOW_STT_API_KEY}; no authorization header is sent when
+both are empty.}
+
+\item{response_format}{Response format requested from a local
+OpenAI-compatible server, typically \code{"json"} or \code{"verbose_json"}.}
+
+\item{revision}{Optional Hugging Face model revision for \code{service = "hf-local"}, such as a branch, tag, or preferably an immutable commit SHA.
+Defaults to \code{GENFLOW_HF_REVISION}, then the saved \code{hf_revision} setting.
+Use \code{revision = ""} to explicitly disable a configured pin for one call.}
 }
 \value{
 Invisibly returns a list with \code{response_value} (transcribed text),
@@ -65,8 +152,14 @@ and metadata such as \code{audio}.
 }
 \description{
 High-level speech-to-text (STT) wrapper that dispatches to provider-specific
-implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging Face).
-Returns the transcribed text and optionally saves a \code{.txt} file.
+implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging
+Face, local Transformers, registered native engines, and local
+OpenAI-compatible servers). Returns the transcribed text and optionally
+saves a \code{.txt} file.
+}
+\details{
+For a \code{genflow_agent}, supply \code{audio_override} through \code{...} to
+transcribe a different input file without changing the saved agent.
 }
 \examples{
 # Minimal example (requires a provider API key)

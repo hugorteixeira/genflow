@@ -5,7 +5,6 @@
 #' @keywords internal
 #' @noRd
 .get_mime_type <- function(filepath) {
-  # ... (the .get_mime_type function implementation remains the same as in the previous version) ...
   if (!is.character(filepath) || length(filepath) != 1 || !nzchar(filepath)) {
     return("application/octet-stream") # Generic default
   }
@@ -57,36 +56,161 @@
   b64 <- jsonlite::base64_enc(raw)
   paste0("data:", mime_type, ";base64,", b64)
 }
+
+#' Build a browser-safe local file URI (internal)
+#'
+#' @keywords internal
+#' @noRd
+.genflow_view_file_uri <- function(filepath) {
+  normalized <- tryCatch(
+    normalizePath(filepath, winslash = "/", mustWork = TRUE),
+    error = function(e) filepath
+  )
+  parts <- strsplit(normalized, "/", fixed = TRUE)[[1]]
+  encoded <- vapply(
+    parts,
+    utils::URLencode,
+    character(1),
+    reserved = TRUE,
+    USE.NAMES = FALSE
+  )
+  if (length(encoded) > 0L && grepl("^[A-Za-z]%3A$", encoded[[1]])) {
+    encoded[[1]] <- sub("%3A$", ":", encoded[[1]])
+  }
+  encoded_path <- paste(encoded, collapse = "/")
+  if (.Platform$OS.type == "windows" && !startsWith(encoded_path, "/")) {
+    encoded_path <- paste0("/", encoded_path)
+  }
+  paste0("file://", encoded_path)
+}
+
+#' Prepare a media source for the Viewer (internal)
+#'
+#' Small files are embedded so they also work in restricted viewers. Larger
+#' files are copied beside the generated HTML when an assets directory is
+#' active, avoiding multi-megabyte data URIs in R memory and HTML.
+#'
+#' @keywords internal
+#' @noRd
+.genflow_view_media_source <- function(filepath,
+                                       mime_type,
+                                       prefix = "genflow_media_",
+                                       assets_dir = getOption(
+                                         "genflow_viewer_assets_dir",
+                                         NULL
+                                       ),
+                                       inline_limit = getOption(
+                                         "genflow.viewer_inline_max_bytes",
+                                         1024^2
+                                       )) {
+  inline_limit <- suppressWarnings(as.numeric(inline_limit)[1])
+  if (!is.finite(inline_limit) || inline_limit < 0) {
+    inline_limit <- 1024^2
+  }
+
+  size <- tryCatch(file.info(filepath)$size[[1]], error = function(e) NA_real_)
+  if (is.finite(size) && size <= inline_limit) {
+    encoded <- tryCatch(
+      .encode_data_uri(filepath, mime_type),
+      error = function(e) NULL
+    )
+    if (!is.null(encoded)) {
+      return(list(src = encoded, relative = FALSE, embedded = TRUE))
+    }
+  }
+
+  if (is.character(assets_dir) &&
+      length(assets_dir) == 1L &&
+      dir.exists(assets_dir)) {
+    ext <- tools::file_ext(filepath)
+    suffix <- if (nzchar(ext)) paste0(".", ext) else ""
+    destination <- tempfile(prefix, tmpdir = assets_dir, fileext = suffix)
+    copied <- tryCatch(
+      file.copy(filepath, destination, overwrite = FALSE),
+      error = function(e) FALSE
+    )
+    if (isTRUE(copied) && file.exists(destination)) {
+      return(list(
+        src = paste0("./", basename(destination)),
+        relative = TRUE,
+        embedded = FALSE
+      ))
+    }
+  }
+
+  list(
+    src = .genflow_view_file_uri(filepath),
+    relative = FALSE,
+    embedded = FALSE
+  )
+}
+
+#' Prune old generated Viewer directories (internal)
+#'
+#' @keywords internal
+#' @noRd
+.genflow_prune_viewer_assets <- function(root,
+                                         keep = getOption(
+                                           "genflow.viewer_history",
+                                           10L
+                                         )) {
+  keep <- suppressWarnings(as.integer(keep)[1])
+  if (is.na(keep) || keep < 1L || !dir.exists(root)) return(invisible(0L))
+
+  candidates <- list.files(
+    root,
+    pattern = "^view_[0-9]{8}_[0-9]{6}_[a-z0-9]{6}$",
+    full.names = TRUE
+  )
+  candidates <- candidates[dir.exists(candidates)]
+  if (length(candidates) <= keep) return(invisible(0L))
+
+  info <- file.info(candidates)
+  ordered <- candidates[order(info$mtime, decreasing = TRUE, na.last = TRUE)]
+  stale <- ordered[seq.int(keep + 1L, length(ordered))]
+  removed <- vapply(
+    stale,
+    function(path) {
+      unlink(path, recursive = TRUE, force = TRUE)
+      !file.exists(path)
+    },
+    logical(1)
+  )
+  invisible(sum(removed))
+}
 #' Render plain text or object as HTML (internal)
 #'
 #' @keywords internal
 #' @noRd
 .gen_view_text <- function(value) {
-  # ... (the .gen_view_text function implementation remains the same) ...
   content_html <- ""
   if (is.null(value)) {
     content_html <- "<pre><i>(NULL content)</i></pre>"
   } else if (is.character(value)) {
-    # If it's a file path not recognized as media, show the path
-    is_potential_path <- length(value) == 1 && grepl("\\.", value) && !grepl("^data:", value) # Evita tratar data URI como path
+    # If it is a non-media file path, show the path instead of its contents.
+    is_potential_path <- length(value) == 1 &&
+      grepl("\\.", value) &&
+      !grepl("^data:", value)
     if (is_potential_path && file.exists(value) && !grepl("\\.(png|jpe?g|gif|webp|svg|mp4|webm|ogg|mov|avi|mp3|wav|aac|oga|m4a|flac|opus)$", value, ignore.case = TRUE)) {
       content_html <- paste0("<p><i>File (text/Other):</i><br/><code>", htmltools::htmlEscape(value), "</code></p>")
     } else {
-      # Otherwise, treat as normal text
-      formatted_text <- htmltools::htmlEscape(paste(value, collapse = "\n")) # Garante q vetores de char sejam juntados
+      formatted_text <- htmltools::htmlEscape(paste(value, collapse = "\n"))
       content_html <- paste0("<pre>", ifelse(nzchar(formatted_text), formatted_text, "<i>(Empty content)</i>"), "</pre>")
     }
   } else {
-    # Para outros tipos (listas, data.frames, etc.)
-    content_html <- paste0("<p><i>Non-textual result:</i></p><pre>", htmltools::htmlEscape(paste(capture.output(print(value)), collapse="\n")), "</pre>")
+    content_html <- paste0(
+      "<p><i>Non-textual result:</i></p><pre>",
+      htmltools::htmlEscape(paste(capture.output(print(value)), collapse = "\n")),
+      "</pre>"
+    )
   }
-  return(content_html)
+  content_html
 }
 #' Render a video as HTML (internal)
 #'
 #' @keywords internal
 #' @noRd
-.gen_view_video <- function(filepath) {
+.gen_view_video <- function(filepath, standalone = TRUE) {
   #-----------------------------------------------------
   # 1) Unwrap list(vid) or objects with $saved_file
   #-----------------------------------------------------
@@ -132,15 +256,14 @@
   }
 
   #-----------------------------------------------------
-  # 4) Converter p/ Base64 (fallback file:///)
+  # 4) Prepare a bounded media source
   #-----------------------------------------------------
-  video_src <- tryCatch(
-    base64enc::dataURI(file = filepath, mime = mime_type),
-    error = function(e) {
-      warning(".gen_view_video: falha ao codificar Base64, usando file:///: ", e$message)
-      paste0("file:///", filepath)
-    }
+  video_source <- .genflow_view_media_source(
+    filepath,
+    mime_type,
+    prefix = "genflow_video_"
   )
+  video_src <- video_source$src
 
   #-----------------------------------------------------
   # 5) Montar a tag <video>
@@ -148,9 +271,12 @@
   style <- "max-width:100%;height:auto;display:block;margin-top:5px;"
   content_html <- paste0(
     "<video controls style=\"", style, "\"",
-    " title=\"", htmltools::htmlEscape(basename(filepath)), "\">",
-    "<source src=\"", htmltools::htmlEscape(video_src),
-    "\" type=\"", htmltools::htmlEscape(mime_type), "\">",
+    " title=\"", htmltools::htmlEscape(
+      basename(filepath),
+      attribute = TRUE
+    ), "\">",
+    "<source src=\"", htmltools::htmlEscape(video_src, attribute = TRUE),
+    "\" type=\"", htmltools::htmlEscape(mime_type, attribute = TRUE), "\">",
     "Your browser does not support this video or failed to load it.",
     "</video>"
   )
@@ -158,11 +284,7 @@
   #-----------------------------------------------------
   # 6) Detectar se vem de dentro de gen_view()
   #-----------------------------------------------------
-  chamadas <- sys.calls()
-  dentro_main <- any(sapply(chamadas, function(cc) {
-    grepl("gen_view\\(", deparse(cc))
-  }))
-  if (dentro_main) {
+  if (!isTRUE(standalone)) {
     # only return the snippet for grid assembly
     return(content_html)
   }
@@ -191,7 +313,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.gen_view_audio <- function(filepath) {
+.gen_view_audio <- function(filepath, standalone = TRUE) {
   debug <- isTRUE(getOption("genflow_view_debug", FALSE))
   dbg <- function(...) if (debug) message(...)
   #-----------------------------------------------------
@@ -250,53 +372,20 @@
   #-----------------------------------------------------
   assets_dir <- getOption("genflow_viewer_assets_dir", NULL)
   dbg("gen_view_audio: assets_dir = ", assets_dir %||% "<NULL>")
-  audio_src <- NULL
-  audio_src_is_relative <- FALSE
-
-  # Prefer inline data URI for small files to avoid Viewer file:// restrictions
-  max_inline_bytes <- 1024 * 1024  # 1MB
-  file_size <- tryCatch(file.info(caminho_norm)$size, error = function(e) NA)
-  dbg("gen_view_audio: file_size = ", file_size)
-  inline_ok <- !is.na(file_size) && file_size <= max_inline_bytes
-  if (inline_ok) {
-    audio_src <- tryCatch(
-      .encode_data_uri(caminho_norm, mime_type),
-      error = function(e) {
-        warning(".gen_view_audio: falha ao codificar Base64, usando file:///: ", e$message)
-        NULL
-      }
-    )
-    if (!is.null(audio_src)) {
-      dbg("gen_view_audio: using data URI")
-    }
-  }
-
-  # If not inlined, copy into viewer assets dir and use relative path
-  if (is.null(audio_src) && !is.null(assets_dir) && dir.exists(assets_dir)) {
-    ext <- tools::file_ext(caminho_norm)
-    if (!nzchar(ext)) ext <- "mp3"
-    dest <- tempfile("genflow_audio_", tmpdir = assets_dir, fileext = paste0(".", ext))
-    ok <- file.copy(caminho_norm, dest, overwrite = TRUE)
-    dbg("gen_view_audio: copy to assets = ", ok, " -> ", dest)
-    if (ok && file.exists(dest)) {
-      audio_src <- basename(dest)
-      audio_src_is_relative <- TRUE
-    }
-  }
-
-  # Final fallback: file://
-  if (is.null(audio_src)) {
-    audio_src <- paste0("file:///", utils::URLencode(caminho_norm, reserved = TRUE))
-  }
+  audio_source <- .genflow_view_media_source(
+    caminho_norm,
+    mime_type,
+    prefix = "genflow_audio_",
+    assets_dir = assets_dir
+  )
+  audio_src <- audio_source$src
+  audio_src_is_relative <- audio_source$relative
   dbg("gen_view_audio: audio_src = ", ifelse(nzchar(audio_src), substr(audio_src, 1, 120), "<empty>"))
 
   #-----------------------------------------------------
   # 5) Montar a tag <audio>
   #-----------------------------------------------------
   style <- "max-width:100%;height:auto;display:block;margin-top:5px;"
-  if (isTRUE(audio_src_is_relative)) {
-    audio_src <- paste0("./", audio_src)
-  }
   if (debug) {
     dbg("gen_view_audio: audio_src final = ", audio_src)
   }
@@ -305,18 +394,24 @@
     # RStudio Viewer sometimes suppresses <audio>; using <video> is more reliable.
     content_html <- paste0(
       "<video controls style=\"max-width:100%;height:48px;display:block;margin-top:5px;\"",
-      " title=\"", htmltools::htmlEscape(basename(caminho_norm)), "\">",
-      "<source src=\"", htmltools::htmlEscape(audio_src), "\"",
-      " type=\"", htmltools::htmlEscape(mime_type), "\">",
+      " title=\"", htmltools::htmlEscape(
+        basename(caminho_norm),
+        attribute = TRUE
+      ), "\">",
+      "<source src=\"", htmltools::htmlEscape(audio_src, attribute = TRUE), "\"",
+      " type=\"", htmltools::htmlEscape(mime_type, attribute = TRUE), "\">",
       "Your browser does not support the video element or failed to load it.",
       "</video>"
     )
   } else {
     content_html <- paste0(
       "<audio controls style=\"", style, "\"",
-      " title=\"", htmltools::htmlEscape(basename(caminho_norm)), "\">",
-      "<source src=\"", htmltools::htmlEscape(audio_src), "\"",
-      " type=\"", htmltools::htmlEscape(mime_type), "\">",
+      " title=\"", htmltools::htmlEscape(
+        basename(caminho_norm),
+        attribute = TRUE
+      ), "\">",
+      "<source src=\"", htmltools::htmlEscape(audio_src, attribute = TRUE), "\"",
+      " type=\"", htmltools::htmlEscape(mime_type, attribute = TRUE), "\">",
       "Your browser does not support the audio element or failed to load it.",
       "</audio>"
     )
@@ -325,11 +420,7 @@
   #-----------------------------------------------------
   # 6) Detectar se vem de dentro de gen_view()
   #-----------------------------------------------------
-  chamadas <- sys.calls()
-  dentro_main <- any(sapply(chamadas, function(cc) {
-    grepl("gen_view\\(", deparse(cc))
-  }))
-  if (dentro_main) {
+  if (!isTRUE(standalone)) {
     # only return the snippet for grid assembly
     return(content_html)
   }
@@ -531,7 +622,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.gen_view_image <- function(filepath) {
+.gen_view_image <- function(filepath, standalone = TRUE) {
   # -------------------------------------------------------------------
   # 1) Unwrap a list(img) or an object with $saved_file / $response_value
   # -------------------------------------------------------------------
@@ -616,19 +707,17 @@
   # -------------------------------------------------------------------
   # 5) Codifica em base64 e monta a tag <img>
   # -------------------------------------------------------------------
-  fallback_src <- paste0("file:///", filepath_norm)
-  img_src <- tryCatch(
-    base64enc::dataURI(file = filepath, mime = mime_type),
-    error = function(e) {
-      warning(".gen_view_image: failed to encode Base64, using file:///: ", e$message)
-      fallback_src
-    }
+  image_source <- .genflow_view_media_source(
+    filepath_norm,
+    mime_type,
+    prefix = "genflow_image_"
   )
+  img_src <- image_source$src
 
   alt_text <- paste("Image:", basename(filepath))
   content_html <- paste0(
-    "<img src=\"", img_src,
-    "\" alt=\"", htmltools::htmlEscape(alt_text),
+    "<img src=\"", htmltools::htmlEscape(img_src, attribute = TRUE),
+    "\" alt=\"", htmltools::htmlEscape(alt_text, attribute = TRUE),
     "\" class=\"zoomable-image\" ",
     "style=\"max-width:100%;height:auto;cursor:pointer\"/>"
   )
@@ -639,10 +728,7 @@
     error        = FALSE
   )
 
-  inside_gen_view <- any(vapply(sys.calls(), function(cc) {
-    grepl("gen_view\\(", deparse(cc, nlines = 1), fixed = TRUE)
-  }, logical(1)))
-  if (inside_gen_view) {
+  if (!isTRUE(standalone)) {
     return(invisible(result))
   }
 
@@ -1010,24 +1096,15 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     }
   }
 
-  viewer_available <- interactive() &&
+  rstudio_viewer_available <- interactive() &&
     requireNamespace("rstudioapi", quietly = TRUE) &&
     rstudioapi::isAvailable() &&
     requireNamespace("htmltools", quietly = TRUE)
-
-  # Prepare viewer assets directory for media (audio/video) so relative paths resolve.
-  assets_root <- .genflow_default_dir("viewer_assets")
-  viewer_assets_dir <- file.path(assets_root, paste0("view_", format(Sys.time(), "%Y%m%d_%H%M%S"), "_", paste(sample(c(letters, 0:9), 6, replace = TRUE), collapse = "")))
-  dir.create(viewer_assets_dir, recursive = TRUE, showWarnings = FALSE)
-  options(genflow_viewer_assets_dir = viewer_assets_dir)
-  options(genflow_view_in_rstudio = viewer_available)
-  on.exit({
-    options(genflow_viewer_assets_dir = NULL)
-    options(genflow_view_in_rstudio = NULL)
-  }, add = TRUE)
-  if (isTRUE(getOption("genflow_view_debug", FALSE))) {
-    message("gen_view: assets dir = ", viewer_assets_dir)
-  }
+  option_viewer <- getOption("viewer")
+  option_viewer_available <- interactive() &&
+    is.function(option_viewer) &&
+    requireNamespace("htmltools", quietly = TRUE)
+  viewer_available <- rstudio_viewer_available || option_viewer_available
 
   modal_html <- '
       <div id="imageModal" class="modal-overlay">
@@ -1332,6 +1409,39 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
 
     return(invisible(NULL))
   }
+
+  # Prepare a self-contained Viewer directory only when it will actually be
+  # displayed. Console-only calls must not accumulate empty cache directories.
+  assets_root <- .genflow_default_dir("viewer_assets")
+  viewer_assets_dir <- file.path(
+    assets_root,
+    paste0(
+      "view_",
+      format(Sys.time(), "%Y%m%d_%H%M%S"),
+      "_",
+      paste(sample(c(letters, 0:9), 6, replace = TRUE), collapse = "")
+    )
+  )
+  if (!dir.create(
+    viewer_assets_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  ) && !dir.exists(viewer_assets_dir)) {
+    stop("Could not create Viewer assets directory: ", viewer_assets_dir)
+  }
+  .genflow_prune_viewer_assets(assets_root)
+  previous_assets_dir <- getOption("genflow_viewer_assets_dir", NULL)
+  previous_viewer_mode <- getOption("genflow_view_in_rstudio", NULL)
+  options(genflow_viewer_assets_dir = viewer_assets_dir)
+  options(genflow_view_in_rstudio = rstudio_viewer_available)
+  on.exit({
+    options(genflow_viewer_assets_dir = previous_assets_dir)
+    options(genflow_view_in_rstudio = previous_viewer_mode)
+  }, add = TRUE)
+  if (isTRUE(getOption("genflow_view_debug", FALSE))) {
+    message("gen_view: assets dir = ", viewer_assets_dir)
+  }
+
   num_elementos <- length(results_list)
   indices_results <- if (num_elementos > 0) seq_len(num_elementos) else integer(0)
 
@@ -1458,18 +1568,18 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
         if (!is.null(value) && is.character(value) && length(value) == 1 && nzchar(value)) {
           path <- value
           if (grepl("\\.(png|jpe?g|gif|webp|svg)$", path, ignore.case = TRUE)) {
-            img_result <- .gen_view_image(path)
+            img_result <- .gen_view_image(path, standalone = FALSE)
             content_html <- img_result$html
             image_metadata_str <- img_result$metadata_str
             if (img_result$error) status_class <- "status-error"
             content_type_info <- "Image"
             content_kind <- "image"
           } else if (grepl("\\.(mp4|webm|ogg|mov|avi)$", path, ignore.case = TRUE)) {
-            content_html <- .gen_view_video(path)
+            content_html <- .gen_view_video(path, standalone = FALSE)
             content_type_info <- "Video"
             content_kind <- "video"
           } else if (grepl("\\.(mp3|wav|aac|oga|m4a|flac|opus)$", path, ignore.case = TRUE)) {
-            content_html <- .gen_view_audio(path)
+            content_html <- .gen_view_audio(path, standalone = FALSE)
             content_type_info <- "Audio"
             content_kind <- "audio"
           } else {
@@ -1517,15 +1627,15 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
       metadata_tooltip <- metadata_html
       if (is.character(res_item) && length(res_item) == 1 && nzchar(res_item)) {
         if (content_type_info == "Image") {
-          img_result <- .gen_view_image(res_item)
+          img_result <- .gen_view_image(res_item, standalone = FALSE)
           content_html <- img_result$html
           image_metadata_str <- img_result$metadata_str
           content_kind <- "image"
         } else if (content_type_info == "Video") {
-          content_html <- .gen_view_video(res_item)
+          content_html <- .gen_view_video(res_item, standalone = FALSE)
           content_kind <- "video"
         } else if (content_type_info == "Audio") {
-          content_html <- .gen_view_audio(res_item)
+          content_html <- .gen_view_audio(res_item, standalone = FALSE)
           content_kind <- "audio"
         } else {
           content_html <- .gen_view_text(res_item)
@@ -1601,12 +1711,22 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     )
 
     status_dot_html <- paste0("<span class='status-dot ", status_class, "' title='Status: ", status_class, "'></span>")
-    label_tooltip <- if (res_is_list && !is.null(res_item$label) && nchar(res_item$label) > 25) htmltools::htmlEscape(res_item$label) else metadata_tooltip
+    label_tooltip <- if (res_is_list &&
+      !is.null(res_item$label) &&
+      nchar(res_item$label) > 25) {
+      as.character(res_item$label)
+    } else {
+      metadata_tooltip
+    }
+    label_tooltip <- htmltools::htmlEscape(
+      label_tooltip %||% origin_label,
+      attribute = TRUE
+    )
 
     header_html <- paste0(
       "<div class='item-header'>",
       status_dot_html,
-      "<span class='item-label' title='", label_tooltip %||% label_html, "'>", label_html, "</span>",
+      "<span class='item-label' title='", label_tooltip, "'>", label_html, "</span>",
       info_icon_html,
       "</div>"
     )
@@ -1756,8 +1876,12 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
 
   base_path <- tryCatch(normalizePath(viewer_assets_dir, winslash = "/", mustWork = FALSE), error = function(e) viewer_assets_dir)
   base_path <- gsub("/+$", "", base_path)
-  base_href <- paste0("file://", base_path, "/")
-  base_tag <- paste0("<base href=\"", base_href, "\">")
+  base_href <- paste0(.genflow_view_file_uri(base_path), "/")
+  base_tag <- paste0(
+    "<base href=\"",
+    htmltools::htmlEscape(base_href, attribute = TRUE),
+    "\">"
+  )
   if (isTRUE(getOption("genflow_view_debug", FALSE))) {
     message("gen_view: base href = ", base_href)
   }
@@ -1773,18 +1897,18 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
     "</body>", "</html>"
   )
 
-  temp_html_file <- tempfile(fileext = ".html")
+  temp_html_file <- file.path(viewer_assets_dir, "index.html")
   con <- file(temp_html_file, open = "wt", encoding = "UTF-8")
   writeLines(html_content, con)
   close(con)
-  if (viewer_available) {
+  if (rstudio_viewer_available) {
     if (isTRUE(getOption("genflow_view_debug", FALSE))) {
       message("gen_view: viewer_available = TRUE; opening in RStudio Viewer")
       message("gen_view: html file = ", temp_html_file)
     }
     rstudioapi::viewer(temp_html_file)
-  } else if (is.function(getOption("viewer"))) {
-    getOption("viewer")(temp_html_file)
+  } else if (option_viewer_available) {
+    option_viewer(temp_html_file)
   } else {
     warning("RStudio Viewer is not accessible. The HTML file was saved at: ", temp_html_file)
   }

@@ -1,17 +1,27 @@
 Package: genflow
 Type: Package
-Title: Generate texts, images and more with multiple AI API providers 
+Title: Unified Cloud and Local Generative AI Workflows
 Version: 0.0.5
 Authors@R: person(
     given = "Hugo",
     family = "Rzepian Teixeira",
     email = "hugorteixeira@senhormercado.com.br",
     role = c("aut", "cre"))
-Description: R library for easy text and images generation from OpenAI, OpenRouter and HuggingFace APIs. 
+Description: Provides normalized workflows for text, image, speech-to-text,
+    and text-to-speech generation across cloud APIs and local inference
+    backends. Includes reusable agent configuration, parallel batches,
+    checkpointing, model catalogs, diagnostics, statistics, validated portable
+    bundles, and an interactive management application.
+Depends:
+    R (>= 4.1.0)
 Encoding: UTF-8
-LazyData: true
 RoxygenNote: 7.3.3
 License: GPL (>= 3)
+URL: https://github.com/hugorteixeira/genflow
+BugReports: https://github.com/hugorteixeira/genflow/issues
+SystemRequirements: Python (>= 3.10, optional, for local Hugging Face
+    inference), FFmpeg (optional, for audio conversion), CrispASR or
+    moss-transcribe.cpp CLI (optional, for native speech-to-text inference)
 Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
 Imports: 
     DT,
@@ -20,7 +30,6 @@ Imports:
     htmltools,
     httr,
     jsonlite,
-    magick,
     magrittr,
     purrr,
     readr,
@@ -29,5 +38,7 @@ Imports:
     tibble
 Suggests: 
     base64enc,
-    testthat (>= 3.0.0)
+    magick,
+    testthat (>= 3.0.0),
+    withr
 Config/testthat/edition: 3
