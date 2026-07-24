@@ -3,6 +3,5 @@
 .RData
 .Ruserdata
 genflow.Rproj
-AGENTS.md
 __pycache__/
 *.py[cod]
