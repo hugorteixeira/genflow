@@ -79,9 +79,11 @@
 #'   OpenAI-compatible server, typically `"json"` or `"verbose_json"`.
 #' @param ... Reserved for future provider-specific arguments.
 #'
-#' @return Invisibly returns a list with `response_value` (transcribed text),
-#'   `status_api`, `status_msg`, `service`, `model`, `duration`, `saved_file`,
-#'   and metadata such as `audio`.
+#' @return Invisibly returns a plain list with `response_value` (transcribed
+#'   text), `status_api`, `status_msg`, `service`, `model`, `duration`,
+#'   `saved_file`, and metadata such as `audio`. As with the other generators,
+#'   the call writes a concise status summary to the console while the returned
+#'   object keeps the regular list representation.
 #'
 #' @examples
 #' # Minimal example (requires a provider API key)
@@ -318,6 +320,7 @@ gen_stt.default <- function(
     metadata = provider_metadata
   )
 
+  .stt_report_result(result)
   return(invisible(result))
 }
 
@@ -342,6 +345,53 @@ gen_stt.genflow_agent <- function(audio, ...) {
 }
 
 # --- Internal helpers -------------------------------------------------------
+
+#' Print the concise console report used by the STT generator
+#'
+#' @param result A completed `gen_stt()` result list.
+#' @return `result`, invisibly.
+#' @keywords internal
+#' @noRd
+.stt_report_result <- function(result) {
+  scalar_text <- function(value, default) {
+    if (is.null(value) || length(value) == 0L || is.na(value[[1]])) {
+      return(default)
+    }
+    value <- as.character(value[[1]])
+    if (nzchar(value)) value else default
+  }
+
+  status <- toupper(scalar_text(result$status_api, "UNKNOWN"))
+  label <- scalar_text(result$label_cat %||% result$label, "audio")
+  service <- scalar_text(result$service, "unknown-service")
+  model <- scalar_text(result$model, "default")
+  duration <- suppressWarnings(as.numeric(result$duration %||% NA_real_)[1])
+  if (!is.finite(duration)) duration <- 0
+
+  response <- if (identical(status, "SUCCESS")) {
+    scalar_text(result$response_value, "")
+  } else {
+    scalar_text(result$status_msg, "Unknown STT error.")
+  }
+  response <- gsub("[\r\n]+", " ", response)
+  response <- substr(response, 1L, 150L)
+
+  cat(sprintf(
+    "[%s] %s | %s | %s | Time: %.2fs\n",
+    status,
+    label,
+    service,
+    model,
+    duration
+  ))
+
+  saved_file <- scalar_text(result$saved_file, "")
+  if (nzchar(saved_file)) {
+    cat("   -> File: ", basename(saved_file), "\n", sep = "")
+  }
+  cat("   -> Response: ", response, "...\n", sep = "")
+  invisible(result)
+}
 
 #' @keywords internal
 #' @noRd
@@ -1191,6 +1241,57 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
 #' @keywords internal
 #' @noRd
+.stt_crispasr_runtime_device <- function(output, requested) {
+  requested <- .stt_validate_native_device(requested)
+  if (identical(requested, "cpu")) {
+    return(list(
+      native_device_status = "confirmed",
+      native_device_active = "cpu"
+    ))
+  }
+
+  output_text <- paste(as.character(output %||% character()), collapse = "\n")
+  fallback_pattern <- paste0(
+    "--gpu-backend ['\"]?[^'\"]+['\"]? requested but no matching ",
+    "GPU device found, falling back to auto"
+  )
+  if (grepl(fallback_pattern, output_text, ignore.case = TRUE, perl = TRUE)) {
+    return(list(
+      native_device_status = "fallback",
+      native_device_active = "auto"
+    ))
+  }
+
+  preferred_pattern <- paste0(
+    "using preferred GPU backend:[[:space:]]*",
+    "([^[:space:]()]+)"
+  )
+  preferred_match <- regexec(
+    preferred_pattern,
+    output_text,
+    ignore.case = TRUE,
+    perl = TRUE
+  )
+  preferred <- regmatches(output_text, preferred_match)[[1]]
+  if (length(preferred) >= 2L) {
+    device_label <- preferred[[2]]
+    active <- tolower(sub("[0-9]+$", "", device_label))
+    if (identical(active, "mtl")) active <- "metal"
+    return(list(
+      native_device_status = "confirmed",
+      native_device_active = active,
+      native_device_label = device_label
+    ))
+  }
+
+  list(
+    native_device_status = "unknown",
+    native_device_active = if (identical(requested, "auto")) "auto" else ""
+  )
+}
+
+#' @keywords internal
+#' @noRd
 .stt_validate_max_new_tokens <- function(value) {
   if (is.null(value)) return(NULL)
   number <- suppressWarnings(as.numeric(value)[1])
@@ -1664,17 +1765,30 @@ gen_stt.genflow_agent <- function(audio, ...) {
   } else {
     list()
   }
+  runtime_device <- .stt_crispasr_runtime_device(process_output, device)
+  if (identical(runtime_device$native_device_status, "fallback") &&
+      !device %in% c("auto", "cpu")) {
+    warning(
+      "CrispASR could not activate the requested native device \"",
+      device,
+      "\" and fell back to automatic backend selection. The transcription ",
+      "succeeded, but the requested accelerator was not selected.",
+      call. = FALSE
+    )
+  }
   metadata <- utils::modifyList(
     normalized$metadata %||% list(),
-    list(
+    c(list(
       engine = "crispasr",
       backend = crisp_metadata$backend %||% backend,
+      requested_backend = if (nzchar(backend)) backend else NULL,
+      runtime_backend = crisp_metadata$backend %||% NULL,
       executable = executable,
       native_device = device,
       model = model_value,
       model_kind = model_kind,
       resolved_model = crisp_metadata$model %||% NULL
-    )
+    ), runtime_device)
   )
   if (length(ignored_arguments)) {
     metadata$ignored_arguments <- ignored_arguments
@@ -2045,6 +2159,95 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
 #' @keywords internal
 #' @noRd
+.stt_native_numeric_scalar <- function(value) {
+  number <- tryCatch(
+    suppressWarnings(as.numeric(value %||% NA_real_)[1]),
+    error = function(e) NA_real_
+  )
+  if (length(number) == 0L || !is.finite(number)) NA_real_ else number
+}
+
+#' @keywords internal
+#' @noRd
+.stt_native_valid_interval <- function(from, to) {
+  from <- .stt_native_numeric_scalar(from)
+  to <- .stt_native_numeric_scalar(to)
+  is.finite(from) && is.finite(to) && from >= 0 && to >= from
+}
+
+#' @keywords internal
+#' @noRd
+.stt_native_normalize_token <- function(token) {
+  if (!is.list(token) || is.null(names(token))) return(token)
+
+  token_text <- ""
+  if (is.character(token$text)) {
+    token_text <- .stt_native_scalar_text(token$text)
+    token$text <- token_text
+  }
+
+  has_valid_time <- FALSE
+  if (is.list(token$offsets)) {
+    if (.stt_native_valid_interval(
+      token$offsets$from,
+      token$offsets$to
+    )) {
+      token$offsets$from <- .stt_native_numeric_scalar(token$offsets$from)
+      token$offsets$to <- .stt_native_numeric_scalar(token$offsets$to)
+      has_valid_time <- TRUE
+    } else {
+      token$offsets <- NULL
+    }
+  }
+
+  if (any(c("t0", "t1") %in% names(token))) {
+    if (.stt_native_valid_interval(token$t0, token$t1)) {
+      token$t0 <- .stt_native_numeric_scalar(token$t0)
+      token$t1 <- .stt_native_numeric_scalar(token$t1)
+      has_valid_time <- TRUE
+    } else {
+      token$t0 <- NULL
+      token$t1 <- NULL
+    }
+  }
+
+  if (any(c("start", "end") %in% names(token))) {
+    if (.stt_native_valid_interval(token$start, token$end)) {
+      token$start <- .stt_native_numeric_scalar(token$start)
+      token$end <- .stt_native_numeric_scalar(token$end)
+      has_valid_time <- TRUE
+    } else {
+      token$start <- NULL
+      token$end <- NULL
+    }
+  }
+
+  if ("t_dtw" %in% names(token)) {
+    t_dtw <- .stt_native_numeric_scalar(token$t_dtw)
+    if (is.finite(t_dtw) && t_dtw >= 0) {
+      token$t_dtw <- t_dtw
+      has_valid_time <- TRUE
+    } else {
+      token$t_dtw <- NULL
+    }
+  }
+
+  if (!nzchar(token_text) && !has_valid_time) return(NULL)
+  token
+}
+
+#' @keywords internal
+#' @noRd
+.stt_native_normalize_tokens <- function(tokens) {
+  if (!is.list(tokens) || inherits(tokens, "data.frame")) return(tokens)
+  Filter(
+    Negate(is.null),
+    lapply(tokens, .stt_native_normalize_token)
+  )
+}
+
+#' @keywords internal
+#' @noRd
 .stt_native_normalize_segment <- function(value) {
   if (!.stt_native_is_segment(value)) return(NULL)
   text <- .stt_native_scalar_text(
@@ -2061,6 +2264,14 @@ gen_stt.genflow_agent <- function(audio, ...) {
     if (is.finite(offset_end)) offset_end / 1000 else NULL
   value$speaker <- value$speaker %||% value$speaker_id %||%
     value$speaker_label
+  if (!is.null(value$tokens)) {
+    tokens <- .stt_native_normalize_tokens(value$tokens)
+    if (is.list(tokens) && !length(tokens)) {
+      value$tokens <- NULL
+    } else {
+      value$tokens <- tokens
+    }
+  }
   value
 }
 

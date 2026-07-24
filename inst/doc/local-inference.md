@@ -514,6 +514,28 @@ result$response_value
 result$metadata$segments
 ```
 
+### STT result and console status
+
+`gen_stt()` follows the same output contract as the other generators: the call
+writes a concise status, file, and transcript preview to the console, then
+invisibly returns a regular list:
+
+```r
+result
+result$response_value
+result$metadata$segments
+```
+
+Evaluating `result` later uses R's ordinary list display, consistently with
+`gen_txt()`, `gen_img()`, and `gen_tts()`. For CrispASR, genflow removes token
+entries only when they contain no text and no valid non-negative timing
+information; useful word, token, segment, speaker, and timestamp data remain
+available. Native runtime metadata distinguishes the requested backend from
+CrispASR's internal runtime backend and records accelerator selection as
+`confirmed`, `fallback`, or `unknown`. A requested Vulkan backend that falls
+back produces a warning while preserving the successful transcription returned
+by CrispASR's automatic fallback selection.
+
 `stt_native_model = "auto"` delegates model selection/download to the engine
 and should be paired with a supported `stt_native_backend`. An `hf://`
 selector is passed to the engine only when that engine supports it. Neither

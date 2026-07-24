@@ -4,6 +4,92 @@ local_stt_audio <- function() {
   path
 }
 
+test_that("native token normalization removes only unusable time sentinels", {
+  segment <- genflow:::.stt_native_normalize_segment(list(
+    offsets = list(from = 0L, to = 1000L),
+    text = "segment text",
+    tokens = list(
+      list(
+        id = 1L,
+        text = "",
+        p = 1,
+        t0 = -1,
+        t1 = -1,
+        t_dtw = -1,
+        offsets = list(from = -10L, to = -10L)
+      ),
+      list(
+        id = 2L,
+        text = " word ",
+        p = 0.9,
+        t0 = -1,
+        t1 = -1,
+        offsets = list(from = -10L, to = -10L)
+      ),
+      list(
+        id = 3L,
+        text = "",
+        p = 0.8,
+        offsets = list(from = 100L, to = 200L)
+      ),
+      list(
+        id = 4L,
+        text = "",
+        p = 0.7,
+        start = 0,
+        end = 0
+      ),
+      list(
+        id = 5L,
+        text = "",
+        p = 0.6,
+        t0 = 100L,
+        t1 = 50L
+      )
+    )
+  ))
+
+  expect_identical(
+    vapply(segment$tokens, `[[`, integer(1), "id"),
+    c(2L, 3L, 4L)
+  )
+  expect_identical(segment$tokens[[1]]$text, "word")
+  expect_null(segment$tokens[[1]]$t0)
+  expect_null(segment$tokens[[1]]$t1)
+  expect_null(segment$tokens[[1]]$offsets)
+  expect_identical(
+    segment$tokens[[2]]$offsets,
+    list(from = 100, to = 200)
+  )
+  expect_identical(segment$tokens[[3]]$start, 0)
+  expect_identical(segment$tokens[[3]]$end, 0)
+})
+
+test_that("CrispASR runtime device reports confirmations and fallbacks", {
+  confirmed <- genflow:::.stt_crispasr_runtime_device(
+    "crispasr_init_gpu_backend: using preferred GPU backend: Vulkan0",
+    "vulkan"
+  )
+  expect_identical(confirmed$native_device_status, "confirmed")
+  expect_identical(confirmed$native_device_active, "vulkan")
+  expect_identical(confirmed$native_device_label, "Vulkan0")
+
+  fallback <- genflow:::.stt_crispasr_runtime_device(
+    paste(
+      "crispasr_init_gpu_backend: WARNING:",
+      "--gpu-backend 'vulkan' requested but no matching GPU device found,",
+      "falling back to auto"
+    ),
+    "vulkan"
+  )
+  expect_identical(fallback$native_device_status, "fallback")
+  expect_identical(fallback$native_device_active, "auto")
+
+  cpu <- genflow:::.stt_crispasr_runtime_device(character(), "cpu")
+  expect_identical(cpu$native_device_status, "confirmed")
+  expect_identical(cpu$native_device_active, "cpu")
+})
+
 test_that("gen_stt accepts a NULL model and dispatches canonical local aliases", {
   audio <- local_stt_audio()
   on.exit(unlink(audio), add = TRUE)
@@ -24,14 +110,19 @@ test_that("gen_stt accepts a NULL model and dispatches canonical local aliases",
     .package = "genflow"
   )
 
-  result <- gen_stt(
-    audio,
-    service = "transformers",
-    model = NULL,
-    revision = "0123456789abcdef",
-    save_txt = FALSE
+  console <- capture.output(
+    result <- gen_stt(
+      audio,
+      service = "transformers",
+      model = NULL,
+      revision = "0123456789abcdef",
+      save_txt = FALSE
+    )
   )
 
+  expect_null(attr(result, "class", exact = TRUE))
+  expect_true(is.list(result))
+  expect_identical(class(result), "list")
   expect_identical(result$status_api, "SUCCESS")
   expect_identical(result$response_value, "mock local transcript")
   expect_identical(result$service, "hf-local")
@@ -41,6 +132,21 @@ test_that("gen_stt accepts a NULL model and dispatches canonical local aliases",
   )
   expect_identical(result$metadata$accelerator, "rocm")
   expect_identical(seen_revision, "0123456789abcdef")
+  expect_match(
+    paste(console, collapse = "\n"),
+    "[SUCCESS]",
+    fixed = TRUE
+  )
+  expect_match(
+    paste(console, collapse = "\n"),
+    "hf-local | openai/whisper-large-v3-turbo | Time:",
+    fixed = TRUE
+  )
+  expect_match(
+    paste(console, collapse = "\n"),
+    "-> Response: mock local transcript...",
+    fixed = TRUE
+  )
 
   empty_list_model <- gen_stt(
     audio,
@@ -593,14 +699,29 @@ test_that("CrispASR normalizes JSON segments and routes Vulkan controls", {
             ),
             offsets = list(from = 240L, to = 10880L),
             text = "transcricao local",
-            words = list(list(text = "transcricao"))
+            words = list(list(text = "transcricao")),
+            tokens = list(list(
+              id = 1L,
+              text = "",
+              p = 1,
+              t0 = -1,
+              t1 = -1,
+              t_dtw = -1,
+              offsets = list(from = -10L, to = -10L)
+            ))
           )
         )
       ),
       paste0(output_base, ".json"),
       auto_unbox = TRUE
     )
-    list(status = 0L, output = "Vulkan device initialized")
+    list(
+      status = 0L,
+      output = paste(
+        "crispasr_init_gpu_backend:",
+        "using preferred GPU backend: Vulkan0"
+      )
+    )
   }
 
   result <- genflow:::.stt_native_crispasr(
@@ -619,9 +740,18 @@ test_that("CrispASR normalizes JSON segments and routes Vulkan controls", {
   expect_identical(result$text, "transcricao local")
   expect_identical(result$metadata$engine, "crispasr")
   expect_identical(result$metadata$backend, "parakeet")
+  expect_identical(result$metadata$requested_backend, "parakeet")
+  expect_identical(result$metadata$runtime_backend, "parakeet")
   expect_identical(result$metadata$native_device, "vulkan")
+  expect_identical(result$metadata$native_device_status, "confirmed")
+  expect_identical(result$metadata$native_device_active, "vulkan")
   expect_identical(result$metadata$segments[[1]]$start, 0.24)
   expect_identical(result$metadata$segments[[1]]$end, 10.88)
+  expect_null(result$metadata$segments[[1]]$tokens)
+  expect_identical(
+    result$metadata$segments[[1]]$words,
+    list(list(text = "transcricao"))
+  )
   expect_identical(
     result$metadata$segments[[1]]$timestamps$from,
     "00:00:00,240"
@@ -645,6 +775,34 @@ test_that("CrispASR normalizes JSON segments and routes Vulkan controls", {
   ) %in% seen$args))
   expect_length(seen$environment, 0L)
   expect_identical(seen$timeout_secs, 60)
+
+  fallback_runner <- function(...) {
+    process <- fake_runner(...)
+    process$output <- paste(
+      "crispasr_init_gpu_backend: WARNING:",
+      "--gpu-backend 'vulkan' requested but no matching GPU device found,",
+      "falling back to auto"
+    )
+    process
+  }
+  expect_warning(
+    fallback <- genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      model = model,
+      language = "pt",
+      prompt = NULL,
+      timeout_secs = 60,
+      executable = file.path(R.home("bin"), "R"),
+      native_backend = "parakeet",
+      native_device = "vulkan",
+      max_new_tokens = 2048L,
+      runner = fallback_runner
+    ),
+    "fell back to automatic backend selection",
+    fixed = TRUE
+  )
+  expect_identical(fallback$metadata$native_device_status, "fallback")
+  expect_identical(fallback$metadata$native_device_active, "auto")
 })
 
 test_that("CrispASR remote model syntax is explicit and auto-download is bounded", {

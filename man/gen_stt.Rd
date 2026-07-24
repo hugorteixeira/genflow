@@ -146,9 +146,11 @@ Defaults to \code{GENFLOW_HF_REVISION}, then the saved \code{hf_revision} settin
 Use \code{revision = ""} to explicitly disable a configured pin for one call.}
 }
 \value{
-Invisibly returns a list with \code{response_value} (transcribed text),
-\code{status_api}, \code{status_msg}, \code{service}, \code{model}, \code{duration}, \code{saved_file},
-and metadata such as \code{audio}.
+Invisibly returns a plain list with \code{response_value} (transcribed
+text), \code{status_api}, \code{status_msg}, \code{service}, \code{model}, \code{duration},
+\code{saved_file}, and metadata such as \code{audio}. As with the other generators,
+the call writes a concise status summary to the console while the returned
+object keeps the regular list representation.
 }
 \description{
 High-level speech-to-text (STT) wrapper that dispatches to provider-specific

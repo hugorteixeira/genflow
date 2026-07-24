@@ -73,6 +73,11 @@ file path or transcript metadata where applicable. Batch code treats
 `status_api` as the authoritative success signal and preserves the provider
 result instead of inferring success from console output.
 
+All generators return ordinary lists rather than modality-specific result
+classes. Console summaries are emitted during generation and do not change how
+the assigned result prints or how batch code and callers access fields through
+`$` and `[[`. STT keeps provider/runtime details nested under `metadata`.
+
 Provider adapters may internally return:
 
 - plain generated text;

@@ -222,7 +222,16 @@ native_transcript <- gen_stt(
   service = "local-native",
   timeout_api = 1800
 )
+
+native_transcript$response_value
+native_transcript$metadata
 ```
+
+Like the other generators, `gen_stt()` writes a concise `[SUCCESS]` or
+`[ERROR]` summary while the call runs and invisibly returns a regular list.
+Printing `native_transcript` therefore uses R's normal list representation;
+the transcript and complete structured provider/runtime data remain available
+through `response_value` and `metadata`.
 
 The native model selector may be a local model path, `auto`, or a supported
 `hf://OWNER/REPO:FILE` reference. The copy-and-paste form
