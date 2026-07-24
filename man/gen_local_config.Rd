@@ -9,9 +9,8 @@ gen_local_config(config = NULL, ..., path = NULL, save = TRUE)
 \arguments{
 \item{config}{Optional named list of settings to update.}
 
-\item{...}{Named settings to update. Supported names include \code{python},
-\code{hf_cache_dir}, \code{hf_stt_model}, \code{hf_revision}, \code{hf_stt_profile}, \code{device},
-\code{dtype}, \code{ollama_base_url}, \code{ollama_model}, \code{llamacpp_base_url},
+\item{...}{Named settings to update. Supported names include
+\code{ollama_base_url}, \code{ollama_model}, \code{llamacpp_base_url},
 \code{llamacpp_model}, \code{stt_server_base_url}, \code{stt_server_model},
 \code{stt_native_engine}, \code{stt_native_executable}, \code{stt_native_model},
 \code{stt_native_backend}, \code{stt_native_quant}, and \code{stt_native_device}.
@@ -32,6 +31,6 @@ Reads or updates genflow's non-secret local inference settings. Calling the
 function without \code{config} or named settings returns the saved configuration.
 Tokens are deliberately not stored here; use the credential manager or
 environment variables for secrets. CrispASR
-\verb{hf://OWNER/REPO/FILE} selectors are normalized to
-\verb{hf://OWNER/REPO:FILE} when valid.
+\verb{hf://OWNER/REPO/FILE} selectors and supported Hugging Face
+\verb{/blob/main/FILE} URLs are normalized to \verb{hf://OWNER/REPO:FILE} when valid.
 }

@@ -1,13 +1,6 @@
 # Local inference configuration and diagnostics -----------------------------
 
 .genflow_local_config_fields <- c(
-  "python",
-  "hf_cache_dir",
-  "hf_stt_model",
-  "hf_revision",
-  "hf_stt_profile",
-  "device",
-  "dtype",
   "ollama_base_url",
   "ollama_model",
   "llamacpp_base_url",
@@ -27,14 +20,7 @@
 
 .genflow_local_config_defaults <- function() {
   list(
-    version = 3L,
-    python = "",
-    hf_cache_dir = "",
-    hf_stt_model = "openai/whisper-large-v3-turbo",
-    hf_revision = "",
-    hf_stt_profile = "auto",
-    device = "auto",
-    dtype = "auto",
+    version = 4L,
     ollama_base_url = "http://127.0.0.1:11434",
     ollama_model = "",
     llamacpp_base_url = "http://127.0.0.1:8080",
@@ -150,41 +136,6 @@
     }
   }
 
-  validated$hf_stt_profile <- tolower(validated$hf_stt_profile)
-  if (!validated$hf_stt_profile %in% c("auto", "transformers", "moss")) {
-    stop(
-      "`hf_stt_profile` must be \"auto\", \"transformers\", or \"moss\".",
-      call. = FALSE
-    )
-  }
-
-  if (grepl("[[:space:][:cntrl:]]", validated$hf_revision, perl = TRUE)) {
-    stop(
-      "`hf_revision` cannot contain whitespace or control characters.",
-      call. = FALSE
-    )
-  }
-
-  validated$device <- tolower(validated$device)
-  if (!grepl("^(auto|cpu|mps|cuda(:[0-9]+)?|rocm|hip)$", validated$device)) {
-    stop(
-      "`device` must be auto, cpu, mps, cuda, cuda:N, rocm, or hip.",
-      call. = FALSE
-    )
-  }
-
-  dtype_aliases <- c(fp32 = "float32", fp16 = "float16", bf16 = "bfloat16")
-  validated$dtype <- tolower(validated$dtype)
-  if (validated$dtype %in% names(dtype_aliases)) {
-    validated$dtype <- unname(dtype_aliases[validated$dtype])
-  }
-  if (!validated$dtype %in% c("auto", "float32", "float16", "bfloat16")) {
-    stop(
-      "`dtype` must be auto, float32, float16, or bfloat16.",
-      call. = FALSE
-    )
-  }
-
   validated$stt_native_engine <- tolower(validated$stt_native_engine)
   native_engine_aliases <- c(
     "moss-cpp" = "moss-transcribe",
@@ -263,9 +214,6 @@
     validated[[field]] <- .genflow_validate_local_url(validated[[field]], field)
   }
 
-  if (nzchar(validated$hf_cache_dir)) {
-    validated$hf_cache_dir <- path.expand(validated$hf_cache_dir)
-  }
   for (field in c(
     "stt_native_executable",
     "stt_native_model",
@@ -277,7 +225,7 @@
       validated[[field]] <- path.expand(validated[[field]])
     }
   }
-  if (startsWith(tolower(validated$stt_native_model), "hf://")) {
+  if (.stt_is_crispasr_hf_reference(validated$stt_native_model)) {
     reference <- tryCatch(
       .stt_parse_crispasr_hf_reference(validated$stt_native_model),
       error = function(e) NULL
@@ -291,7 +239,7 @@
   validated$moss_cpp_executable <- ""
   validated$moss_cpp_model <- ""
   validated$moss_cpp_device <- "auto"
-  validated$version <- 3L
+  validated$version <- 4L
   validated
 }
 
@@ -366,13 +314,12 @@
 #' function without `config` or named settings returns the saved configuration.
 #' Tokens are deliberately not stored here; use the credential manager or
 #' environment variables for secrets. CrispASR
-#' `hf://OWNER/REPO/FILE` selectors are normalized to
-#' `hf://OWNER/REPO:FILE` when valid.
+#' `hf://OWNER/REPO/FILE` selectors and supported Hugging Face
+#' `/blob/main/FILE` URLs are normalized to `hf://OWNER/REPO:FILE` when valid.
 #'
 #' @param config Optional named list of settings to update.
-#' @param ... Named settings to update. Supported names include `python`,
-#'   `hf_cache_dir`, `hf_stt_model`, `hf_revision`, `hf_stt_profile`, `device`,
-#'   `dtype`, `ollama_base_url`, `ollama_model`, `llamacpp_base_url`,
+#' @param ... Named settings to update. Supported names include
+#'   `ollama_base_url`, `ollama_model`, `llamacpp_base_url`,
 #'   `llamacpp_model`, `stt_server_base_url`, `stt_server_model`,
 #'   `stt_native_engine`, `stt_native_executable`, `stt_native_model`,
 #'   `stt_native_backend`, `stt_native_quant`, and `stt_native_device`.
@@ -420,7 +367,23 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
       call. = FALSE
     )
   }
+  previous_native_engine <- .stt_normalize_native_engine(
+    current$stt_native_engine %||% "auto"
+  )
   current[names(updates)] <- updates
+  if ("stt_native_engine" %in% names(updates) &&
+      !any(c(
+        "stt_native_executable",
+        "moss_cpp_executable"
+      ) %in% names(updates))) {
+    next_native_engine <- .stt_normalize_native_engine(
+      current$stt_native_engine %||% "auto"
+    )
+    if (!identical(previous_native_engine, next_native_engine)) {
+      current$stt_native_executable <- ""
+      current$moss_cpp_executable <- ""
+    }
+  }
   legacy_to_native <- c(
     moss_cpp_executable = "stt_native_executable",
     moss_cpp_model = "stt_native_model",
@@ -473,13 +436,6 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     config %||% .genflow_read_local_config()
   )
   mapping <- list(
-    python = c("GENFLOW_PYTHON"),
-    hf_cache_dir = c("HF_HOME"),
-    hf_stt_model = c("GENFLOW_HF_STT_MODEL"),
-    hf_revision = c("GENFLOW_HF_REVISION"),
-    hf_stt_profile = c("GENFLOW_HF_STT_PROFILE"),
-    device = c("GENFLOW_LOCAL_DEVICE"),
-    dtype = c("GENFLOW_LOCAL_DTYPE"),
     ollama_base_url = c("OLLAMA_BASE_URL"),
     ollama_model = c("OLLAMA_MODEL"),
     llamacpp_base_url = c("LLAMACPP_BASE_URL", "LLAMA_CPP_BASE_URL"),
@@ -556,9 +512,8 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
       (.Platform$OS.type == "windows" ||
         isTRUE(file.access(resolved, mode = 1L) == 0L))
     if (usable) {
-      # Preserve the final symlink. Virtual environments commonly expose
-      # `bin/python` as a link to the base interpreter; dereferencing it makes
-      # Python lose that environment's pyvenv.cfg and site-packages.
+      # Preserve the final symlink so wrapper executables keep their own
+      # invocation semantics.
       directory <- normalizePath(
         dirname(resolved),
         winslash = "/",
@@ -662,338 +617,6 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
   ""
 }
 
-.genflow_moss_helpers_revision <- paste0(
-  "9990574e6ac62390a21bcce25a914d66",
-  "ac92c25e"
-)
-
-.genflow_moss_helpers_url <- function() {
-  paste0(
-    "https://github.com/OpenMOSS/MOSS-Transcribe-Diarize/archive/",
-    .genflow_moss_helpers_revision,
-    ".zip"
-  )
-}
-
-.genflow_moss_install_command <- function(python) {
-  requirement <- paste0(
-    "moss-transcribe-diarize @ ",
-    .genflow_moss_helpers_url()
-  )
-  quote_type <- if (identical(.Platform$OS.type, "windows")) "cmd" else "sh"
-  paste(
-    shQuote(as.character(python)[1], type = quote_type),
-    "-m pip install",
-    shQuote(requirement, type = quote_type)
-  )
-}
-
-.genflow_moss_transformers_supported <- function(version) {
-  version <- trimws(as.character(version %||% "")[1])
-  if (is.na(version) || !nzchar(version)) {
-    return(FALSE)
-  }
-  version <- sub("\\+.*$", "", version)
-  lower <- tryCatch(
-    utils::compareVersion(version, "5.6.0") >= 0L,
-    error = function(e) FALSE
-  )
-  upper <- tryCatch(
-    utils::compareVersion(version, "6.0.0") < 0L,
-    error = function(e) FALSE
-  )
-  isTRUE(lower) && isTRUE(upper)
-}
-
-.genflow_python_diagnostic_result <- function(python,
-                                              payload,
-                                              requested_device = "auto",
-                                              require_moss = FALSE) {
-  requested_device <- tolower(as.character(requested_device %||% "auto")[1])
-  if (is.na(requested_device) || !nzchar(requested_device)) {
-    requested_device <- "auto"
-  }
-
-  missing <- c(
-    if (!is.null(payload$transformers_error)) "transformers",
-    if (!is.null(payload$torch_error)) "torch"
-  )
-  if (length(missing)) {
-    detail <- sprintf(
-      "%s (Python %s); missing or broken: %s.",
-      python,
-      payload$python %||% "unknown",
-      paste(missing, collapse = ", ")
-    )
-    if (isTRUE(require_moss)) {
-      detail <- paste0(
-        detail,
-        " The MOSS profile also needs the official GitHub helper and ",
-        "Transformers >=5.6.0,<6.0.0. Install the helper into this exact ",
-        "interpreter with: ",
-        .genflow_moss_install_command(python),
-        ". The command can upgrade dependencies; do not run it in an ",
-        "environment owned by another application with incompatible pins."
-      )
-    }
-    return(.genflow_diagnostic_row(
-      "Python",
-      "error",
-      detail
-    ))
-  }
-
-  hip <- as.character(payload$hip %||% "")[1]
-  cuda <- as.character(payload$cuda %||% "")[1]
-  hip <- if (is.na(hip)) "" else hip
-  cuda <- if (is.na(cuda)) "" else cuda
-  accelerator <- isTRUE(payload$accelerator)
-  mps <- isTRUE(payload$mps)
-  device_count <- suppressWarnings(as.integer(payload$device_count %||% 0L)[1])
-  if (is.na(device_count)) {
-    device_count <- 0L
-  }
-  device_name <- as.character(payload$device %||% "")[1]
-  if (is.na(device_name)) {
-    device_name <- ""
-  }
-
-  build <- if (nzchar(hip)) {
-    paste0("ROCm/HIP ", hip)
-  } else if (nzchar(cuda)) {
-    paste0("CUDA ", cuda)
-  } else {
-    "CPU-only"
-  }
-  active <- if (accelerator) {
-    if (nzchar(device_name)) {
-      paste0("available (", device_name, ")")
-    } else {
-      "available"
-    }
-  } else if (mps) {
-    "MPS available"
-  } else {
-    "unavailable"
-  }
-  detail <- sprintf(
-    "%s; Python %s, torch %s, transformers %s; build %s; accelerator %s.",
-    python,
-    payload$python %||% "unknown",
-    payload$torch %||% "unknown",
-    payload$transformers %||% "unknown",
-    build,
-    active
-  )
-  moss_missing <- isTRUE(require_moss) &&
-    !is.null(payload$moss_transcribe_diarize_error)
-  transformers_version <- as.character(payload$transformers %||% "")[1]
-  moss_transformers_incompatible <- isTRUE(require_moss) &&
-    !.genflow_moss_transformers_supported(transformers_version)
-  if (isTRUE(require_moss) && !moss_missing) {
-    detail <- paste0(
-      detail,
-      " moss_transcribe_diarize ",
-      payload$moss_transcribe_diarize %||% "installed",
-      "."
-    )
-  }
-
-  status <- "ok"
-  issue <- ""
-  if (requested_device %in% c("rocm", "hip")) {
-    if (!nzchar(hip)) {
-      status <- "error"
-      issue <- paste0(
-        "ROCm/HIP was requested, but this is a ", build,
-        " PyTorch build. The packages are installed, but this wheel cannot use ",
-        "an AMD GPU. Choose CPU, use a ROCm PyTorch build, or use ",
-        "service = \"local-native\" with a Vulkan-enabled engine."
-      )
-    } else if (!accelerator) {
-      status <- "error"
-      issue <- paste0(
-        "A ROCm PyTorch build is installed, but torch.cuda.is_available() ",
-        "is FALSE; verify the ROCm runtime, GPU support, and permissions."
-      )
-    }
-  } else if (grepl("^cuda(?::[0-9]+)?$", requested_device)) {
-    requested_index <- if (grepl(":", requested_device, fixed = TRUE)) {
-      as.integer(sub("^cuda:", "", requested_device))
-    } else {
-      0L
-    }
-    if (!nzchar(cuda)) {
-      status <- "error"
-      issue <- paste0(
-        "CUDA was requested, but this is a ", build,
-        " PyTorch build. Install a CUDA PyTorch build."
-      )
-    } else if (!accelerator) {
-      status <- "error"
-      issue <- paste0(
-        "A CUDA PyTorch build is installed, but torch.cuda.is_available() ",
-        "is FALSE; verify the NVIDIA driver and device access."
-      )
-    } else if (requested_index >= device_count) {
-      status <- "error"
-      issue <- sprintf(
-        "CUDA device %d was requested, but PyTorch reports %d device(s).",
-        requested_index,
-        device_count
-      )
-    }
-  } else if (identical(requested_device, "mps")) {
-    if (!mps) {
-      status <- "error"
-      issue <- "MPS was requested, but PyTorch reports that MPS is unavailable."
-    }
-  } else if (identical(requested_device, "auto") &&
-             !accelerator &&
-             !mps) {
-    status <- "warning"
-    issue <- "No supported accelerator is currently available; inference will use CPU."
-  }
-
-  if (nzchar(issue)) {
-    detail <- paste(detail, issue)
-  }
-  if (moss_missing) {
-    status <- "error"
-    detail <- paste0(
-      detail,
-      " The selected MOSS profile needs helper code that is distributed from ",
-      "the official GitHub repository, separately from the Hugging Face model ",
-      "files. Its import failed: ",
-      as.character(payload$moss_transcribe_diarize_error)[1],
-      ". Install the pinned helper into this exact interpreter with: ",
-      .genflow_moss_install_command(python),
-      ". This is not a bare `pip install moss-transcribe-diarize` command."
-    )
-  }
-  if (moss_transformers_incompatible) {
-    status <- "error"
-    installed_version <- if (
-      is.na(transformers_version) || !nzchar(transformers_version)
-    ) {
-      "an unknown version"
-    } else {
-      transformers_version
-    }
-    detail <- paste0(
-      detail,
-      " The pinned MOSS helper requires Transformers >=5.6.0,<6.0.0, but ",
-      installed_version,
-      " is installed. Do not upgrade this shared environment in place if ",
-      "another application pins a conflicting Transformers version."
-    )
-  }
-  .genflow_diagnostic_row("Python", status, detail)
-}
-
-.genflow_parse_python_probe_output <- function(output) {
-  if (!length(output)) {
-    return(NULL)
-  }
-
-  for (line in rev(as.character(output))) {
-    line <- trimws(line)
-    if (!startsWith(line, "{")) {
-      next
-    }
-    payload <- tryCatch(
-      jsonlite::fromJSON(line, simplifyVector = FALSE),
-      error = function(e) NULL
-    )
-    if (is.list(payload) && isTRUE(payload$probe_complete)) {
-      return(payload)
-    }
-  }
-  NULL
-}
-
-.genflow_python_diagnostic <- function(python,
-                                       timeout,
-                                       requested_device = "auto",
-                                       require_moss = FALSE) {
-  if (!nzchar(python)) {
-    return(.genflow_diagnostic_row(
-      "Python",
-      "error",
-      "Python was not found. Configure a dedicated Python 3 environment."
-    ))
-  }
-
-  moss_probe <- if (isTRUE(require_moss)) {
-    paste0(
-      "\ntry:\n from importlib import metadata as _metadata; ",
-      "import moss_transcribe_diarize as mtd; ",
-      "from moss_transcribe_diarize import parse_transcript; ",
-      "from moss_transcribe_diarize.inference_utils import ",
-      "build_transcription_messages,generate_transcription; ",
-      "out['moss_transcribe_diarize']=",
-      "_metadata.version('moss-transcribe-diarize')",
-      "\nexcept Exception as e: ",
-      "out['moss_transcribe_diarize_error']=str(e)"
-    )
-  } else {
-    ""
-  }
-  probe <- paste0(
-    "import json,sys; out={'python':sys.version.split()[0],",
-    "'executable':sys.executable}; ",
-    "\ntry:\n import transformers; out['transformers']=transformers.__version__",
-    "\nexcept Exception as e: out['transformers_error']=str(e)",
-    "\ntry:\n import torch; out['torch']=torch.__version__; ",
-    "out['hip']=getattr(torch.version,'hip',None); ",
-    "out['cuda']=getattr(torch.version,'cuda',None); ",
-    "out['accelerator']=bool(torch.cuda.is_available()); ",
-    "out['device_count']=torch.cuda.device_count(); ",
-    "out['device']=torch.cuda.get_device_name(0) if torch.cuda.is_available() else None; ",
-    "out['mps']=bool(hasattr(torch.backends,'mps') and torch.backends.mps.is_available())",
-    "\nexcept Exception as e: out['torch_error']=str(e)",
-    moss_probe,
-    "\nout['probe_complete']=True",
-    "\nprint(json.dumps(out))"
-  )
-  output <- suppressWarnings(system2(
-    python,
-    c("-c", shQuote(probe)),
-    stdout = TRUE,
-    stderr = TRUE,
-    timeout = timeout
-  ))
-  status_code <- as.integer(attr(output, "status") %||% 0L)
-  text <- paste(output, collapse = "\n")
-  payload <- .genflow_parse_python_probe_output(output)
-  if (is.null(payload)) {
-    reason <- if (identical(status_code, 124L)) {
-      sprintf(" timed out after %s seconds", format(timeout, trim = TRUE))
-    } else if (!identical(status_code, 0L)) {
-      paste0(" exited with status ", status_code)
-    } else {
-      " returned an unreadable result"
-    }
-    return(.genflow_diagnostic_row(
-      "Python",
-      "error",
-      paste0(
-        python,
-        " could not complete the dependency probe because it",
-        reason,
-        if (nzchar(text)) paste0(": ", substr(text, 1L, 500L)) else "."
-      )
-    ))
-  }
-
-  .genflow_python_diagnostic_result(
-    python = python,
-    payload = payload,
-    requested_device = requested_device,
-    require_moss = require_moss
-  )
-}
-
 .genflow_endpoint_url <- function(base_url, path) {
   base_url <- sub("/+$", "", trimws(as.character(base_url)[1]))
   path <- sub("^/+", "", trimws(as.character(path)[1]))
@@ -1067,8 +690,8 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     .stt_resolve_native_engine(
       native_engine = config$stt_native_engine,
       executable = config$stt_native_executable,
-      model = config$stt_native_model,
-      native_backend = config$stt_native_backend,
+      model = "",
+      native_backend = "",
       config = config
     ),
     error = function(e) e
@@ -1095,14 +718,8 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
   }
   detected_engine <- engine
   if (identical(detected_engine, "auto") && nzchar(executable)) {
-    executable_name <- tolower(basename(executable))
-    detected_engine <- if (grepl("crispasr", executable_name, fixed = TRUE)) {
-      "crispasr"
-    } else if (grepl("moss-transcribe", executable_name, fixed = TRUE)) {
-      "moss-transcribe"
-    } else {
-      "auto"
-    }
+    detected_engine <- .stt_native_engine_from_executable(executable)
+    if (!nzchar(detected_engine)) detected_engine <- "auto"
   }
 
   cli_row <- if (!nzchar(executable)) {
@@ -1166,14 +783,16 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
         "Native STT CLI",
         if (identical(status, 124L)) {
           "error"
-        } else if (identical(status, 0L) || recognized) {
+        } else if (recognized) {
           "ok"
+        } else if (!identical(detected_engine, "auto")) {
+          "error"
         } else {
           "warning"
         },
         if (identical(status, 124L)) {
           paste0(executable, " timed out while running --help.")
-        } else if (identical(status, 0L) || recognized) {
+        } else if (recognized) {
           paste0(
             executable,
             if (!identical(detected_engine, "auto")) {
@@ -1185,178 +804,57 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
         } else {
           paste0(
             executable,
-            " did not expose a recognizable native STT CLI help response."
+            " did not expose a recognizable ",
+            if (!identical(detected_engine, "auto")) {
+              paste0(registry[[detected_engine]]$label, " help response.")
+            } else {
+              "native STT CLI help response."
+            }
           )
         }
       )
     }
   }
 
-  model <- .genflow_local_scalar(
-    config$stt_native_model,
-    "stt_native_model"
+  inventory <- tryCatch(
+    .genflow_crispasr_inventory(config),
+    error = function(e) e
   )
-  backend <- .genflow_local_scalar(
-    config$stt_native_backend,
-    "stt_native_backend"
-  )
-  quant <- .genflow_local_scalar(
-    config$stt_native_quant,
-    "stt_native_quant"
-  )
-  model_row <- if (!nzchar(model)) {
+  cache_row <- if (inherits(inventory, "error")) {
     .genflow_diagnostic_row(
-      "Native STT model",
-      "info",
-      "No model is configured for the optional native STT engine."
-    )
-  } else if (identical(tolower(model), "auto")) {
-    compatible <- identical(detected_engine, "crispasr") && nzchar(backend)
-    remote <- if (compatible && isTRUE(check_remote) && nzchar(executable)) {
-      tryCatch(
-        .genflow_crispasr_resolve_download(
-          selector = "auto",
-          backend = backend,
-          quant = quant,
-          executable = executable
-        ),
-        error = function(e) e
-      )
-    } else {
-      NULL
-    }
-    .genflow_diagnostic_row(
-      "Native STT model",
-      if (!compatible || inherits(remote, "error")) {
-        "error"
-      } else {
-        "info"
-      },
-      if (inherits(remote, "error")) {
-        paste0(
-          "CrispASR could not resolve the requested registry model: ",
-          conditionMessage(remote)
-        )
-      } else if (!is.null(remote)) {
-        paste0(
-          "Available registry model: ",
-          remote$filename,
-          " (",
-          .genflow_crispasr_format_size(remote$size_bytes),
-          "). Use Download current model to cache and select it."
-        )
-      } else if (compatible) {
-        paste0(
-          "CrispASR will resolve, download and cache the requested model for backend ",
-          backend,
-          if (nzchar(quant)) paste0(" with quantization ", quant) else "",
-          " on first use."
-        )
-      } else {
-        "`model = \"auto\"` requires engine crispasr and a native backend."
-      }
-    )
-  } else if (startsWith(tolower(model), "hf://")) {
-    reference <- tryCatch(
-      .stt_parse_crispasr_hf_reference(model),
-      error = function(e) e
-    )
-    compatible <- identical(detected_engine, "crispasr") &&
-      !inherits(reference, "error")
-    cached <- if (compatible) {
-      .genflow_crispasr_cached_model(
-        reference$file,
-        reference$repository
-      )
-    } else {
-      ""
-    }
-    remote <- if (compatible && isTRUE(check_remote)) {
-      tryCatch(
-        {
-          metadata <- .genflow_crispasr_hf_metadata(
-            reference$repository,
-            timeout = timeout
-          )
-          .genflow_crispasr_hf_artifact(
-            metadata = metadata,
-            repository = reference$repository,
-            filename = reference$file,
-            backend = backend
-          )
-        },
-        error = function(e) e
-      )
-    } else {
-      NULL
-    }
-    .genflow_diagnostic_row(
-      "Native STT model",
-      if (!compatible) {
-        "error"
-      } else if (inherits(remote, "error")) {
-        "error"
-      } else if (nzchar(cached)) {
-        "ok"
-      } else {
-        "info"
-      },
-      if (inherits(remote, "error")) {
-        paste0(
-          "The selected Hugging Face model is unavailable or incompatible: ",
-          conditionMessage(remote)
-        )
-      } else if (compatible) {
-        if (nzchar(cached)) {
-          paste0(
-            "Cached model: ",
-            cached,
-            ". CrispASR validates its architecture when loaded."
-          )
-        } else {
-          if (!is.null(remote)) {
-            paste0(
-              "Available model: ",
-              reference$file,
-              " (",
-              .genflow_crispasr_format_size(remote$size_bytes),
-              "). Use Download current model to cache and select it."
-            )
-          } else {
-            paste0(
-              reference$file,
-              " will be downloaded from ",
-              reference$repository,
-              " by CrispASR on first use; it must be a ",
-              "CrispASR-compatible model."
-            )
-          }
-        }
-      } else if (!identical(detected_engine, "crispasr")) {
-        "Remote native models require engine crispasr."
-      } else {
-        conditionMessage(reference)
-      }
+      "Native STT cache",
+      "warning",
+      conditionMessage(inventory)
     )
   } else {
-    model_path <- path.expand(model)
-    info <- suppressWarnings(file.info(model_path))
-    usable <- file.exists(model_path) &&
-      !isTRUE(info$isdir[[1]]) &&
-      is.finite(info$size[[1]]) &&
-      info$size[[1]] > 0
+    managed <- inventory[inventory$managed, , drop = FALSE]
+    total_bytes <- sum(managed$size_bytes, na.rm = TRUE)
+    detail <- if (!nrow(managed)) {
+      paste0(
+        "No downloaded models in ",
+        .genflow_crispasr_canonical_cache_dir(create = FALSE),
+        "."
+      )
+    } else {
+      paste0(
+        nrow(managed),
+        " downloaded model",
+        if (nrow(managed) == 1L) "" else "s",
+        " (",
+        .genflow_crispasr_format_size(total_bytes),
+        ") in ",
+        .genflow_crispasr_canonical_cache_dir(create = FALSE),
+        "."
+      )
+    }
     .genflow_diagnostic_row(
-      "Native STT model",
-      if (usable) "ok" else "error",
-      if (usable) {
-        normalizePath(model_path, winslash = "/", mustWork = TRUE)
-      } else {
-        paste0("Configured native model was not found or is empty: ", model_path)
-      }
+      "Native STT cache",
+      if (nrow(managed)) "ok" else "info",
+      detail
     )
   }
 
-  list(cli_row, model_row)
+  list(cli_row, cache_row)
 }
 
 .genflow_moss_cpp_diagnostics <- function(config, timeout) {
@@ -1429,22 +927,18 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
 
 #' Diagnose local inference readiness
 #'
-#' Performs read-only checks for Python, PyTorch/Transformers, FFmpeg, the
-#' optional native STT CLI and model, Vulkan, and configured local HTTP
-#' backends. A warning means the component is optional or currently
-#' unavailable; it does not prevent unrelated genflow providers from working.
-#' Native executable directories are rejected, and an explicitly selected
-#' CrispASR filename already present in its cache is reported as available.
-#' Diagnostics do not load the model; a real transcription remains the
-#' compatibility check.
+#' Performs read-only checks for FFmpeg, the optional native STT CLI and cache,
+#' Vulkan, and configured local HTTP backends. A warning means the component is
+#' optional or currently unavailable; it does not prevent unrelated genflow
+#' providers from working. Diagnostics do not load a model; a real
+#' transcription remains the compatibility check.
 #'
 #' @param config Optional configuration returned by [gen_local_config()].
-#' @param check_endpoints Logical; probe configured local HTTP services and
-#'   verify that a selected remote CrispASR artifact is actually published.
+#' @param check_endpoints Logical; probe configured local HTTP services.
 #' @param timeout Numeric timeout in seconds for each subprocess or HTTP probe.
 #' @param adapters Optional local adapter id or character vector to check.
-#'   Supported ids are `"ollama"`, `"llamacpp"`, `"hf-local"`,
-#'   `"local-native"`, and `"local-openai"`. The default checks all adapters.
+#'   Supported ids are `"ollama"`, `"llamacpp"`, `"local-native"`, and
+#'   `"local-openai"`. The default checks all adapters.
 #'
 #' @return A data frame with `component`, `status`, and `detail` columns.
 #' @export
@@ -1460,14 +954,10 @@ gen_local_diagnostics <- function(config = NULL,
   supported_adapters <- c(
     "ollama",
     "llamacpp",
-    "hf-local",
     "local-native",
     "local-openai"
   )
   adapter_aliases <- c(
-    "hf" = "hf-local",
-    "huggingface" = "hf-local",
-    "python" = "hf-local",
     "native" = "local-native",
     "native-stt" = "local-native",
     "stt-server" = "local-openai",
@@ -1498,49 +988,13 @@ gen_local_diagnostics <- function(config = NULL,
   wants <- function(adapter) adapter %in% adapters
   rows <- list()
 
-  if (wants("hf-local")) {
-    python <- .genflow_resolve_executable(
-      config$python,
-      c("python3", "python")
-    )
-    rows[[length(rows) + 1L]] <- .genflow_python_diagnostic(
-      python,
-      timeout,
-      requested_device = config$device,
-      require_moss = identical(config$hf_stt_profile, "moss") ||
-        (
-          identical(config$hf_stt_profile, "auto") &&
-          grepl(
-            "moss-transcribe-diarize",
-            tolower(config$hf_stt_model),
-            fixed = TRUE
-          )
-        )
-    )
-  }
-
-  if (wants("hf-local") || wants("local-native")) {
+  if (wants("local-native")) {
     ffmpeg <- .genflow_resolve_executable("", "ffmpeg")
     rows[[length(rows) + 1L]] <- .genflow_diagnostic_row(
       "FFmpeg",
       if (nzchar(ffmpeg)) "ok" else "warning",
       if (nzchar(ffmpeg)) ffmpeg else
         "FFmpeg was not found; some audio formats may not load locally."
-    )
-  }
-
-  if (wants("hf-local")) {
-    cache_dir <- config$hf_cache_dir
-    rows[[length(rows) + 1L]] <- .genflow_diagnostic_row(
-      "Hugging Face cache",
-      if (!nzchar(cache_dir) || dir.exists(cache_dir)) "ok" else "info",
-      if (!nzchar(cache_dir)) {
-        "Using the Hugging Face default cache."
-      } else if (dir.exists(cache_dir)) {
-        cache_dir
-      } else {
-        paste0(cache_dir, " will be created by Hugging Face on first use.")
-      }
     )
   }
 

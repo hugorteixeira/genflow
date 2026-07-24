@@ -4,10 +4,6 @@ test_that("local inference config round-trips and normalizes values", {
 
   config <- gen_local_config(
     config = list(
-      python = "python3",
-      device = "ROCM",
-      dtype = "BF16",
-      hf_revision = "reviewed-model-commit",
       ollama_base_url = "http://127.0.0.1:11434/",
       stt_native_engine = "CRISP-ASR",
       stt_native_executable = "/opt/crisp/bin/crispasr",
@@ -19,11 +15,8 @@ test_that("local inference config round-trips and normalizes values", {
   )
 
   expect_true(file.exists(path))
-  expect_equal(config$device, "rocm")
-  expect_equal(config$dtype, "bfloat16")
-  expect_equal(config$hf_revision, "reviewed-model-commit")
   expect_equal(config$ollama_base_url, "http://127.0.0.1:11434")
-  expect_equal(config$version, 3L)
+  expect_equal(config$version, 4L)
   expect_equal(config$stt_native_engine, "crispasr")
   expect_equal(config$stt_native_device, "vulkan")
   expect_equal(config$stt_native_model, "/models/parakeet-q4_k.gguf")
@@ -32,6 +25,53 @@ test_that("local inference config round-trips and normalizes values", {
   expect_equal(gen_local_config(path = path), config)
   persisted <- jsonlite::fromJSON(path, simplifyVector = FALSE)
   expect_false(any(startsWith(names(persisted), "moss_cpp_")))
+})
+
+test_that("version 3 config migration ignores removed Python and HF settings", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  obsolete <- c(
+    "python",
+    "device",
+    "dtype",
+    "hf_cache_dir",
+    "hf_stt_model",
+    "hf_stt_profile",
+    "hf_revision"
+  )
+  jsonlite::write_json(
+    list(
+      version = 3L,
+      python = "/old/venv/bin/python",
+      device = "rocm",
+      dtype = "bfloat16",
+      hf_cache_dir = "/old/huggingface-cache",
+      hf_stt_model = "openai/whisper-large-v3-turbo",
+      hf_stt_profile = "transformers",
+      hf_revision = "old-reviewed-commit",
+      ollama_base_url = "http://127.0.0.1:22434",
+      stt_native_engine = "crispasr",
+      stt_native_model = "auto",
+      stt_native_backend = "whisper",
+      stt_native_device = "vulkan"
+    ),
+    path,
+    auto_unbox = TRUE
+  )
+
+  migrated <- gen_local_config(path = path)
+
+  expect_identical(migrated$version, 4L)
+  expect_identical(migrated$ollama_base_url, "http://127.0.0.1:22434")
+  expect_identical(migrated$stt_native_engine, "crispasr")
+  expect_identical(migrated$stt_native_model, "auto")
+  expect_identical(migrated$stt_native_backend, "whisper")
+  expect_identical(migrated$stt_native_device, "vulkan")
+  expect_false(any(obsolete %in% names(migrated)))
+
+  gen_local_config(ollama_model = "llama-local", path = path)
+  persisted <- jsonlite::fromJSON(path, simplifyVector = FALSE)
+  expect_false(any(obsolete %in% names(persisted)))
 })
 
 test_that("local inference config canonicalizes remote native model references", {
@@ -71,7 +111,7 @@ test_that("legacy MOSS config migrates once and canonical values can be cleared"
   )
 
   migrated <- gen_local_config(path = path)
-  expect_identical(migrated$version, 3L)
+  expect_identical(migrated$version, 4L)
   expect_identical(migrated$stt_native_engine, "moss-transcribe")
   expect_identical(
     migrated$stt_native_executable,
@@ -105,21 +145,37 @@ test_that("local inference config rejects unknown or invalid settings", {
     "Unknown local inference setting"
   )
   expect_error(
-    gen_local_config(device = "gpu", path = path),
-    "`device`"
+    gen_local_config(python = "python3", path = path),
+    "Unknown local inference setting"
   )
   expect_error(
     gen_local_config(ollama_base_url = "localhost:11434", path = path),
     "http\\(s\\) URL"
   )
   expect_error(
-    gen_local_config(hf_revision = "not a valid revision", path = path),
-    "`hf_revision` cannot contain whitespace"
-  )
-  expect_error(
     gen_local_config(moss_cpp_device = "magic", path = path),
     "`moss_cpp_device`"
   )
+})
+
+test_that("changing the native engine clears an engine-specific executable", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+
+  configured <- gen_local_config(
+    stt_native_engine = "crispasr",
+    stt_native_executable = "/opt/crispasr",
+    path = path
+  )
+  expect_identical(configured$stt_native_executable, "/opt/crispasr")
+
+  changed <- gen_local_config(
+    stt_native_engine = "moss-transcribe",
+    path = path
+  )
+  expect_identical(changed$stt_native_engine, "moss-transcribe")
+  expect_identical(changed$stt_native_executable, "")
+  expect_identical(changed$moss_cpp_executable, "")
 })
 
 test_that("environment values take precedence in effective local config", {
@@ -235,28 +291,6 @@ test_that("legacy MOSS environment values apply only to the MOSS engine", {
   )
 })
 
-test_that("Hugging Face revision environment overrides the saved pin", {
-  path <- tempfile(fileext = ".json")
-  on.exit(unlink(path), add = TRUE)
-  old_path <- getOption("genflow.local_config_path")
-  old_revision <- Sys.getenv("GENFLOW_HF_REVISION", unset = NA_character_)
-  on.exit(options(genflow.local_config_path = old_path), add = TRUE)
-  on.exit({
-    if (is.na(old_revision)) {
-      Sys.unsetenv("GENFLOW_HF_REVISION")
-    } else {
-      Sys.setenv(GENFLOW_HF_REVISION = old_revision)
-    }
-  }, add = TRUE)
-
-  options(genflow.local_config_path = path)
-  gen_local_config(hf_revision = "saved-commit")
-  Sys.setenv(GENFLOW_HF_REVISION = "environment-commit")
-
-  config <- genflow:::.genflow_local_effective_config()
-  expect_identical(config$hf_revision, "environment-commit")
-})
-
 test_that("local diagnostics can run without endpoint probes", {
   config <- genflow:::.genflow_local_config_defaults()
   result <- gen_local_diagnostics(
@@ -268,36 +302,31 @@ test_that("local diagnostics can run without endpoint probes", {
   expect_s3_class(result, "data.frame")
   expect_named(result, c("component", "status", "detail"))
   expect_true(all(c(
-    "Python",
     "FFmpeg",
-    "Hugging Face cache",
     "Native STT CLI",
-    "Native STT model",
+    "Native STT cache",
     "Vulkan"
   ) %in% result$component))
+  expect_false(any(c("Python", "Hugging Face cache") %in% result$component))
   expect_true(all(result$status %in% c("ok", "warning", "error", "info")))
 })
 
-test_that("Python executable resolution preserves virtualenv symlinks", {
+test_that("executable resolution preserves symlinks", {
   target <- unname(Sys.which("Rscript"))
   skip_if(!nzchar(target), "Rscript is unavailable")
 
   directory <- tempfile("genflow-executable-")
   dir.create(directory)
   on.exit(unlink(directory, recursive = TRUE), add = TRUE)
-  link <- file.path(directory, "python")
+  link <- file.path(directory, "tool")
   skip_if_not(file.symlink(target, link), "symbolic links are unavailable")
 
   expected <- file.path(
     normalizePath(directory, winslash = "/", mustWork = TRUE),
-    "python"
+    "tool"
   )
   expect_identical(
     genflow:::.genflow_resolve_executable(link),
-    expected
-  )
-  expect_identical(
-    genflow:::.stt_resolve_python(python = link),
     expected
   )
   expect_false(identical(expected, normalizePath(link, mustWork = TRUE)))
@@ -323,185 +352,78 @@ test_that("executable resolution rejects directories and non-executable files", 
   }
 })
 
-test_that("Python diagnostics explain a CUDA build selected for ROCm", {
-  result <- genflow:::.genflow_python_diagnostic_result(
-    python = "/tmp/venv/bin/python",
-    payload = list(
-      python = "3.11.15",
-      transformers = "5.5.4",
-      torch = "2.11.0+cu130",
-      hip = NULL,
-      cuda = "13.0",
-      accelerator = FALSE,
-      device_count = 0L,
-      device = NULL,
-      mps = FALSE
-    ),
-    requested_device = "rocm"
-  )
-
-  expect_identical(result$status, "error")
-  expect_match(result$detail, "build CUDA 13.0", fixed = TRUE)
-  expect_match(result$detail, "ROCm/HIP was requested", fixed = TRUE)
-})
-
-test_that("Python diagnostics report the MOSS package only when its profile needs it", {
-  payload <- list(
-    python = "3.11.15",
-    transformers = "5.5.4",
-    torch = "2.11.0+cu130",
-    hip = NULL,
-    cuda = "13.0",
-    accelerator = FALSE,
-    device_count = 0L,
-    device = NULL,
-    mps = FALSE,
-    moss_transcribe_diarize_error = "No module named 'moss_transcribe_diarize'"
-  )
-
-  generic <- genflow:::.genflow_python_diagnostic_result(
-    python = "/tmp/python",
-    payload = payload,
-    requested_device = "cpu",
-    require_moss = FALSE
-  )
-  moss <- genflow:::.genflow_python_diagnostic_result(
-    python = "/tmp/python",
-    payload = payload,
-    requested_device = "cpu",
-    require_moss = TRUE
-  )
-
-  expect_identical(generic$status, "ok")
-  expect_identical(moss$status, "error")
-  expect_match(moss$detail, "moss_transcribe_diarize", fixed = TRUE)
-  expect_match(moss$detail, "/tmp/python", fixed = TRUE)
-  expect_match(moss$detail, "-m pip install", fixed = TRUE)
-  expect_match(
-    moss$detail,
-    "github.com/OpenMOSS/MOSS-Transcribe-Diarize/archive/",
-    fixed = TRUE
-  )
-  expect_match(moss$detail, "Transformers >=5.6.0,<6.0.0", fixed = TRUE)
-})
-
-test_that("MOSS diagnostics enforce its Transformers compatibility range", {
-  versions <- c("5.5.4", "5.6.0", "5.99.0", "6.0.0")
-  expected <- c("error", "ok", "ok", "error")
-
-  for (index in seq_along(versions)) {
-    result <- genflow:::.genflow_python_diagnostic_result(
-      python = "/tmp/python",
-      payload = list(
-        python = "3.11.15",
-        transformers = versions[[index]],
-        torch = "2.11.0",
-        hip = NULL,
-        cuda = NULL,
-        accelerator = FALSE,
-        device_count = 0L,
-        device = NULL,
-        mps = FALSE,
-        moss_transcribe_diarize = "0.1.0"
-      ),
-      requested_device = "cpu",
-      require_moss = TRUE
-    )
-
-    expect_identical(
-      result$status,
-      expected[[index]],
-      info = paste("Transformers", versions[[index]])
-    )
-  }
-})
-
-test_that("Python diagnostics accept a complete probe that exits at the timeout boundary", {
-  skip_on_os("windows")
-
-  python <- tempfile("genflow-python-probe-")
-  on.exit(unlink(python), add = TRUE)
-  writeLines(
-    c(
-      "#!/bin/sh",
-      "printf '%s\\n' 'a harmless probe warning' >&2",
-      paste0(
-        "printf '%s\\n' '",
-        "{\"python\":\"3.11.15\",\"executable\":\"/tmp/python\",",
-        "\"transformers\":\"5.5.4\",\"torch\":\"2.11.0+cu130\",",
-        "\"hip\":null,\"cuda\":\"13.0\",\"accelerator\":false,",
-        "\"device_count\":0,\"device\":null,\"mps\":false,",
-        "\"probe_complete\":true}'"
-      ),
-      "exit 124"
-    ),
-    python
-  )
-  Sys.chmod(python, mode = "0755")
-
-  result <- genflow:::.genflow_python_diagnostic(
-    python = python,
-    timeout = 3,
-    requested_device = "cpu"
-  )
-
-  expect_identical(result$status, "ok")
-  expect_match(result$detail, "torch 2.11.0+cu130", fixed = TRUE)
-  expect_false(grepl("could not complete", result$detail, fixed = TRUE))
-})
-
-test_that("Python diagnostics report a timeout without a completion marker", {
-  output <- structure(
-    c(
-      "probe warning",
-      "{\"python\":\"3.11.15\",\"torch\":\"2.11.0+cu130\"}"
-    ),
-    status = 124L
-  )
-
-  expect_null(genflow:::.genflow_parse_python_probe_output(output))
-})
-
-test_that("native STT diagnostics validate a configured engine and model", {
+test_that("native STT diagnostics report the configured CLI and model cache", {
   skip_on_os("windows")
 
   directory <- tempfile("genflow-moss-cpp-")
+  cache_dir <- tempfile("genflow-crispasr-cache-")
   dir.create(directory)
-  on.exit(unlink(directory, recursive = TRUE), add = TRUE)
+  dir.create(cache_dir)
+  on.exit(unlink(c(directory, cache_dir), recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
   executable <- file.path(directory, "moss-transcribe")
-  model <- file.path(directory, "model.gguf")
   writeLines(
     c("#!/bin/sh", "printf '%s\\n' 'moss-transcribe transcribe --help'"),
     executable
   )
   Sys.chmod(executable, mode = "0755")
-  writeBin(as.raw(c(0x47, 0x47, 0x55, 0x46)), model)
 
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "moss-transcribe"
   config$stt_native_executable <- executable
-  config$stt_native_model <- model
   rows <- genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
   rows <- do.call(rbind, rows)
 
   expect_identical(
     rows$component,
-    c("Native STT CLI", "Native STT model")
+    c("Native STT CLI", "Native STT cache")
   )
-  expect_identical(rows$status, c("ok", "ok"))
+  expect_identical(rows$status, c("ok", "info"))
   expect_match(rows$detail[[1]], "moss-transcribe", fixed = TRUE)
-  expect_match(rows$detail[[2]], "model.gguf", fixed = TRUE)
+  expect_match(rows$detail[[2]], "No downloaded models", fixed = TRUE)
+  expect_match(rows$detail[[2]], cache_dir, fixed = TRUE)
 })
 
-test_that("native STT diagnostics explain explicit CrispASR downloads", {
-  home_dir <- tempfile("genflow-crispasr-home-")
-  dir.create(home_dir)
-  on.exit(unlink(home_dir, recursive = TRUE), add = TRUE)
+test_that("native STT diagnostics reject a CLI from the wrong engine", {
+  skip_on_os("windows")
+
+  directory <- tempfile("genflow-native-cli-mismatch-")
+  cache_dir <- tempfile("genflow-crispasr-cache-")
+  dir.create(directory)
+  dir.create(cache_dir)
+  on.exit(unlink(c(directory, cache_dir), recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+  executable <- file.path(directory, "custom-stt")
+  writeLines(
+    c("#!/bin/sh", "printf '%s\\n' 'crispasr ASR backends --help'"),
+    executable
+  )
+  Sys.chmod(executable, mode = "0755")
+
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "moss-transcribe"
+  config$stt_native_executable <- executable
+  rows <- do.call(
+    rbind,
+    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
+  )
+
+  expect_identical(rows$status[[1]], "error")
+  expect_match(rows$detail[[1]], "did not expose", fixed = TRUE)
+  expect_match(rows$detail[[1]], "moss-transcribe.cpp", fixed = TRUE)
+})
+
+test_that("native STT diagnostics summarize managed CrispASR models", {
   cache_dir <- tempfile("genflow-crispasr-cache-")
   dir.create(cache_dir)
   on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
   withr::local_envvar(c(
-    HOME = home_dir,
     CRISPASR_CACHE_DIR = cache_dir,
     CRISPASR_MODELS_DIR = NA
   ))
@@ -509,169 +431,17 @@ test_that("native STT diagnostics explain explicit CrispASR downloads", {
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "crispasr"
   config$stt_native_executable <- file.path(R.home("bin"), "R")
-  config$stt_native_model <- "auto"
-  config$stt_native_backend <- "parakeet"
+  filename <- "granite-speech-4.1-2b-q8_0.gguf"
+  writeBin(as.raw(1:8), file.path(cache_dir, filename))
   rows <- do.call(
     rbind,
     genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
   )
 
-  expect_identical(rows$component, c("Native STT CLI", "Native STT model"))
-  expect_identical(rows$status[[2]], "info")
-  expect_match(rows$detail[[2]], "download and cache", fixed = TRUE)
-
-  config$stt_native_backend <- ""
-  missing_backend <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(missing_backend$status[[2]], "error")
-  expect_match(missing_backend$detail[[2]], "requires engine crispasr")
-
-  config$stt_native_backend <- "granite-4.1"
-  for (model in c(
-    paste0(
-      "hf://cstr/granite-speech-4.1-2b-GGUF:",
-      "granite-speech-4.1-2b-q4_k.gguf"
-    ),
-    paste0(
-      "hf://cstr/granite-speech-4.1-2b-GGUF/",
-      "granite-speech-4.1-2b-q4_k.gguf"
-    )
-  )) {
-    config$stt_native_model <- model
-    remote <- do.call(
-      rbind,
-      genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-    )
-    expect_identical(remote$status[[2]], "info")
-    expect_match(
-      remote$detail[[2]],
-      "granite-speech-4.1-2b-q4_k.gguf",
-      fixed = TRUE
-    )
-    expect_match(remote$detail[[2]], "will be downloaded", fixed = TRUE)
-  }
-
-  cached_model <- file.path(
-    cache_dir,
-    "granite-speech-4.1-2b-q4_k.gguf"
-  )
-  writeBin(as.raw(c(0x47, 0x47, 0x55, 0x46)), cached_model)
-  cached <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(cached$status[[2]], "ok")
-  expect_match(cached$detail[[2]], "Cached model:", fixed = TRUE)
-  expect_match(cached$detail[[2]], cache_dir, fixed = TRUE)
-
-  sidecar <- paste0(cached_model, ".src")
-  writeLines(
-    paste0(
-      "https://huggingface.co/another/repository/resolve/main/",
-      basename(cached_model)
-    ),
-    sidecar
-  )
-  wrong_source <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(wrong_source$status[[2]], "info")
-  expect_match(wrong_source$detail[[2]], "will be downloaded", fixed = TRUE)
-
-  writeLines(
-    paste0(
-      "https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF/",
-      "resolve/main/",
-      basename(cached_model)
-    ),
-    sidecar
-  )
-  matching_source <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(matching_source$status[[2]], "ok")
-
-  writeLines(
-    paste0(
-      "https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF/",
-      "resolve/",
-      strrep("a", 40),
-      "/",
-      basename(cached_model)
-    ),
-    sidecar
-  )
-  pinned_source <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(pinned_source$status[[2]], "ok")
-
-  models_dir <- tempfile("genflow-crispasr-models-")
-  dir.create(models_dir)
-  on.exit(unlink(models_dir, recursive = TRUE), add = TRUE)
-  fallback_model <- file.path(models_dir, basename(cached_model))
-  expect_true(file.copy(cached_model, fallback_model))
-  expect_true(file.copy(sidecar, paste0(fallback_model, ".src")))
-  unlink(c(cached_model, sidecar))
-  withr::local_envvar(CRISPASR_MODELS_DIR = models_dir)
-
-  fallback_cached <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(fallback_cached$status[[2]], "ok")
-  expect_match(fallback_cached$detail[[2]], models_dir, fixed = TRUE)
-
-  config$stt_native_model <- "hf://owner/repository"
-  missing_file <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
-  )
-  expect_identical(missing_file$status[[2]], "error")
-  expect_match(missing_file$detail[[2]], "one model filename", fixed = TRUE)
-})
-
-test_that("native STT diagnostics reject unpublished remote quantizations", {
-  config <- genflow:::.genflow_local_config_defaults()
-  config$stt_native_engine <- "crispasr"
-  config$stt_native_executable <- file.path(R.home("bin"), "R")
-  config$stt_native_backend <- "granite-4.1"
-  config$stt_native_model <- paste0(
-    "hf://cstr/granite-speech-4.1-2b-GGUF:",
-    "granite-speech-4.1-2b-q8_0.gguf"
-  )
-
-  testthat::local_mocked_bindings(
-    .genflow_crispasr_hf_metadata = function(repository, timeout = 30) {
-      list(
-        sha = strrep("a", 40),
-        gguf = list(architecture = "granite_speech"),
-        siblings = list(list(
-          rfilename = "granite-speech-4.1-2b-q4_k.gguf",
-          size = 8,
-          lfs = list(sha256 = strrep("b", 64), size = 8)
-        ))
-      )
-    },
-    .package = "genflow"
-  )
-
-  rows <- do.call(
-    rbind,
-    genflow:::.genflow_native_stt_diagnostics(
-      config,
-      timeout = 2,
-      check_remote = TRUE
-    )
-  )
-  expect_identical(rows$status[[2]], "error")
-  expect_match(rows$detail[[2]], "does not exist", fixed = TRUE)
-  expect_match(rows$detail[[2]], "q8_0", fixed = TRUE)
+  expect_identical(rows$component, c("Native STT CLI", "Native STT cache"))
+  expect_identical(rows$status[[2]], "ok")
+  expect_match(rows$detail[[2]], "1 downloaded model", fixed = TRUE)
+  expect_match(rows$detail[[2]], cache_dir, fixed = TRUE)
 })
 
 test_that("native STT diagnostics reject a directory used as the executable", {
@@ -721,9 +491,6 @@ test_that("local diagnostics can target one adapter without unrelated warnings",
   row <- genflow:::.genflow_diagnostic_row
 
   testthat::local_mocked_bindings(
-    .genflow_python_diagnostic = function(...) {
-      row("Python", "ok", "mock Python")
-    },
     .genflow_native_stt_diagnostics = function(...) {
       list(row("Native STT CLI", "ok", "mock native"))
     },
@@ -733,23 +500,21 @@ test_that("local diagnostics can target one adapter without unrelated warnings",
     .package = "genflow"
   )
 
-  hf <- gen_local_diagnostics(
-    config = config,
-    check_endpoints = FALSE,
-    adapters = "hf-local"
+  expect_error(
+    gen_local_diagnostics(
+      config = config,
+      check_endpoints = FALSE,
+      adapters = "hf-local"
+    ),
+    "Unsupported local diagnostic adapter: hf-local",
+    fixed = TRUE
   )
-  expect_true("Python" %in% hf$component)
-  expect_true("Hugging Face cache" %in% hf$component)
-  expect_false("Native STT CLI" %in% hf$component)
-  expect_false("Vulkan" %in% hf$component)
 
   native <- gen_local_diagnostics(
     config = config,
     check_endpoints = FALSE,
     adapters = "local-native"
   )
-  expect_false("Python" %in% native$component)
-  expect_false("Hugging Face cache" %in% native$component)
   expect_true("Native STT CLI" %in% native$component)
   expect_true("Vulkan" %in% native$component)
 
@@ -836,6 +601,7 @@ test_that("CrispASR inventory separates managed models from cache noise", {
   writeChar(source_url, paste0(managed, ".src"), eos = NULL)
   writeBin(as.raw(1:4), file.path(cache_dir, paste0(filename, ".part.42")))
   writeBin(raw(), file.path(cache_dir, "empty-q8_0.gguf"))
+  writeBin(as.raw(1:2), file.path(cache_dir, "bad model-q8_0.gguf"))
   writeLines("not a model", file.path(cache_dir, "notes.txt"))
 
   external <- file.path(external_dir, "parakeet-q8_0.gguf")
@@ -866,6 +632,7 @@ test_that("CrispASR inventory separates managed models from cache noise", {
   expect_true(filename %in% inventory$filename)
   expect_false(any(grepl("\\.src$|\\.part\\.", inventory$filename)))
   expect_false("empty-q8_0.gguf" %in% inventory$filename)
+  expect_false("bad model-q8_0.gguf" %in% inventory$filename)
 
   managed_row <- inventory[inventory$filename == filename, , drop = FALSE]
   expect_identical(managed_row$quant, "q4_k")
@@ -1116,6 +883,17 @@ test_that("CrispASR resolution validates API siblings and HEAD before download",
   expect_length(head_calls, 1L)
   expect_identical(head_calls[[1]]$expected_size, 8)
 
+  web_artifact <- genflow:::.genflow_crispasr_resolve_download(
+    selector = paste0(
+      "https://huggingface.co/cstr/",
+      "granite-speech-4.1-2b-GGUF/blob/main/",
+      preview_file
+    ),
+    backend = "granite-4.1"
+  )
+  expect_identical(web_artifact$filename, preview_file)
+  expect_length(head_calls, 2L)
+
   preview_file <- "granite-speech-4.1-2b-q8_0.gguf"
   expect_error(
     genflow:::.genflow_crispasr_resolve_download(
@@ -1124,7 +902,7 @@ test_that("CrispASR resolution validates API siblings and HEAD before download",
     ),
     "does not exist"
   )
-  expect_length(head_calls, 1L)
+  expect_length(head_calls, 2L)
 })
 
 test_that("CrispASR download installs atomically and reports progress", {
@@ -1504,13 +1282,33 @@ test_that("CrispASR removal is exact and confined to its managed cache", {
   writeBin(as.raw(1:4), external)
 
   expect_error(
-    genflow:::.genflow_crispasr_remove_model(model, active_model = model),
+    genflow:::.genflow_crispasr_remove_model(
+      model,
+      active_model = c("/another/model.gguf", model)
+    ),
+    "selected"
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(
+      model,
+      active_model = filename
+    ),
     "selected"
   )
   expect_error(
     genflow:::.genflow_crispasr_remove_model(
       model,
       active_model = paste0("hf://test/model:", filename)
+    ),
+    "selected"
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(
+      model,
+      active_model = paste0(
+        "https://huggingface.co/test/model/blob/main/",
+        filename
+      )
     ),
     "selected"
   )

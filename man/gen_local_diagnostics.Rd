@@ -14,25 +14,21 @@ gen_local_diagnostics(
 \arguments{
 \item{config}{Optional configuration returned by \code{\link[=gen_local_config]{gen_local_config()}}.}
 
-\item{check_endpoints}{Logical; probe configured local HTTP services and
-verify that a selected remote CrispASR artifact is actually published.}
+\item{check_endpoints}{Logical; probe configured local HTTP services.}
 
 \item{timeout}{Numeric timeout in seconds for each subprocess or HTTP probe.}
 
 \item{adapters}{Optional local adapter id or character vector to check.
-Supported ids are \code{"ollama"}, \code{"llamacpp"}, \code{"hf-local"},
-\code{"local-native"}, and \code{"local-openai"}. The default checks all adapters.}
+Supported ids are \code{"ollama"}, \code{"llamacpp"}, \code{"local-native"}, and
+\code{"local-openai"}. The default checks all adapters.}
 }
 \value{
 A data frame with \code{component}, \code{status}, and \code{detail} columns.
 }
 \description{
-Performs read-only checks for Python, PyTorch/Transformers, FFmpeg, the
-optional native STT CLI and model, Vulkan, and configured local HTTP
-backends. A warning means the component is optional or currently
-unavailable; it does not prevent unrelated genflow providers from working.
-Native executable directories are rejected, and an explicitly selected
-CrispASR filename already present in its cache is reported as available.
-Diagnostics do not load the model; a real transcription remains the
-compatibility check.
+Performs read-only checks for FFmpeg, the optional native STT CLI and cache,
+Vulkan, and configured local HTTP backends. A warning means the component is
+optional or currently unavailable; it does not prevent unrelated genflow
+providers from working. Diagnostics do not load a model; a real
+transcription remains the compatibility check.
 }

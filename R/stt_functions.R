@@ -2,22 +2,23 @@
 #'
 #' High-level speech-to-text (STT) wrapper that dispatches to provider-specific
 #' implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging
-#' Face, local Transformers, registered native engines, and local
-#' OpenAI-compatible servers). Returns the transcribed text and optionally
-#' saves a `.txt` file.
+#' Face, registered native engines, and local OpenAI-compatible servers).
+#' Returns the transcribed text and optionally saves a `.txt` file.
 #'
 #' @param audio Character path or URL to an audio file (e.g., .mp3, .ogg, .wav).
 #' @param service Provider identifier (e.g., "openai", "groq", "assemblyai",
-#'   "cloudflare", "voicegain", "hf", "replicate", "hf-local",
-#'   `"local-native"`, or `"local-openai"`).
+#'   "cloudflare", "voicegain", "hf", "replicate", `"local-native"`, or
+#'   `"local-openai"`).
 #' @param model Provider model identifier. If NULL, a sensible default is used
 #'   per provider. For `service = "local-native"`, this is normally a local
 #'   model file. The CrispASR engine also accepts `"auto"` or an explicit
 #'   `hf://OWNER/REPO:FILE` reference. For copy-and-paste convenience,
-#'   `hf://OWNER/REPO/FILE` is accepted and normalized to the same form. With
-#'   local-native CrispASR, `"auto"` first honors an explicit model saved in
-#'   the local inference configuration; the registry is used only when that
-#'   setting is empty or also `"auto"`.
+#'   `hf://OWNER/REPO/FILE` and
+#'   `https://huggingface.co/OWNER/REPO/blob/main/FILE` are accepted and
+#'   normalized to the same form. A downloaded model selected in the Models
+#'   catalog is passed as its cache filename and resolved only inside the
+#'   managed CrispASR cache. An explicit `"auto"` remains a CrispASR registry
+#'   request and is not replaced by a legacy saved model.
 #' @param language Optional language code (e.g., "en", "pt"). If NULL, provider
 #'   auto-detection is used when supported.
 #' @param prompt Optional prompt to guide transcription (provider-specific).
@@ -30,18 +31,6 @@
 #' @param timeout_api Numeric; request timeout in seconds.
 #' @param poll_interval Numeric; polling interval (seconds) for async providers.
 #' @param max_poll_seconds Numeric; max polling time for async providers.
-#' @param local_profile Local inference profile. `"auto"` selects the dedicated
-#'   MOSS-Transcribe-Diarize integration for its official model id and the
-#'   generic Transformers ASR pipeline otherwise. Explicit alternatives are
-#'   `"transformers"` and `"moss"`.
-#' @param device Device for local Python inference: `"auto"`, `"cpu"`,
-#'   `"cuda"`, `"cuda:N"`, `"rocm"`, `"hip"`, or `"mps"`. PyTorch uses the
-#'   `"cuda"` device name for both CUDA and ROCm; `"rocm"` and `"hip"` are
-#'   accepted aliases.
-#' @param dtype Numeric precision for local inference: `"auto"`, `"float32"`,
-#'   `"float16"`, or `"bfloat16"`.
-#' @param python Optional Python executable for `service = "hf-local"`.
-#'   Defaults to `GENFLOW_PYTHON`, then `python3`/`python` on `PATH`.
 #' @param executable Optional executable for `service = "local-native"`.
 #'   Resolution uses `GENFLOW_STT_NATIVE_EXECUTABLE`, the saved local inference
 #'   configuration, and finally the selected engine's executable on `PATH`.
@@ -64,21 +53,8 @@
 #'   `"auto"`, `"cpu"`, `"vulkan"`, `"hip"`, `"cuda"`, or `"metal"`.
 #'   Support is engine-specific; CrispASR does not expose HIP and should use a
 #'   Vulkan-enabled build on AMD hardware.
-#' @param hf_cache_dir Optional Hugging Face cache root for local inference.
-#'   Defaults to `HF_HOME`, then the saved local inference configuration.
-#' @param revision Optional Hugging Face model revision for `service =
-#'   "hf-local"`, such as a branch, tag, or preferably an immutable commit SHA.
-#'   Defaults to `GENFLOW_HF_REVISION`, then the saved `hf_revision` setting.
-#'   Use `revision = ""` to explicitly disable a configured pin for one call.
-#' @param trust_remote_code Logical or NULL. Controls whether Transformers may
-#'   execute model-repository code. NULL enables it only for genflow's known
-#'   MOSS profile; generic local models default to FALSE.
-#' @param chunk_length_s Optional chunk length in seconds for the generic
-#'   Transformers ASR pipeline.
-#' @param return_timestamps Logical or `"word"` for generic Transformers ASR.
-#'   MOSS always emits its native timestamped, speaker-aware transcript.
 #' @param max_new_tokens Optional generation limit. This is especially useful
-#'   for long MOSS transcriptions and compatible local servers.
+#'   for compatible native engines and local servers.
 #' @param base_url Optional base URL for `service = "local-openai"`. Defaults
 #'   to `GENFLOW_STT_BASE_URL`, then `http://127.0.0.1:8000`.
 #' @param api_key Optional bearer token for `service = "local-openai"`.
@@ -120,24 +96,15 @@ gen_stt.default <- function(
   timeout_api = 240,
   poll_interval = 5,
   max_poll_seconds = 600,
-  local_profile = NULL,
-  device = NULL,
-  dtype = NULL,
-  python = NULL,
   executable = NULL,
   native_engine = NULL,
   native_backend = NULL,
   native_quant = NULL,
   native_device = NULL,
-  hf_cache_dir = NULL,
-  trust_remote_code = NULL,
-  chunk_length_s = NULL,
-  return_timestamps = FALSE,
   max_new_tokens = NULL,
   base_url = NULL,
   api_key = NULL,
   response_format = "json",
-  revision = NULL,
   ...
 ) {
   start_time <- Sys.time()
@@ -152,8 +119,6 @@ gen_stt.default <- function(
     max_poll_seconds,
     "max_poll_seconds"
   )
-  revision <- .stt_validate_revision(revision)
-
   # Normalize inputs. Keep track of the temporary model-specific service name
   # so callers of the pre-release adapter still select the same engine while
   # the public result uses the durable, transport-level service id.
@@ -241,23 +206,6 @@ gen_stt.default <- function(
       "voicegain" = .stt_voicegain(prep$path, language, poll_interval, max_poll_seconds, timeout_api),
       "hf" = .stt_hf(prep$path, model, timeout_api),
       "replicate" = .stt_replicate(prep$path, model, timeout_api, poll_interval, max_poll_seconds),
-      "hf-local" = .stt_local_hf(
-        audio_path = prep$path,
-        model = model,
-        language = language,
-        prompt = prompt,
-        timeout_secs = timeout_api,
-        profile = local_profile,
-        device = device,
-        dtype = dtype,
-        python = python,
-        hf_cache_dir = hf_cache_dir,
-        revision = revision,
-        trust_remote_code = trust_remote_code,
-        chunk_length_s = chunk_length_s,
-        return_timestamps = return_timestamps,
-        max_new_tokens = max_new_tokens
-      ),
       "local-openai" = .stt_local_openai(
         audio_path = prep$path,
         model = model,
@@ -443,20 +391,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
 #' @keywords internal
 #' @noRd
-.stt_validate_revision <- function(value) {
-  if (is.null(value)) return(NULL)
-  if (!is.character(value) || length(value) != 1L || is.na(value)) {
-    stop("`revision` must be NULL or one character value.", call. = FALSE)
-  }
-  value <- trimws(value)
-  if (grepl("[[:space:][:cntrl:]]", value, perl = TRUE)) {
-    stop("`revision` cannot contain whitespace or control characters.", call. = FALSE)
-  }
-  value
-}
-
-#' @keywords internal
-#' @noRd
 .stt_normalize_service <- function(service) {
   service_id <- tolower(trimws(as.character(service %||% "")[1]))
   if (is.na(service_id) || !nzchar(service_id)) {
@@ -464,12 +398,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
   }
 
   aliases <- c(
-    "hf_local" = "hf-local",
-    "huggingface-local" = "hf-local",
-    "huggingface_local" = "hf-local",
-    "transformers" = "hf-local",
-    "local-transformers" = "hf-local",
-    "local_transformers" = "hf-local",
     "local_openai" = "local-openai",
     "openai-local" = "local-openai",
     "openai_local" = "local-openai",
@@ -541,11 +469,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
     "openai" = "whisper-1",
     "groq" = "whisper-large-v3-turbo",
     "hf" = "openai/whisper-large-v3-turbo",
-    "hf-local" = .genflow_local_setting(
-      "hf_stt_model",
-      env = "GENFLOW_HF_STT_MODEL",
-      default = "openai/whisper-large-v3-turbo"
-    ),
     "local-openai" = .genflow_local_setting(
       "stt_server_model",
       env = "GENFLOW_STT_MODEL",
@@ -922,208 +845,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
   text
 }
 
-#' Run speech recognition locally with a Hugging Face model
-#'
-#' Uses the package's optional Python bridge instead of embedding a Python
-#' runtime in the R process. This keeps PyTorch, Transformers, ROCm, and
-#' model-specific packages optional.
-#'
-#' @keywords internal
-#' @noRd
-.stt_local_hf <- function(audio_path,
-                          model,
-                          language,
-                          prompt,
-                          timeout_secs,
-                          profile = NULL,
-                          device = NULL,
-                          dtype = NULL,
-                          python = NULL,
-                          hf_cache_dir = NULL,
-                          trust_remote_code = NULL,
-                          chunk_length_s = NULL,
-                          return_timestamps = FALSE,
-                          max_new_tokens = NULL,
-                          runner = .stt_run_process,
-                          revision = NULL) {
-  if (!file.exists(audio_path)) {
-    stop("Local Hugging Face STT requires a local audio file.", call. = FALSE)
-  }
-
-  local_config <- .genflow_read_local_config()
-  model_id <- .stt_argument_or_local_setting(
-    model,
-    field = "hf_stt_model",
-    env = "GENFLOW_HF_STT_MODEL",
-    default = "openai/whisper-large-v3-turbo",
-    config = local_config
-  )
-  profile_id <- .stt_resolve_local_profile(
-    .stt_argument_or_local_setting(
-      profile,
-      field = "hf_stt_profile",
-      env = "GENFLOW_HF_STT_PROFILE",
-      default = "auto",
-      config = local_config
-    ),
-    model_id
-  )
-  device_id <- .stt_validate_device(.stt_argument_or_local_setting(
-    device,
-    field = "device",
-    env = "GENFLOW_LOCAL_DEVICE",
-    default = "auto",
-    config = local_config
-  ))
-  dtype_id <- .stt_validate_dtype(.stt_argument_or_local_setting(
-    dtype,
-    field = "dtype",
-    env = "GENFLOW_LOCAL_DTYPE",
-    default = "auto",
-    config = local_config
-  ))
-  cache_dir <- .stt_argument_or_local_setting(
-    hf_cache_dir,
-    field = "hf_cache_dir",
-    env = "HF_HOME",
-    default = "",
-    config = local_config,
-    allow_empty = TRUE
-  )
-  revision_id <- .stt_validate_revision(.stt_argument_or_local_setting(
-    revision,
-    field = "hf_revision",
-    env = "GENFLOW_HF_REVISION",
-    default = "",
-    config = local_config,
-    allow_empty = TRUE
-  ))
-  timestamps_id <- .stt_normalize_timestamps(return_timestamps)
-
-  if (!is.null(chunk_length_s)) {
-    chunk_length_s <- suppressWarnings(as.numeric(chunk_length_s)[1])
-    if (is.na(chunk_length_s) || !is.finite(chunk_length_s) || chunk_length_s <= 0) {
-      stop("`chunk_length_s` must be NULL or a positive number.", call. = FALSE)
-    }
-  }
-  if (!is.null(max_new_tokens)) {
-    max_new_tokens <- suppressWarnings(as.numeric(max_new_tokens)[1])
-    if (is.na(max_new_tokens) || !is.finite(max_new_tokens) ||
-        max_new_tokens < 1 || max_new_tokens != as.integer(max_new_tokens)) {
-      stop("`max_new_tokens` must be NULL or a positive integer.", call. = FALSE)
-    }
-    max_new_tokens <- as.integer(max_new_tokens)
-  }
-
-  if (is.null(trust_remote_code)) {
-    trust_remote_code <- identical(profile_id, "moss")
-  } else if (!is.logical(trust_remote_code) || length(trust_remote_code) != 1L ||
-             is.na(trust_remote_code)) {
-    stop("`trust_remote_code` must be TRUE, FALSE, or NULL.", call. = FALSE)
-  }
-  if (identical(profile_id, "moss") && !isTRUE(trust_remote_code)) {
-    stop(
-      "The MOSS profile requires `trust_remote_code = TRUE` because the official ",
-      "model repository contains its Transformers implementation.",
-      call. = FALSE
-    )
-  }
-
-  python_bin <- .stt_resolve_python(python, config = local_config)
-  bridge_script <- .stt_bridge_script()
-  output_file <- tempfile("genflow-stt-", fileext = ".json")
-  on.exit(unlink(output_file), add = TRUE)
-
-  args <- c(
-    bridge_script,
-    "--audio", normalizePath(audio_path, winslash = "/", mustWork = TRUE),
-    "--model", model_id,
-    "--profile", profile_id,
-    "--device", device_id,
-    "--dtype", dtype_id,
-    "--return-timestamps", timestamps_id,
-    "--output", output_file
-  )
-  if (!is.null(language)) args <- c(args, "--language", language)
-  if (!is.null(prompt)) args <- c(args, "--prompt", prompt)
-  if (nzchar(revision_id)) args <- c(args, "--revision", revision_id)
-  if (isTRUE(trust_remote_code)) args <- c(args, "--trust-remote-code")
-  if (!is.null(chunk_length_s)) {
-    args <- c(args, "--chunk-length-s", format(chunk_length_s, scientific = FALSE, trim = TRUE))
-  }
-  if (!is.null(max_new_tokens)) {
-    args <- c(args, "--max-new-tokens", as.character(max_new_tokens))
-  }
-
-  process <- runner(
-    command = python_bin,
-    args = args,
-    timeout_secs = timeout_secs,
-    environment = if (nzchar(cache_dir)) {
-      c(HF_HOME = path.expand(cache_dir))
-    } else {
-      character()
-    }
-  )
-  status <- suppressWarnings(as.integer(process$status %||% 0L)[1])
-  if (length(status) == 0L || is.na(status)) status <- -1L
-  process_output <- as.character(process$output %||% character())
-
-  payload <- NULL
-  if (file.exists(output_file) && isTRUE(file.info(output_file)$size > 0)) {
-    payload <- tryCatch(
-      jsonlite::fromJSON(output_file, simplifyVector = FALSE),
-      error = function(e) {
-        stop(
-          "Local STT bridge returned invalid JSON: ", conditionMessage(e),
-          call. = FALSE
-        )
-      }
-    )
-  }
-
-  if (is.null(payload)) {
-    detail <- .stt_process_detail(process_output)
-    if (identical(status, 124L)) {
-      stop(
-        "Local Hugging Face STT timed out after ", timeout_secs,
-        " seconds.", if (nzchar(detail)) paste0(" Python output: ", detail) else "",
-        call. = FALSE
-      )
-    }
-    stop(
-      "Local Hugging Face STT bridge exited with status ", status, ".",
-      if (nzchar(detail)) paste0(" Python output: ", detail) else
-        " No structured diagnostic was produced.",
-      call. = FALSE
-    )
-  }
-
-  if (!isTRUE(payload$ok)) {
-    error_type <- as.character(payload$error_type %||% "PythonError")[1]
-    error_text <- as.character(payload$error %||% "unknown local inference error")[1]
-    hint <- as.character(payload$hint %||% "")[1]
-    detail <- .stt_process_detail(process_output)
-    stop(
-      "Local Hugging Face STT failed (", error_type, "): ", error_text,
-      if (nzchar(hint)) paste0(" ", hint) else "",
-      if (nzchar(detail)) paste0(" Python output: ", detail) else "",
-      call. = FALSE
-    )
-  }
-
-  text <- as.character(payload$text %||% "")[1]
-  if (is.na(text) || !nzchar(text)) {
-    stop("Local Hugging Face STT returned an empty transcript.", call. = FALSE)
-  }
-
-  metadata <- payload[setdiff(
-    names(payload),
-    c("ok", "text", "error", "error_type", "hint", "traceback")
-  )]
-  list(text = text, metadata = metadata)
-}
-
 #' Registered native speech-to-text engines
 #'
 #' The public service id describes the transport (`local-native`). Engine ids
@@ -1151,6 +872,31 @@ gen_stt.genflow_agent <- function(audio, ...) {
       model_kinds = "file"
     )
   )
+}
+
+#' Infer a registered native engine from an executable name
+#'
+#' @keywords internal
+#' @noRd
+.stt_native_engine_from_executable <- function(executable) {
+  executable <- trimws(as.character(executable %||% "")[1])
+  if (is.na(executable) || !nzchar(executable)) return("")
+  executable_name <- tolower(basename(executable))
+  matches <- vapply(
+    .stt_native_engine_registry(),
+    function(spec) {
+      any(vapply(
+        tolower(spec$executables),
+        grepl,
+        logical(1),
+        x = executable_name,
+        fixed = TRUE
+      ))
+    },
+    logical(1)
+  )
+  engines <- names(matches)[matches]
+  if (length(engines) == 1L) engines[[1]] else ""
 }
 
 #' @keywords internal
@@ -1208,50 +954,96 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
 #' Parse an explicit CrispASR Hugging Face model reference
 #'
-#' `hf://` is genflow's opt-in marker, not a CrispASR URI scheme. CrispASR
+#' `hf://` is genflow's compact marker, not a CrispASR URI scheme. CrispASR
 #' receives `--hf-repo OWNER/REPO:FILE` and cannot resolve a repository without
-#' a filename when `-m auto` is used. Accept a slash before the filename as a
-#' copy-and-paste convenience, but always return CrispASR's canonical form.
+#' a filename when `-m auto` is used. Accept a slash before the filename and a
+#' standard Hugging Face `/blob/main/FILE` or `/resolve/main/FILE` URL as
+#' copy-and-paste conveniences, but always return CrispASR's canonical form.
 #'
+#' @keywords internal
+#' @noRd
+.stt_is_crispasr_hf_reference <- function(value) {
+  value <- trimws(as.character(value %||% "")[1])
+  !is.na(value) && (
+    startsWith(tolower(value), "hf://") ||
+      startsWith(tolower(value), "https://huggingface.co/")
+  )
+}
+
 #' @keywords internal
 #' @noRd
 .stt_parse_crispasr_hf_reference <- function(value) {
   value <- trimws(as.character(value %||% "")[1])
-  if (is.na(value) || !startsWith(tolower(value), "hf://")) {
+  if (is.na(value) || !nzchar(value)) {
     stop(
-      "CrispASR Hugging Face references must start with `hf://`.",
+      "A CrispASR Hugging Face reference is required.",
       call. = FALSE
     )
   }
 
-  body <- sub("^hf://", "", value, ignore.case = TRUE)
   component <- "[A-Za-z0-9][A-Za-z0-9._-]*"
   filename <- "[^/\\\\:?#[:space:]]+"
-  patterns <- c(
-    paste0("^(", component, ")/(", component, "):(", filename, ")$"),
-    paste0("^(", component, ")/(", component, ")/(", filename, ")$")
-  )
-  matched <- NULL
+  repository <- NULL
+  file <- NULL
   style <- NULL
-  for (i in seq_along(patterns)) {
-    candidate <- regmatches(body, regexec(patterns[[i]], body, perl = TRUE))[[1]]
-    if (length(candidate) == 4L) {
-      matched <- candidate
-      style <- if (i == 1L) "colon" else "slash"
-      break
+
+  if (startsWith(tolower(value), "hf://")) {
+    body <- sub("^hf://", "", value, ignore.case = TRUE)
+    patterns <- c(
+      paste0("^(", component, ")/(", component, "):(", filename, ")$"),
+      paste0("^(", component, ")/(", component, ")/(", filename, ")$")
+    )
+    matched <- NULL
+    for (i in seq_along(patterns)) {
+      candidate <- regmatches(
+        body,
+        regexec(patterns[[i]], body, perl = TRUE)
+      )[[1]]
+      if (length(candidate) == 4L) {
+        matched <- candidate
+        style <- if (i == 1L) "colon" else "slash"
+        break
+      }
+    }
+    if (!is.null(matched)) {
+      repository <- paste0(matched[[2]], "/", matched[[3]])
+      file <- matched[[4]]
+    }
+  } else if (startsWith(
+    tolower(value),
+    "https://huggingface.co/"
+  )) {
+    body <- sub(
+      "^https://huggingface\\.co/",
+      "",
+      value,
+      ignore.case = TRUE
+    )
+    pattern <- paste0(
+      "^(", component, ")/(", component, ")/(blob|resolve)/main/(",
+      filename,
+      ")$"
+    )
+    matched <- regmatches(body, regexec(pattern, body, perl = TRUE))[[1]]
+    if (length(matched) == 5L) {
+      repository <- paste0(matched[[2]], "/", matched[[3]])
+      file <- utils::URLdecode(matched[[5]])
+      style <- paste0("web_", matched[[4]])
     }
   }
 
-  if (is.null(matched) || matched[[4]] %in% c(".", "..")) {
+  valid_file <- !is.null(file) &&
+    !file %in% c(".", "..") &&
+    grepl(paste0("^", filename, "$"), file, perl = TRUE)
+  if (is.null(repository) || !valid_file) {
     stop(
       "CrispASR Hugging Face references must include one model filename as ",
-      "`hf://OWNER/REPO:FILE` or `hf://OWNER/REPO/FILE`.",
+      "`hf://OWNER/REPO:FILE`, `hf://OWNER/REPO/FILE`, or ",
+      "`https://huggingface.co/OWNER/REPO/blob/main/FILE`.",
       call. = FALSE
     )
   }
 
-  repository <- paste0(matched[[2]], "/", matched[[3]])
-  file <- matched[[4]]
   argument <- paste0(repository, ":", file)
   list(
     repository = repository,
@@ -1387,6 +1179,30 @@ gen_stt.genflow_agent <- function(audio, ...) {
   engine <- .stt_normalize_native_engine(requested)
   if (!identical(engine, "auto")) return(engine)
 
+  # Model values emitted by the local-native catalog and CrispASR-only model
+  # selectors are stronger evidence than a stale executable/config hint. An
+  # explicitly requested non-auto engine already returned above.
+  backend <- .stt_validate_native_backend(.stt_native_setting(
+    native_backend,
+    field = "stt_native_backend",
+    env = "GENFLOW_STT_NATIVE_BACKEND",
+    config = config
+  ))
+  model_value <- .stt_native_setting(
+    model,
+    field = "stt_native_model",
+    env = "GENFLOW_STT_NATIVE_MODEL",
+    config = config
+  )
+  catalog_filename <- identical(model_value, basename(model_value)) &&
+    grepl("\\.(?:gguf|bin)$", model_value, ignore.case = TRUE, perl = TRUE)
+  crispasr_model_hint <- catalog_filename ||
+    (nzchar(backend) &&
+      !backend %in% c("moss", "moss-diarize", "moss-transcribe")) ||
+    identical(tolower(model_value), "auto") ||
+    .stt_is_crispasr_hf_reference(model_value)
+  if (crispasr_model_hint) return("crispasr")
+
   legacy_native_env <- any(nzchar(c(
     Sys.getenv("GENFLOW_MOSS_CPP_EXECUTABLE", unset = ""),
     Sys.getenv("GENFLOW_MOSS_CPP_MODEL", unset = ""),
@@ -1403,30 +1219,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
     env = "GENFLOW_STT_NATIVE_EXECUTABLE",
     config = config
   )
-  executable_name <- tolower(basename(executable_value))
-  if (grepl("crispasr", executable_name, fixed = TRUE)) return("crispasr")
-  if (grepl("moss-transcribe", executable_name, fixed = TRUE)) {
-    return("moss-transcribe")
-  }
-
-  backend <- .stt_validate_native_backend(.stt_native_setting(
-    native_backend,
-    field = "stt_native_backend",
-    env = "GENFLOW_STT_NATIVE_BACKEND",
-    config = config
-  ))
-  model_value <- .stt_native_setting(
-    model,
-    field = "stt_native_model",
-    env = "GENFLOW_STT_NATIVE_MODEL",
-    config = config
-  )
-  if ((nzchar(backend) &&
-       !backend %in% c("moss", "moss-diarize", "moss-transcribe")) ||
-      identical(tolower(model_value), "auto") ||
-      startsWith(tolower(model_value), "hf://")) {
-    return("crispasr")
-  }
+  executable_engine <- .stt_native_engine_from_executable(executable_value)
+  if (nzchar(executable_engine)) return(executable_engine)
 
   registry <- .stt_native_engine_registry()
   installed <- names(Filter(function(spec) {
@@ -1533,29 +1327,29 @@ gen_stt.genflow_agent <- function(audio, ...) {
   resolution_source <- if (is.null(requested_model)) {
     if (identical(tolower(model_value), "auto")) "registry" else "configured"
   } else if (identical(tolower(requested_model), "auto")) {
-    configured_model <- .genflow_local_setting(
-      field = "stt_native_model",
-      env = c("GENFLOW_STT_NATIVE_MODEL"),
-      default = "",
-      config = config
-    )
-    if (nzchar(configured_model) &&
-        !identical(tolower(configured_model), "auto")) {
-      model_value <- configured_model
-      "configured"
-    } else {
-      model_value <- "auto"
-      "registry"
-    }
+    # An explicit Models/agent choice is authoritative. In particular,
+    # `model = "auto"` must not be replaced by a hidden legacy config model.
+    model_value <- "auto"
+    "registry"
   } else {
     "argument"
   }
 
+  backend_input <- if (!is.null(native_backend)) {
+    native_backend
+  } else if (!is.null(requested_model) &&
+             !identical(tolower(requested_model), "auto")) {
+    # Concrete Models/direct-call choices own their architecture. Clear an old
+    # global backend both while selecting the engine and while dispatching.
+    ""
+  } else {
+    NULL
+  }
   engine <- .stt_resolve_native_engine(
     native_engine = native_engine,
     executable = executable,
     model = model_value,
-    native_backend = native_backend,
+    native_backend = backend_input,
     config = config
   )
   if (identical(engine, "moss-transcribe") && !nzchar(model_value)) {
@@ -1569,7 +1363,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     )
   }
   backend <- .stt_validate_native_backend(.stt_native_setting(
-    native_backend,
+    backend_input,
     field = "stt_native_backend",
     env = "GENFLOW_STT_NATIVE_BACKEND",
     config = config
@@ -1615,9 +1409,46 @@ gen_stt.genflow_agent <- function(audio, ...) {
       character()
     }
   ))
+  saved_engine <- .stt_normalize_native_engine(
+    config$stt_native_engine %||% "auto"
+  )
+  engine_override_value <- if (!is.null(native_engine) &&
+                               length(native_engine) > 0L) {
+    trimws(as.character(native_engine)[1])
+  } else {
+    trimws(Sys.getenv("GENFLOW_STT_NATIVE_ENGINE", unset = ""))
+  }
+  engine_override_present <- !is.na(engine_override_value) &&
+    nzchar(engine_override_value)
+  engine_override <- if (engine_override_present) {
+    .stt_normalize_native_engine(engine_override_value)
+  } else {
+    saved_engine
+  }
+  explicit_executable <- !is.null(executable) && length(executable) > 0L
+  executable_env <- trimws(
+    Sys.getenv("GENFLOW_STT_NATIVE_EXECUTABLE", unset = "")
+  )
+  configured_executable_engine <- .stt_native_engine_from_executable(
+    config$stt_native_executable %||% ""
+  )
+  saved_executable_mismatch <- nzchar(configured_executable_engine) &&
+    !identical(configured_executable_engine, engine)
+  executable_input <- executable
+  if (!explicit_executable &&
+      !nzchar(executable_env) &&
+      (saved_executable_mismatch ||
+        (engine_override_present &&
+          !identical(engine_override, saved_engine) &&
+          !identical(engine, saved_engine)))) {
+    # A saved executable belongs to the saved engine. Do not carry it across
+    # a per-call or environment engine override; discover the new engine on
+    # PATH (or use its legacy engine-specific environment variable) instead.
+    executable_input <- ""
+  }
   executable_path <- .stt_resolve_native_executable(
     engine,
-    executable = executable,
+    executable = executable_input,
     config = config
   )
 
@@ -1704,7 +1535,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   if (is.na(model_value) || !nzchar(model_value)) {
     stop(
       "A CrispASR model is required. Pass a local model path, \"auto\", or ",
-      "an explicit hf://OWNER/REPO:FILE or hf://OWNER/REPO/FILE reference.",
+      "an explicit hf://OWNER/REPO:FILE or Hugging Face /blob/main/FILE URL.",
       call. = FALSE
     )
   }
@@ -1725,13 +1556,27 @@ gen_stt.genflow_agent <- function(audio, ...) {
       "-m", "auto",
       if (nzchar(quant)) c("--model-quant", quant)
     )
-  } else if (startsWith(tolower(model_value), "hf://")) {
+  } else if (.stt_is_crispasr_hf_reference(model_value)) {
     reference <- .stt_parse_crispasr_hf_reference(model_value)
     model_kind <- "hf"
     model_value <- reference$reference
     model_args <- c("-m", "auto", "--hf-repo", reference$argument)
   } else {
-    model_path <- path.expand(model_value)
+    catalog_filename <- identical(model_value, basename(model_value)) &&
+      grepl("\\.(?:gguf|bin)$", model_value, ignore.case = TRUE, perl = TRUE)
+    if (catalog_filename) {
+      model_path <- .genflow_crispasr_managed_model(model_value)
+      if (!nzchar(model_path)) {
+        stop(
+          "CrispASR catalog model not found in the managed cache: ",
+          model_value,
+          ". Download it in Local > Native STT or pass an explicit path.",
+          call. = FALSE
+        )
+      }
+    } else {
+      model_path <- path.expand(model_value)
+    }
     info <- suppressWarnings(file.info(model_path))
     if (!file.exists(model_path) ||
         dir.exists(model_path) ||
@@ -2609,102 +2454,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
 #' @keywords internal
 #' @noRd
-.stt_resolve_local_profile <- function(profile, model) {
-  profile_id <- tolower(trimws(as.character(profile %||% "auto")[1]))
-  aliases <- c(
-    "generic" = "transformers",
-    "asr" = "transformers",
-    "transformers-asr" = "transformers",
-    "moss-transcribe-diarize" = "moss",
-    "moss_transcribe_diarize" = "moss"
-  )
-  mapped <- unname(aliases[profile_id])
-  if (length(mapped) == 1L && !is.na(mapped)) profile_id <- mapped
-  if (is.na(profile_id) || !nzchar(profile_id)) {
-    stop(
-      "`local_profile` must be one of \"auto\", \"transformers\", or \"moss\".",
-      call. = FALSE
-    )
-  }
-  if (!profile_id %in% c("auto", "transformers", "moss")) {
-    stop(
-      "`local_profile` must be one of \"auto\", \"transformers\", or \"moss\".",
-      call. = FALSE
-    )
-  }
-  if (!identical(profile_id, "auto")) return(profile_id)
-
-  model_id <- tolower(gsub("\\\\", "/", as.character(model)[1]))
-  if (grepl("(^|/)moss-transcribe-diarize/?$", model_id)) "moss" else "transformers"
-}
-
-#' @keywords internal
-#' @noRd
-.stt_validate_device <- function(device) {
-  device_id <- tolower(trimws(as.character(device %||% "auto")[1]))
-  if (is.na(device_id) || !nzchar(device_id)) {
-    stop("`device` must be a non-empty device identifier.", call. = FALSE)
-  }
-  if (device_id %in% c("rocm", "hip")) return(device_id)
-  if (!grepl("^(auto|cpu|mps|cuda(:[0-9]+)?)$", device_id)) {
-    stop(
-      "`device` must be \"auto\", \"cpu\", \"cuda\", \"cuda:N\", ",
-      "\"rocm\", \"hip\", or \"mps\".",
-      call. = FALSE
-    )
-  }
-  device_id
-}
-
-#' @keywords internal
-#' @noRd
-.stt_validate_dtype <- function(dtype) {
-  dtype_id <- tolower(trimws(as.character(dtype %||% "auto")[1]))
-  aliases <- c(
-    "fp32" = "float32",
-    "fp16" = "float16",
-    "bf16" = "bfloat16"
-  )
-  mapped <- unname(aliases[dtype_id])
-  if (length(mapped) == 1L && !is.na(mapped)) dtype_id <- mapped
-  if (is.na(dtype_id) || !nzchar(dtype_id)) {
-    stop(
-      "`dtype` must be \"auto\", \"float32\", \"float16\", or \"bfloat16\".",
-      call. = FALSE
-    )
-  }
-  if (!dtype_id %in% c("auto", "float32", "float16", "bfloat16")) {
-    stop(
-      "`dtype` must be \"auto\", \"float32\", \"float16\", or \"bfloat16\".",
-      call. = FALSE
-    )
-  }
-  dtype_id
-}
-
-#' @keywords internal
-#' @noRd
-.stt_normalize_timestamps <- function(return_timestamps) {
-  if (is.logical(return_timestamps) && length(return_timestamps) == 1L &&
-      !is.na(return_timestamps)) {
-    return(if (isTRUE(return_timestamps)) "true" else "none")
-  }
-
-  value <- tolower(trimws(as.character(return_timestamps %||% "none")[1]))
-  aliases <- c("false" = "none", "no" = "none", "yes" = "true")
-  mapped <- unname(aliases[value])
-  if (length(mapped) == 1L && !is.na(mapped)) value <- mapped
-  if (is.na(value) || !nzchar(value)) {
-    stop("`return_timestamps` must be TRUE, FALSE, or \"word\".", call. = FALSE)
-  }
-  if (!value %in% c("none", "true", "word")) {
-    stop("`return_timestamps` must be TRUE, FALSE, or \"word\".", call. = FALSE)
-  }
-  value
-}
-
-#' @keywords internal
-#' @noRd
 .stt_argument_or_local_setting <- function(value,
                                            field,
                                            env,
@@ -2724,61 +2473,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
     default = default,
     config = config
   )
-}
-
-#' @keywords internal
-#' @noRd
-.stt_resolve_python <- function(python = NULL, config = NULL) {
-  candidate <- .stt_argument_or_local_setting(
-    python,
-    field = "python",
-    env = "GENFLOW_PYTHON",
-    default = "",
-    config = config %||% .genflow_read_local_config(),
-    allow_empty = TRUE
-  )
-  if (!is.na(candidate) && nzchar(trimws(candidate))) {
-    candidate <- trimws(candidate)
-    resolved <- .genflow_resolve_executable(candidate)
-    if (nzchar(resolved)) {
-      return(resolved)
-    }
-    stop(
-      "Python executable not found: ", candidate,
-      ". Set `python` or GENFLOW_PYTHON to a valid environment.",
-      call. = FALSE
-    )
-  }
-
-  discovered <- .genflow_resolve_executable("", c("python3", "python"))
-  if (!nzchar(discovered)) {
-    stop(
-      "Python was not found. Install Python and set GENFLOW_PYTHON (or pass ",
-      "`python`) to use local Hugging Face STT.",
-      call. = FALSE
-    )
-  }
-  discovered
-}
-
-#' @keywords internal
-#' @noRd
-.stt_bridge_script <- function() {
-  override <- getOption("genflow.stt_bridge_script", NULL)
-  candidates <- c(
-    as.character(override %||% character()),
-    system.file("python", "genflow_stt.py", package = "genflow")
-  )
-  candidates <- unique(candidates[nzchar(candidates)])
-  existing <- candidates[file.exists(candidates)]
-  if (length(existing) == 0L) {
-    stop(
-      "The genflow local STT Python bridge was not found. Reinstall genflow ",
-      "from a complete package build.",
-      call. = FALSE
-    )
-  }
-  normalizePath(existing[[1]], winslash = "/", mustWork = TRUE)
 }
 
 #' @keywords internal

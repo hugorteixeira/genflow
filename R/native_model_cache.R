@@ -183,6 +183,27 @@
   filename
 }
 
+#' Resolve one model directly from the managed CrispASR cache
+#'
+#' @keywords internal
+#' @noRd
+.genflow_crispasr_managed_model <- function(filename) {
+  filename <- .genflow_crispasr_validate_filename(filename)
+  cache_dir <- .genflow_crispasr_canonical_cache_dir(create = FALSE)
+  if (!dir.exists(cache_dir)) return("")
+  cache_dir <- normalizePath(cache_dir, winslash = "/", mustWork = TRUE)
+  candidate <- file.path(cache_dir, filename)
+  info <- suppressWarnings(file.info(candidate))
+  usable <- file.exists(candidate) &&
+    !dir.exists(candidate) &&
+    !.genflow_crispasr_is_symlink(candidate) &&
+    identical(dirname(candidate), cache_dir) &&
+    is.finite(info$size[[1]]) &&
+    info$size[[1]] > 0
+  if (!usable) return("")
+  normalizePath(candidate, winslash = "/", mustWork = TRUE)
+}
+
 #' Return an empty native model inventory
 #'
 #' @keywords internal
@@ -244,14 +265,14 @@
   selected_source <- ""
   if (nzchar(selected_value) &&
       !identical(tolower(selected_value), "auto") &&
-      !startsWith(tolower(selected_value), "hf://")) {
+      !.stt_is_crispasr_hf_reference(selected_value)) {
     candidate <- path.expand(selected_value)
     if (file.exists(candidate) && !dir.exists(candidate)) {
       selected_path <- normalizePath(candidate, winslash = "/", mustWork = TRUE)
     } else {
       selected_path <- candidate
     }
-  } else if (startsWith(tolower(selected_value), "hf://")) {
+  } else if (.stt_is_crispasr_hf_reference(selected_value)) {
     reference <- tryCatch(
       .stt_parse_crispasr_hf_reference(selected_value),
       error = function(e) NULL
@@ -285,6 +306,11 @@
     if (!length(files)) next
 
     for (path in files) {
+      filename <- tryCatch(
+        .genflow_crispasr_validate_filename(basename(path)),
+        error = function(e) ""
+      )
+      if (!nzchar(filename)) next
       info <- suppressWarnings(file.info(path))
       if (!file.exists(path) ||
           isTRUE(info$isdir[[1]]) ||
@@ -293,7 +319,7 @@
         next
       }
       is_link <- .genflow_crispasr_is_symlink(path)
-      visible_path <- file.path(cache_dir, basename(path))
+      visible_path <- file.path(cache_dir, filename)
       normalized_path <- if (!is_link) {
         normalizePath(visible_path, winslash = "/", mustWork = TRUE)
       } else {
@@ -317,7 +343,7 @@
       }
       rows[[length(rows) + 1L]] <- data.frame(
         path = normalized_path,
-        filename = basename(visible_path),
+        filename = filename,
         quant = .genflow_crispasr_model_quant(visible_path),
         size_bytes = as.numeric(info$size[[1]]),
         size = .genflow_crispasr_format_size(info$size[[1]]),
@@ -744,7 +770,7 @@
   }
   backend <- tolower(trimws(as.character(backend %||% "")[1]))
 
-  if (startsWith(tolower(selector), "hf://")) {
+  if (.stt_is_crispasr_hf_reference(selector)) {
     reference <- .stt_parse_crispasr_hf_reference(selector)
     repository <- reference$repository
     filename <- reference$file
@@ -761,7 +787,7 @@
   } else {
     stop(
       "Download selectors must be `auto`, `auto:QUANT`, or ",
-      "`hf://OWNER/REPO:FILE`.",
+      "an exact `hf://OWNER/REPO:FILE` / Hugging Face `/blob/main/` URL.",
       call. = FALSE
     )
   }
@@ -986,9 +1012,10 @@
 
 #' Download one validated CrispASR model into its managed cache
 #'
-#' @param selector `auto`, `auto:QUANT`, or an explicit
-#'   `hf://OWNER/REPO:FILE` reference. An existing regular local model path is
-#'   returned unchanged.
+#' @param selector `auto`, `auto:QUANT`, an explicit
+#'   `hf://OWNER/REPO:FILE` reference, or the equivalent Hugging Face
+#'   `/blob/main/FILE` URL. An existing regular local model path is returned
+#'   unchanged.
 #' @param backend CrispASR backend used for `auto` resolution and compatibility
 #'   validation.
 #' @param quant Optional registry quantization preference.
@@ -1011,7 +1038,7 @@
   }
 
   local_candidate <- path.expand(selector)
-  if (!startsWith(tolower(selector), "hf://") &&
+  if (!.stt_is_crispasr_hf_reference(selector) &&
       !grepl("^auto(?::[A-Za-z0-9._-]+)?$", selector, ignore.case = TRUE, perl = TRUE) &&
       file.exists(local_candidate)) {
     if (dir.exists(local_candidate) ||
@@ -1399,10 +1426,11 @@
     stop("The CrispASR model has an active download job.", call. = FALSE)
   }
 
-  active_model <- trimws(as.character(active_model %||% "")[1])
-  if (is.na(active_model)) active_model <- ""
-  if (nzchar(active_model)) {
-    if (startsWith(tolower(active_model), "hf://")) {
+  active_models <- trimws(as.character(active_model %||% character()))
+  active_models <- unique(active_models[!is.na(active_models) & nzchar(active_models)])
+  for (active_model in active_models) {
+    is_hf_reference <- .stt_is_crispasr_hf_reference(active_model)
+    if (is_hf_reference) {
       reference <- tryCatch(
         .stt_parse_crispasr_hf_reference(active_model),
         error = function(e) NULL
@@ -1420,15 +1448,26 @@
             .genflow_crispasr_same_hf_artifact(
               current_source,
               expected_source
-            )) {
+          )) {
           stop(
             "Refusing to remove the selected CrispASR model. Select another ",
-            "model (or Automatic) and save the configuration first.",
+            "model before deleting it.",
             call. = FALSE
           )
         }
       }
     } else if (!identical(tolower(active_model), "auto")) {
+      active_filename <- tryCatch(
+        .genflow_crispasr_validate_filename(active_model),
+        error = function(e) ""
+      )
+      if (nzchar(active_filename) && identical(active_filename, filename)) {
+        stop(
+          "Refusing to remove the selected CrispASR model. Select another ",
+          "model before deleting it.",
+          call. = FALSE
+        )
+      }
       active_path <- path.expand(active_model)
       if (file.exists(active_path) && !dir.exists(active_path)) {
         active_path <- normalizePath(active_path, winslash = "/", mustWork = TRUE)
@@ -1436,7 +1475,7 @@
       if (identical(active_path, candidate)) {
         stop(
           "Refusing to remove the selected CrispASR model. Select another ",
-          "model (or Automatic) and save the configuration first.",
+          "model before deleting it.",
           call. = FALSE
         )
       }

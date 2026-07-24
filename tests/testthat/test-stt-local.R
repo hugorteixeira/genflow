@@ -90,7 +90,7 @@ test_that("CrispASR runtime device reports confirmations and fallbacks", {
   expect_identical(cpu$native_device_active, "cpu")
 })
 
-test_that("gen_stt accepts a NULL model and dispatches canonical local aliases", {
+test_that("gen_stt accepts a NULL model and dispatches local OpenAI aliases", {
   audio <- local_stt_audio()
   on.exit(unlink(audio), add = TRUE)
   config_path <- tempfile(fileext = ".json")
@@ -98,13 +98,13 @@ test_that("gen_stt accepts a NULL model and dispatches canonical local aliases",
   options(genflow.local_config_path = config_path)
   on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
 
-  seen_revision <- NULL
+  seen <- NULL
   testthat::local_mocked_bindings(
-    .stt_local_hf = function(...) {
-      seen_revision <<- list(...)$revision
+    .stt_local_openai = function(...) {
+      seen <<- list(...)
       list(
-        text = "mock local transcript",
-        metadata = list(accelerator = "rocm", device = "cuda:0")
+        text = "mock server transcript",
+        metadata = list(backend = "openai-compatible")
       )
     },
     .package = "genflow"
@@ -113,9 +113,8 @@ test_that("gen_stt accepts a NULL model and dispatches canonical local aliases",
   console <- capture.output(
     result <- gen_stt(
       audio,
-      service = "transformers",
-      model = NULL,
-      revision = "0123456789abcdef",
+      service = list(service = "openai-compatible"),
+      model = list(),
       save_txt = FALSE
     )
   )
@@ -124,14 +123,11 @@ test_that("gen_stt accepts a NULL model and dispatches canonical local aliases",
   expect_true(is.list(result))
   expect_identical(class(result), "list")
   expect_identical(result$status_api, "SUCCESS")
-  expect_identical(result$response_value, "mock local transcript")
-  expect_identical(result$service, "hf-local")
-  expect_identical(
-    result$model,
-    "openai/whisper-large-v3-turbo"
-  )
-  expect_identical(result$metadata$accelerator, "rocm")
-  expect_identical(seen_revision, "0123456789abcdef")
+  expect_identical(result$response_value, "mock server transcript")
+  expect_identical(result$service, "local-openai")
+  expect_identical(result$model, "local-model")
+  expect_null(seen$model)
+  expect_identical(result$metadata$backend, "openai-compatible")
   expect_match(
     paste(console, collapse = "\n"),
     "[SUCCESS]",
@@ -139,25 +135,13 @@ test_that("gen_stt accepts a NULL model and dispatches canonical local aliases",
   )
   expect_match(
     paste(console, collapse = "\n"),
-    "hf-local | openai/whisper-large-v3-turbo | Time:",
+    "local-openai | local-model | Time:",
     fixed = TRUE
   )
   expect_match(
     paste(console, collapse = "\n"),
-    "-> Response: mock local transcript...",
+    "-> Response: mock server transcript...",
     fixed = TRUE
-  )
-
-  empty_list_model <- gen_stt(
-    audio,
-    service = list(service = "hf_local"),
-    model = list(),
-    save_txt = FALSE
-  )
-  expect_identical(empty_list_model$status_api, "SUCCESS")
-  expect_identical(
-    empty_list_model$model,
-    "openai/whisper-large-v3-turbo"
   )
 })
 
@@ -166,7 +150,7 @@ test_that("gen_stt validates public scalar controls before dispatch", {
   on.exit(unlink(audio), add = TRUE)
   dispatches <- 0L
   testthat::local_mocked_bindings(
-    .stt_local_hf = function(timeout_secs, ...) {
+    .stt_local_openai = function(timeout_secs, ...) {
       dispatches <<- dispatches + 1L
       list(text = "ok", metadata = list(timeout_secs = timeout_secs))
     },
@@ -185,7 +169,7 @@ test_that("gen_stt validates public scalar controls before dispatch", {
       do.call(
         gen_stt,
         c(
-          list(audio = audio, service = "hf-local"),
+          list(audio = audio, service = "local-openai"),
           case
         )
       ),
@@ -208,27 +192,18 @@ test_that("gen_stt validates public scalar controls before dispatch", {
       do.call(
         gen_stt,
         c(
-          list(audio = audio, service = "hf-local", save_txt = FALSE),
+          list(audio = audio, service = "local-openai", save_txt = FALSE),
           case
         )
       ),
       "positive finite number"
     )
   }
-  expect_error(
-    gen_stt(
-      audio,
-      service = "hf-local",
-      revision = "not a valid revision",
-      save_txt = FALSE
-    ),
-    "`revision` cannot contain whitespace"
-  )
   expect_identical(dispatches, 0L)
 
   result <- gen_stt(
     audio,
-    service = "hf-local",
+    service = "local-openai",
     save_txt = FALSE,
     convert = FALSE,
     timeout_api = "30",
@@ -244,274 +219,18 @@ test_that("an unsupported STT service is a structured error when model is NULL",
   audio <- local_stt_audio()
   on.exit(unlink(audio), add = TRUE)
 
-  result <- gen_stt(
-    audio,
-    service = "does-not-exist",
-    model = NULL,
-    save_txt = FALSE
-  )
+  for (service in c("does-not-exist", "hf-local")) {
+    capture.output(result <- gen_stt(
+      audio,
+      service = service,
+      model = NULL,
+      save_txt = FALSE
+    ))
 
-  expect_identical(result$status_api, "ERROR")
-  expect_match(result$status_msg, "Unsupported STT service")
-  expect_identical(result$model, "default")
-})
-
-test_that("local Hugging Face bridge selects the known MOSS profile", {
-  audio <- local_stt_audio()
-  on.exit(unlink(audio), add = TRUE)
-  seen <- NULL
-
-  fake_runner <- function(command, args, timeout_secs, environment) {
-    seen <<- list(
-      command = command,
-      args = args,
-      timeout = timeout_secs,
-      environment = environment
-    )
-    output <- args[[match("--output", args) + 1L]]
-    payload <- list(
-      ok = TRUE,
-      text = "[0.00][S01]hello[1.00]",
-      backend = "transformers",
-      profile = "moss",
-      model = "OpenMOSS-Team/MOSS-Transcribe-Diarize",
-      device = "cuda:0",
-      accelerator = "rocm",
-      dtype = "bfloat16",
-      segments = list(list(
-        start = 0,
-        end = 1,
-        speaker = "S01",
-        text = "hello"
-      ))
-    )
-    writeLines(
-      jsonlite::toJSON(payload, auto_unbox = TRUE),
-      output,
-      useBytes = TRUE
-    )
-    list(status = 0L, output = character())
+    expect_identical(result$status_api, "ERROR")
+    expect_match(result$status_msg, "Unsupported STT service")
+    expect_identical(result$model, "default")
   }
-
-  result <- genflow:::.stt_local_hf(
-    audio_path = audio,
-    model = "OpenMOSS-Team/MOSS-Transcribe-Diarize",
-    language = "pt",
-    prompt = "Use speaker labels.",
-    timeout_secs = 90,
-    profile = "auto",
-    device = "rocm",
-    dtype = "auto",
-    python = file.path(R.home("bin"), "R"),
-    revision = "moss-reviewed-commit",
-    trust_remote_code = NULL,
-    chunk_length_s = NULL,
-    return_timestamps = TRUE,
-    max_new_tokens = 4096L,
-    runner = fake_runner
-  )
-
-  expect_identical(result$text, "[0.00][S01]hello[1.00]")
-  expect_identical(result$metadata$accelerator, "rocm")
-  expect_identical(result$metadata$segments[[1]]$speaker, "S01")
-  expect_identical(seen$timeout, 90)
-  expect_identical(
-    seen$args[[match("--profile", seen$args) + 1L]],
-    "moss"
-  )
-  expect_identical(
-    seen$args[[match("--device", seen$args) + 1L]],
-    "rocm"
-  )
-  expect_true("--trust-remote-code" %in% seen$args)
-  expect_identical(
-    seen$args[[match("--revision", seen$args) + 1L]],
-    "moss-reviewed-commit"
-  )
-  expect_identical(
-    seen$args[[match("--max-new-tokens", seen$args) + 1L]],
-    "4096"
-  )
-})
-
-test_that("generic local Transformers inference does not trust remote code by default", {
-  audio <- local_stt_audio()
-  on.exit(unlink(audio), add = TRUE)
-  seen_args <- NULL
-  seen_environment <- NULL
-
-  fake_runner <- function(command, args, timeout_secs, environment) {
-    seen_args <<- args
-    seen_environment <<- environment
-    output <- args[[match("--output", args) + 1L]]
-    writeLines(
-      '{"ok":true,"text":"hello","profile":"transformers","device":"cpu","accelerator":"cpu","dtype":"float32"}',
-      output,
-      useBytes = TRUE
-    )
-    list(status = 0L, output = character())
-  }
-
-  result <- genflow:::.stt_local_hf(
-    audio_path = audio,
-    model = "openai/whisper-small",
-    language = NULL,
-    prompt = NULL,
-    timeout_secs = 30,
-    profile = "auto",
-    device = "cpu",
-    dtype = "fp32",
-    python = file.path(R.home("bin"), "R"),
-    hf_cache_dir = tempdir(),
-    revision = "whisper-reviewed-commit",
-    trust_remote_code = NULL,
-    chunk_length_s = 20,
-    return_timestamps = "word",
-    max_new_tokens = NULL,
-    runner = fake_runner
-  )
-
-  expect_identical(result$text, "hello")
-  expect_false("--trust-remote-code" %in% seen_args)
-  expect_identical(
-    seen_args[[match("--revision", seen_args) + 1L]],
-    "whisper-reviewed-commit"
-  )
-  expect_identical(
-    seen_args[[match("--profile", seen_args) + 1L]],
-    "transformers"
-  )
-  expect_identical(
-    seen_args[[match("--dtype", seen_args) + 1L]],
-    "float32"
-  )
-  expect_identical(
-    seen_args[[match("--return-timestamps", seen_args) + 1L]],
-    "word"
-  )
-  expect_identical(
-    unname(seen_environment[["HF_HOME"]]),
-    path.expand(tempdir())
-  )
-})
-
-test_that("local Hugging Face revision precedence supports an explicit opt-out", {
-  audio <- local_stt_audio()
-  on.exit(unlink(audio), add = TRUE)
-  config_path <- tempfile(fileext = ".json")
-  on.exit(unlink(config_path), add = TRUE)
-  old_config_path <- getOption("genflow.local_config_path")
-  old_revision <- Sys.getenv("GENFLOW_HF_REVISION", unset = NA_character_)
-  on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
-  on.exit({
-    if (is.na(old_revision)) {
-      Sys.unsetenv("GENFLOW_HF_REVISION")
-    } else {
-      Sys.setenv(GENFLOW_HF_REVISION = old_revision)
-    }
-  }, add = TRUE)
-  options(genflow.local_config_path = config_path)
-  gen_local_config(hf_revision = "saved-commit")
-  Sys.setenv(GENFLOW_HF_REVISION = "environment-commit")
-
-  seen <- list()
-  fake_runner <- function(command, args, timeout_secs, environment) {
-    seen[[length(seen) + 1L]] <<- args
-    output <- args[[match("--output", args) + 1L]]
-    writeLines(
-      '{"ok":true,"text":"hello","profile":"transformers"}',
-      output,
-      useBytes = TRUE
-    )
-    list(status = 0L, output = character())
-  }
-  run <- function(revision = NULL) {
-    genflow:::.stt_local_hf(
-      audio_path = audio,
-      model = "owner/model",
-      language = NULL,
-      prompt = NULL,
-      timeout_secs = 30,
-      profile = "transformers",
-      device = "cpu",
-      dtype = "float32",
-      python = file.path(R.home("bin"), "R"),
-      runner = fake_runner,
-      revision = revision
-    )
-  }
-  revision_arg <- function(args) {
-    position <- match("--revision", args)
-    if (is.na(position)) "" else args[[position + 1L]]
-  }
-
-  invisible(run("explicit-commit"))
-  invisible(run())
-  Sys.unsetenv("GENFLOW_HF_REVISION")
-  invisible(run())
-  invisible(run(""))
-
-  expect_identical(
-    vapply(seen, revision_arg, character(1)),
-    c(
-      "explicit-commit",
-      "environment-commit",
-      "saved-commit",
-      ""
-    )
-  )
-})
-
-test_that("local bridge surfaces structured Python dependency diagnostics", {
-  audio <- local_stt_audio()
-  on.exit(unlink(audio), add = TRUE)
-
-  fake_runner <- function(command, args, timeout_secs, environment) {
-    output <- args[[match("--output", args) + 1L]]
-    writeLines(
-      paste0(
-        '{"ok":false,"error_type":"ModuleNotFoundError",',
-        '"error":"No module named transformers",',
-        '"hint":"Install PyTorch and Transformers in the selected environment."}'
-      ),
-      output,
-      useBytes = TRUE
-    )
-    list(status = 1L, output = "python failed")
-  }
-
-  expect_error(
-    genflow:::.stt_local_hf(
-      audio_path = audio,
-      model = "openai/whisper-small",
-      language = NULL,
-      prompt = NULL,
-      timeout_secs = 30,
-      python = file.path(R.home("bin"), "R"),
-      runner = fake_runner
-    ),
-    "ModuleNotFoundError.*Install PyTorch and Transformers"
-  )
-})
-
-test_that("MOSS remote code opt-out fails before starting Python", {
-  audio <- local_stt_audio()
-  on.exit(unlink(audio), add = TRUE)
-
-  expect_error(
-    genflow:::.stt_local_hf(
-      audio_path = audio,
-      model = "OpenMOSS-Team/MOSS-Transcribe-Diarize",
-      language = NULL,
-      prompt = NULL,
-      timeout_secs = 30,
-      profile = "moss",
-      python = file.path(R.home("bin"), "R"),
-      trust_remote_code = FALSE,
-      runner = function(...) stop("runner must not be called")
-    ),
-    "requires `trust_remote_code = TRUE`"
-  )
 })
 
 test_that("local OpenAI-compatible STT sends the standard multipart contract", {
@@ -562,10 +281,6 @@ test_that("local OpenAI-compatible STT sends the standard multipart contract", {
 
 test_that("local STT aliases and endpoint validation are deterministic", {
   expect_identical(
-    genflow:::.stt_normalize_service("huggingface_local"),
-    "hf-local"
-  )
-  expect_identical(
     genflow:::.stt_normalize_service("openai-compatible"),
     "local-openai"
   )
@@ -573,9 +288,6 @@ test_that("local STT aliases and endpoint validation are deterministic", {
     genflow:::.stt_local_transcriptions_url("http://localhost:9000"),
     "http://localhost:9000/v1/audio/transcriptions"
   )
-  expect_identical(genflow:::.stt_validate_device("hip"), "hip")
-  expect_identical(genflow:::.stt_validate_dtype("bf16"), "bfloat16")
-  expect_error(genflow:::.stt_validate_device("gpu"), "`device`")
   expect_error(genflow:::.stt_local_transcriptions_url("localhost:9000"), "http")
 })
 
@@ -677,6 +389,189 @@ test_that("native engine registry and auto-selection are deterministic", {
     ),
     "moss-transcribe"
   )
+  expect_identical(
+    genflow:::.stt_resolve_native_engine(
+      model = "downloaded-model-q8_0.gguf",
+      config = config
+    ),
+    "crispasr"
+  )
+  config$stt_native_executable <- "/opt/bin/moss-transcribe"
+  expect_identical(
+    genflow:::.stt_resolve_native_engine(
+      model = "downloaded-model-q8_0.gguf",
+      config = config
+    ),
+    "crispasr"
+  )
+})
+
+test_that("native engine overrides do not inherit another engine executable", {
+  audio <- local_stt_audio()
+  model <- tempfile("moss-model-", fileext = ".gguf")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_ENGINE = NA,
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_MOSS_CPP_EXECUTABLE = NA,
+    GENFLOW_MOSS_CPP_MODEL = NA,
+    GENFLOW_MOSS_CPP_DEVICE = NA
+  ))
+
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "crispasr"
+  config$stt_native_executable <- "/saved/crispasr"
+  seen <- character()
+  testthat::local_mocked_bindings(
+    .genflow_read_local_config = function(...) config,
+    .stt_resolve_native_executable = function(engine,
+                                              executable = NULL,
+                                              config = NULL) {
+      seen <<- c(seen, executable)
+      file.path(R.home("bin"), "R")
+    },
+    .stt_local_moss_cpp = function(...) {
+      list(
+        text = "ok",
+        metadata = list(
+          engine = "moss-transcribe",
+          backend = "moss-diarize",
+          model = model
+        )
+      )
+    },
+    .package = "genflow"
+  )
+
+  genflow:::.stt_local_native(
+    audio_path = audio,
+    model = model,
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    native_engine = "moss-transcribe"
+  )
+  expect_identical(seen[[1]], "")
+
+  withr::local_envvar(GENFLOW_STT_NATIVE_ENGINE = "moss-transcribe")
+  genflow:::.stt_local_native(
+    audio_path = audio,
+    model = model,
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10
+  )
+  expect_identical(seen[[2]], "")
+
+  genflow:::.stt_local_native(
+    audio_path = audio,
+    model = model,
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    executable = "/explicit/moss-transcribe",
+    native_engine = "moss-transcribe"
+  )
+  expect_identical(seen[[3]], "/explicit/moss-transcribe")
+})
+
+test_that("a concrete model does not leak a stale backend into engine selection", {
+  audio <- local_stt_audio()
+  model <- tempfile("moss-model-", fileext = ".gguf")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_ENGINE = NA,
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_STT_NATIVE_BACKEND = NA,
+    GENFLOW_MOSS_CPP_EXECUTABLE = NA,
+    GENFLOW_MOSS_CPP_MODEL = NA,
+    GENFLOW_MOSS_CPP_DEVICE = NA
+  ))
+
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "auto"
+  config$stt_native_executable <- "/saved/moss-transcribe"
+  config$stt_native_backend <- "whisper"
+  testthat::local_mocked_bindings(
+    .genflow_read_local_config = function(...) config,
+    .stt_resolve_native_executable = function(...) {
+      file.path(R.home("bin"), "R")
+    },
+    .stt_local_moss_cpp = function(...) {
+      list(
+        text = "ok",
+        metadata = list(
+          engine = "moss-transcribe",
+          backend = "moss-diarize",
+          model = model
+        )
+      )
+    },
+    .package = "genflow"
+  )
+
+  result <- genflow:::.stt_local_native(
+    audio_path = audio,
+    model = model,
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10
+  )
+
+  expect_identical(result$metadata$engine, "moss-transcribe")
+  expect_identical(result$metadata$backend, "moss-diarize")
+})
+
+test_that("a catalog model does not reuse an auto engine's stale executable", {
+  audio <- local_stt_audio()
+  on.exit(unlink(audio), add = TRUE)
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_ENGINE = NA,
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_STT_NATIVE_BACKEND = NA,
+    GENFLOW_MOSS_CPP_EXECUTABLE = NA,
+    GENFLOW_MOSS_CPP_MODEL = NA,
+    GENFLOW_MOSS_CPP_DEVICE = NA
+  ))
+
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "auto"
+  config$stt_native_executable <- "/saved/moss-transcribe"
+  seen <- NULL
+  testthat::local_mocked_bindings(
+    .genflow_read_local_config = function(...) config,
+    .stt_resolve_native_executable = function(engine,
+                                              executable = NULL,
+                                              config = NULL) {
+      seen <<- list(engine = engine, executable = executable)
+      file.path(R.home("bin"), "R")
+    },
+    .stt_native_crispasr = function(...) {
+      list(
+        text = "ok",
+        metadata = list(
+          engine = "crispasr",
+          backend = "granite",
+          model = "managed-model.gguf"
+        )
+      )
+    },
+    .package = "genflow"
+  )
+
+  result <- genflow:::.stt_local_native(
+    audio_path = audio,
+    model = "managed-model.gguf",
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10
+  )
+
+  expect_identical(seen$engine, "crispasr")
+  expect_identical(seen$executable, "")
+  expect_identical(result$metadata$engine, "crispasr")
 })
 
 test_that("CrispASR normalizes JSON segments and routes Vulkan controls", {
@@ -838,7 +733,11 @@ test_that("CrispASR remote model syntax is explicit and auto-download is bounded
 
   references <- c(
     "hf://cstr/moss-diarize-GGUF:moss-q4.gguf",
-    "hf://cstr/moss-diarize-GGUF/moss-q4.gguf"
+    "hf://cstr/moss-diarize-GGUF/moss-q4.gguf",
+    paste0(
+      "https://huggingface.co/cstr/moss-diarize-GGUF/",
+      "blob/main/moss-q4.gguf"
+    )
   )
   for (reference in references) {
     seen <- NULL
@@ -1278,110 +1177,118 @@ test_that("gen_stt forwards the public native quant argument", {
   expect_identical(seen$native_quant, "q8_0")
 })
 
-test_that("local-native auto engine honors a configured MOSS model", {
-  audio <- local_stt_audio()
-  model <- tempfile("moss-configured-", fileext = ".gguf")
-  config_path <- tempfile(fileext = ".json")
-  writeBin(as.raw(c(1, 2, 3)), model)
-  on.exit(unlink(c(audio, model, config_path)), add = TRUE)
-  old_config_path <- getOption("genflow.local_config_path")
-  options(genflow.local_config_path = config_path)
-  on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
-
-  gen_local_config(
-    stt_native_engine = "auto",
-    stt_native_executable = "",
-    stt_native_model = model,
-    stt_native_backend = "moss-diarize",
-    stt_native_quant = "q8_0",
-    stt_native_device = "cpu",
-    path = config_path
-  )
-
-  seen <- NULL
-  testthat::local_mocked_bindings(
-    .genflow_resolve_executable = function(value,
-                                            alternatives = character()) {
-      candidates <- c(value, alternatives)
-      r_executable <- file.path(R.home("bin"), "R")
-      if ("moss-transcribe" %in% candidates ||
-          identical(value, r_executable)) {
-        r_executable
-      } else {
-        ""
-      }
-    },
-    .package = "genflow"
-  )
-
-  result <- genflow:::.stt_local_native(
-    audio_path = audio,
-    model = "auto",
-    language = NULL,
-    prompt = NULL,
-    timeout_secs = 10,
-    runner = function(command, args, timeout_secs, environment) {
-      seen <<- list(
-        command = command,
-        args = args,
-        timeout_secs = timeout_secs,
-        environment = environment
-      )
-      list(
-        status = 0L,
-        output = paste0(
-          '{"segments":[{"start":0,"end":1,',
-          '"speaker":"S01","text":"configured MOSS"}]}'
-        )
-      )
-    }
-  )
-
-  expected_model <- normalizePath(model, winslash = "/", mustWork = TRUE)
-  expect_identical(result$text, "configured MOSS")
-  expect_identical(result$metadata$engine, "moss-transcribe")
-  expect_identical(result$metadata$model, expected_model)
-  expect_identical(result$metadata$requested_model, "auto")
-  expect_identical(result$metadata$resolution_source, "configured")
-  expect_identical(seen$args[[1]], "transcribe")
-  expect_identical(seen$args[[2]], expected_model)
-})
-
-test_that("local-native auto honors a configured model before registry quant", {
+test_that("an explicit local-native auto model ignores a saved concrete model", {
   audio <- local_stt_audio()
   config_path <- tempfile(fileext = ".json")
   on.exit(unlink(c(audio, config_path)), add = TRUE)
   old_config_path <- getOption("genflow.local_config_path")
   options(genflow.local_config_path = config_path)
   on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_ENGINE = NA,
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_STT_NATIVE_MODEL = NA,
+    GENFLOW_STT_NATIVE_BACKEND = NA,
+    GENFLOW_STT_NATIVE_QUANT = NA,
+    GENFLOW_STT_NATIVE_DEVICE = NA,
+    GENFLOW_MOSS_CPP_EXECUTABLE = NA,
+    GENFLOW_MOSS_CPP_MODEL = NA,
+    GENFLOW_MOSS_CPP_DEVICE = NA
+  ))
 
-  selected_model <- paste0(
-    "hf://owner/repository:",
-    "selected-Q8_0.gguf"
-  )
   gen_local_config(
     stt_native_engine = "crispasr",
     stt_native_executable = file.path(R.home("bin"), "R"),
-    stt_native_model = selected_model,
+    stt_native_model = "hf://owner/repository:saved-Q8_0.gguf",
     stt_native_backend = "granite-4.1",
     stt_native_quant = "q8_0",
     stt_native_device = "cpu",
     path = config_path
   )
 
-  seen <- list()
+  seen <- NULL
+  result <- genflow:::.stt_local_native(
+    audio_path = audio,
+    model = "auto",
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    runner = function(command, args, ...) {
+      seen <<- args
+      output_base <- args[[match("-of", args) + 1L]]
+      jsonlite::write_json(
+        list(
+          crispasr = list(
+            backend = "granite",
+            model = "registry-Q8_0.gguf"
+          ),
+          transcription = list(list(
+            offsets = list(from = 0L, to = 1000L),
+            text = "registry model"
+          ))
+        ),
+        paste0(output_base, ".json"),
+        auto_unbox = TRUE
+      )
+      list(status = 0L, output = character())
+    }
+  )
+
+  model_position <- match("-m", seen)
+  quant_position <- match("--model-quant", seen)
+  expect_identical(seen[[model_position + 1L]], "auto")
+  expect_false("--hf-repo" %in% seen)
+  expect_false(is.na(quant_position))
+  expect_identical(seen[[quant_position + 1L]], "q8_0")
+  expect_identical(result$text, "registry model")
+  expect_identical(result$metadata$engine, "crispasr")
+  expect_identical(result$metadata$model, "auto")
+  expect_identical(result$metadata$requested_model, "auto")
+  expect_identical(result$metadata$resolution_source, "registry")
+  expect_identical(result$metadata$requested_quant, "q8_0")
+})
+
+test_that("a concrete local-native model ignores a saved legacy backend", {
+  audio <- local_stt_audio()
+  model <- tempfile("concrete-model-", fileext = ".gguf")
+  config_path <- tempfile(fileext = ".json")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model, config_path)), add = TRUE)
+  old_config_path <- getOption("genflow.local_config_path")
+  options(genflow.local_config_path = config_path)
+  on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_ENGINE = NA,
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_STT_NATIVE_MODEL = NA,
+    GENFLOW_STT_NATIVE_BACKEND = NA,
+    GENFLOW_STT_NATIVE_QUANT = NA,
+    GENFLOW_STT_NATIVE_DEVICE = NA
+  ))
+
+  gen_local_config(
+    stt_native_engine = "crispasr",
+    stt_native_executable = file.path(R.home("bin"), "R"),
+    stt_native_model = "auto",
+    stt_native_backend = "whisper",
+    stt_native_quant = "q8_0",
+    stt_native_device = "cpu",
+    path = config_path
+  )
+
+  seen <- NULL
   fake_runner <- function(command, args, ...) {
-    seen[[length(seen) + 1L]] <<- args
+    seen <<- args
     output_base <- args[[match("-of", args) + 1L]]
     jsonlite::write_json(
       list(
         crispasr = list(
           backend = "granite",
-          model = "selected-Q8_0.gguf"
+          model = basename(model)
         ),
         transcription = list(list(
           offsets = list(from = 0L, to = 1000L),
-          text = "configured model"
+          text = "concrete model"
         ))
       ),
       paste0(output_base, ".json"),
@@ -1390,37 +1297,117 @@ test_that("local-native auto honors a configured model before registry quant", {
     list(status = 0L, output = character())
   }
 
-  configured <- genflow:::.stt_local_native(
+  result <- genflow:::.stt_local_native(
     audio_path = audio,
-    model = "auto",
+    model = model,
     language = NULL,
     prompt = NULL,
     timeout_secs = 10,
     runner = fake_runner
   )
-  expect_true("--hf-repo" %in% seen[[1]])
-  expect_false("--model-quant" %in% seen[[1]])
-  expect_identical(configured$metadata$model, selected_model)
-  expect_identical(configured$metadata$requested_model, "auto")
-  expect_identical(configured$metadata$resolution_source, "configured")
-  expect_null(configured$metadata$requested_quant)
 
-  gen_local_config(
-    stt_native_model = "auto",
-    path = config_path
+  expect_false("--backend" %in% seen)
+  expect_false("--model-quant" %in% seen)
+  expect_identical(result$text, "concrete model")
+  expect_identical(result$metadata$backend, "granite")
+  expect_null(result$metadata$requested_backend)
+  expect_identical(
+    result$metadata$model,
+    normalizePath(model, winslash = "/", mustWork = TRUE)
   )
-  registry <- genflow:::.stt_local_native(
+  expect_identical(result$metadata$requested_model, model)
+  expect_identical(result$metadata$resolution_source, "argument")
+})
+
+test_that("CrispASR resolves a catalog basename only from its managed cache", {
+  audio <- local_stt_audio()
+  cache_dir <- tempfile("genflow-crispasr-cache-")
+  working_dir <- tempfile("genflow-crispasr-working-")
+  dir.create(cache_dir)
+  dir.create(working_dir)
+  filename <- "granite-speech-4.1-2b-q8_0.gguf"
+  model <- file.path(cache_dir, filename)
+  writeBin(as.raw(c(1, 2, 3)), model)
+  writeBin(as.raw(c(9, 9, 9)), file.path(working_dir, filename))
+  on.exit(
+    unlink(c(audio, cache_dir, working_dir), recursive = TRUE),
+    add = TRUE
+  )
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+  withr::local_dir(working_dir)
+
+  seen <- NULL
+  result <- genflow:::.stt_native_crispasr(
     audio_path = audio,
-    model = "auto",
+    model = filename,
     language = NULL,
     prompt = NULL,
     timeout_secs = 10,
-    runner = fake_runner
+    executable = file.path(R.home("bin"), "R"),
+    native_device = "cpu",
+    runner = function(command, args, ...) {
+      seen <<- args
+      output_base <- args[[match("-of", args) + 1L]]
+      jsonlite::write_json(
+        list(
+          crispasr = list(
+            backend = "granite",
+            model = filename
+          ),
+          transcription = list(list(
+            offsets = list(from = 0L, to = 1000L),
+            text = "cached catalog model"
+          ))
+        ),
+        paste0(output_base, ".json"),
+        auto_unbox = TRUE
+      )
+      list(status = 0L, output = character())
+    }
   )
-  quant_position <- match("--model-quant", seen[[2]])
-  expect_false(is.na(quant_position))
-  expect_identical(seen[[2]][[quant_position + 1L]], "q8_0")
-  expect_identical(registry$metadata$requested_model, "auto")
-  expect_identical(registry$metadata$resolution_source, "registry")
-  expect_identical(registry$metadata$requested_quant, "q8_0")
+
+  expected_model <- normalizePath(model, winslash = "/", mustWork = TRUE)
+  model_position <- match("-m", seen)
+  expect_identical(seen[[model_position + 1L]], expected_model)
+  expect_identical(result$text, "cached catalog model")
+  expect_identical(result$metadata$model, expected_model)
+  expect_identical(result$metadata$model_kind, "file")
+})
+
+test_that("CrispASR catalog basenames never fall back to the working directory", {
+  audio <- local_stt_audio()
+  cache_dir <- tempfile("genflow-crispasr-cache-")
+  working_dir <- tempfile("genflow-crispasr-working-")
+  dir.create(cache_dir)
+  dir.create(working_dir)
+  filename <- "stale-catalog-model.gguf"
+  writeBin(as.raw(c(1, 2, 3)), file.path(working_dir, filename))
+  on.exit(
+    unlink(c(audio, cache_dir, working_dir), recursive = TRUE),
+    add = TRUE
+  )
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+  withr::local_dir(working_dir)
+
+  expect_error(
+    genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      model = filename,
+      language = NULL,
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_device = "cpu",
+      runner = function(...) {
+        fail("The runner must not receive a working-directory model.")
+      }
+    ),
+    "not found in the managed cache"
+  )
 })

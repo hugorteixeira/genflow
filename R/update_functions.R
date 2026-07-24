@@ -1608,20 +1608,11 @@
 
 #' Hugging Face Hub catalog task groups (internal)
 #'
-#' Remote rows are restricted to models with a live Inference Provider mapping.
-#' Local rows intentionally use a separate service/catalog so Hub-only models do
-#' not get routed through the remote Hugging Face adapter.
+#' Rows are restricted to models with a live Inference Provider mapping.
 #'
 #' @keywords internal
 #' @noRd
-.hf_catalog_tasks <- function(local = FALSE) {
-  if (isTRUE(local)) {
-    return(c(
-      "automatic-speech-recognition",
-      "audio-text-to-text"
-    ))
-  }
-
+.hf_catalog_tasks <- function() {
   c(
     "text-generation",
     "text2text-generation",
@@ -1634,17 +1625,6 @@
     "text-to-speech",
     "text-to-audio"
   )
-}
-
-#' Hugging Face models with explicit local runtime profiles (internal)
-#'
-#' These ids are fetched directly in addition to ranked Hub searches so a tested
-#' adapter does not disappear from the catalog when download/trending ranks move.
-#'
-#' @keywords internal
-#' @noRd
-.hf_local_featured_models <- function() {
-  c("OpenMOSS-Team/MOSS-Transcribe-Diarize")
 }
 
 #' Extract the next Hugging Face pagination URL (internal)
@@ -1834,7 +1814,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.hf_model_description <- function(model_info, live_providers = character(), local = FALSE) {
+.hf_model_description <- function(model_info, live_providers = character()) {
   scalar <- function(value, default = "") {
     if (is.null(value) || !length(value)) {
       return(default)
@@ -1857,7 +1837,7 @@
   parts <- c(
     if (nzchar(task)) paste0("task=", task) else NULL,
     if (nzchar(library_name)) paste0("library=", library_name) else NULL,
-    if (isTRUE(local)) "inference=local" else if (length(live_providers)) {
+    if (length(live_providers)) {
       paste0("providers=", paste(sort(live_providers), collapse = "|"))
     } else NULL,
     if (nzchar(downloads)) paste0("downloads=", downloads) else NULL,
@@ -1908,8 +1888,7 @@
       pricing = "",
       description = .hf_model_description(
         model_info,
-        live_providers = live_providers,
-        local = !isTRUE(require_live_provider)
+        live_providers = live_providers
       )
     )
   })
@@ -2187,7 +2166,7 @@
 #' @noRd
 .update_models_hf <- function(directory = NULL,
                               verbose = TRUE,
-                              tasks = .hf_catalog_tasks(local = FALSE),
+                              tasks = .hf_catalog_tasks(),
                               limit_per_query = 50L,
                               page_size = 50L,
                               timeout = 60,
@@ -2202,42 +2181,6 @@
     sorts = "downloads",
     featured_models = character(),
     require_live_provider = TRUE,
-    limit_per_query = limit_per_query,
-    page_size = page_size,
-    timeout = timeout,
-    verbose = verbose,
-    fetch_page = fetch_page
-  )
-}
-
-#' Update local Hugging Face speech-model candidates (internal)
-#'
-#' Hub-only models are written to the separate `hf-local.csv` catalog with
-#' service `hf-local`; they are never advertised as remotely routable `hf`
-#' models. Download and popularity sorts keep established models while also
-#' surfacing new local speech releases.
-#'
-#' @keywords internal
-#' @noRd
-.update_models_hf_local <- function(directory = NULL,
-                                    verbose = TRUE,
-                                    tasks = .hf_catalog_tasks(local = TRUE),
-                                    sorts = c("downloads", "trendingScore"),
-                                    featured_models = .hf_local_featured_models(),
-                                    limit_per_query = 50L,
-                                    page_size = 50L,
-                                    timeout = 60,
-                                    fetch_page = .hf_fetch_models_page) {
-  if (is.null(directory) || !length(directory) || is.na(directory[[1]]) || !nzchar(directory[[1]])) {
-    directory <- tools::R_user_dir("agent_models", which = "data")
-  }
-  .update_models_hf_catalog(
-    directory = directory,
-    service = "hf-local",
-    tasks = tasks,
-    sorts = sorts,
-    featured_models = featured_models,
-    require_live_provider = FALSE,
     limit_per_query = limit_per_query,
     page_size = page_size,
     timeout = timeout,
@@ -2528,11 +2471,172 @@
   invisible(output_df)
 }
 
+#' Update the downloaded native STT model catalog (internal)
+#'
+#' Materializes regular models managed by the canonical CrispASR cache as the
+#' `local-native` provider. Catalog model ids are flat cache filenames rather
+#' than machine-specific absolute paths.
+#'
+#' @param directory Character path where `local-native.csv` will be saved.
+#' @param verbose Logical flag to print progress.
+#' @param inventory_fn Internal inventory function used by tests.
+#' @return Invisibly returns the normalized catalog data frame.
+#' @keywords internal
+#' @noRd
+.update_models_local_native <- function(
+  directory = NULL,
+  verbose = TRUE,
+  inventory_fn = .genflow_crispasr_inventory
+) {
+  if (is.null(directory) || !length(directory) ||
+      is.na(directory[[1]]) || !nzchar(trimws(directory[[1]]))) {
+    directory <- tools::R_user_dir("agent_models", which = "data")
+  }
+  directory <- path.expand(as.character(directory[[1]]))
+  if (!dir.exists(directory)) {
+    if (verbose) message("Creating directory: ", directory)
+    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!dir.exists(directory)) {
+    stop("Failed to create model directory: ", directory, call. = FALSE)
+  }
+  if (!is.function(inventory_fn)) {
+    stop("`inventory_fn` must be a function.", call. = FALSE)
+  }
+
+  inventory <- inventory_fn()
+  required <- c(
+    "path", "filename", "quant", "size", "source_url", "managed"
+  )
+  if (!is.data.frame(inventory) ||
+      length(setdiff(required, names(inventory)))) {
+    stop(
+      "CrispASR returned an invalid native model inventory.",
+      call. = FALSE
+    )
+  }
+
+  managed <- !is.na(inventory$managed) & inventory$managed
+  inventory <- inventory[managed, , drop = FALSE]
+  filenames <- if (nrow(inventory)) {
+    vapply(
+      inventory$filename,
+      function(filename) {
+        tryCatch(
+          .genflow_crispasr_validate_filename(filename),
+          error = function(e) ""
+        )
+      },
+      character(1)
+    )
+  } else {
+    character()
+  }
+  valid_filename <- nzchar(filenames)
+  inventory <- inventory[valid_filename, , drop = FALSE]
+  filenames <- filenames[valid_filename]
+  if (!nrow(inventory)) {
+    output_df <- data.frame(
+      service = character(),
+      model = character(),
+      type = character(),
+      pricing = character(),
+      description = character(),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    path_filenames <- basename(as.character(inventory$path))
+    if (any(filenames != path_filenames)) {
+      stop(
+        "CrispASR returned an inconsistent managed model inventory.",
+        call. = FALSE
+      )
+    }
+
+    scalar_text <- function(value) {
+      value <- trimws(as.character(value %||% "")[1])
+      if (is.na(value)) "" else value
+    }
+    description <- vapply(seq_len(nrow(inventory)), function(index) {
+      quant <- scalar_text(inventory$quant[[index]])
+      size <- scalar_text(inventory$size[[index]])
+      source <- scalar_text(inventory$source_url[[index]])
+      paste(
+        c(
+          "engine=crispasr",
+          if (nzchar(quant)) paste0("quant=", quant),
+          if (nzchar(size)) paste0("size=", size),
+          if (nzchar(source)) paste0("source=", source)
+        ),
+        collapse = "; "
+      )
+    }, character(1))
+
+    output_df <- data.frame(
+      service = rep("local-native", length(filenames)),
+      model = filenames,
+      type = rep("Audio", length(filenames)),
+      pricing = rep("", length(filenames)),
+      description = description,
+      stringsAsFactors = FALSE
+    )
+    output_df <- output_df[
+      !duplicated(output_df$model),
+      ,
+      drop = FALSE
+    ]
+    output_df <- output_df[
+      order(tolower(output_df$model)),
+      ,
+      drop = FALSE
+    ]
+    rownames(output_df) <- NULL
+  }
+
+  file_path <- file.path(directory, "local-native.csv")
+  tryCatch(
+    utils::write.table(
+      output_df,
+      file = file_path,
+      sep = ",",
+      quote = TRUE,
+      qmethod = "double",
+      row.names = FALSE,
+      col.names = TRUE,
+      na = "",
+      fileEncoding = "UTF-8"
+    ),
+    error = function(e) {
+      stop(
+        "Error writing native STT model catalog: ",
+        conditionMessage(e),
+        call. = FALSE
+      )
+    }
+  )
+  if (verbose) {
+    message(
+      "File 'local-native.csv' updated successfully with ",
+      nrow(output_df),
+      " model(s)."
+    )
+  }
+  invisible(output_df)
+}
+
 .genflow_catalog_columns <- function() {
   c("model", "type", "pricing", "description")
 }
 
-.genflow_validate_catalog_file <- function(path, provider) {
+.genflow_validate_catalog_file <- function(
+  path,
+  provider,
+  allow_empty = FALSE
+) {
+  if (!is.logical(allow_empty) || length(allow_empty) != 1L ||
+      is.na(allow_empty)) {
+    stop("`allow_empty` must be TRUE or FALSE.", call. = FALSE)
+  }
   if (!file.exists(path) || isTRUE(file.info(path)$isdir[[1]])) {
     stop("Updater did not produce the expected catalog file.", call. = FALSE)
   }
@@ -2555,8 +2659,8 @@
       )
     }
   )
-  if (!is.data.frame(catalog) || !nrow(catalog)) {
-    stop("Updater produced a catalog without model rows.", call. = FALSE)
+  if (!is.data.frame(catalog)) {
+    stop("Updater produced an invalid catalog.", call. = FALSE)
   }
   if (anyDuplicated(names(catalog))) {
     stop("Updater produced a catalog with duplicate column names.", call. = FALSE)
@@ -2572,6 +2676,13 @@
       ".",
       call. = FALSE
     )
+  }
+
+  if (!nrow(catalog)) {
+    if (isTRUE(allow_empty)) {
+      return(invisible(catalog))
+    }
+    stop("Updater produced a catalog without model rows.", call. = FALSE)
   }
 
   model_values <- trimws(as.character(catalog$model))
@@ -2690,6 +2801,7 @@
                                         directory,
                                         verbose = TRUE,
                                         update_args = list(),
+                                        allow_empty = FALSE,
                                         promote_fn = .genflow_promote_catalog_file) {
   provider <- as.character(provider)[[1]]
   safe_provider <- gsub("[^a-z0-9._-]+", "-", tolower(provider), perl = TRUE)
@@ -2714,7 +2826,11 @@
   )
   update_result <- do.call(update_function, call_args)
   staged_path <- file.path(staging_dir, paste0(provider, ".csv"))
-  .genflow_validate_catalog_file(staged_path, provider = provider)
+  .genflow_validate_catalog_file(
+    staged_path,
+    provider = provider,
+    allow_empty = allow_empty
+  )
 
   final_path <- file.path(directory, paste0(provider, ".csv"))
   promoted <- promote_fn(staged_path, final_path)
@@ -2745,7 +2861,8 @@
 #'        Otherwise one of the built-ins ("openrouter", "openai", "anthropic",
 #'        "groq", "cerebras", "together", "sambanova", "nebius", "deepseek",
 #'        "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini",
-#'        "fal", "replicate", "hf", "hf-local", "ollama", "llamacpp") or a custom provider id
+#'        "fal", "replicate", "hf", "ollama", "llamacpp", "local-native") or
+#'        a custom provider id
 #'        configured with [set_provider_openai_compat()].
 #' @param directory Character path where CSVs will be saved. Defaults to working dir.
 #' @param verbose Logical flag to print progress messages.
@@ -2784,7 +2901,8 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
   builtin_providers <- c(
     "openrouter", "openai", "anthropic", "groq", "cerebras", "together", "sambanova",
     "nebius", "deepseek", "perplexity", "fireworks", "deepinfra", "hyperbolic",
-    "gemini", "fal", "replicate", "hf", "hf-local", "ollama", "llamacpp"
+    "gemini", "fal", "replicate", "hf", "ollama", "llamacpp",
+    "local-native"
   )
   custom_provider_cfgs <- .genflow_list_custom_provider_configs()
   custom_providers <- names(custom_provider_cfgs)
@@ -2830,9 +2948,13 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     "fal"        = list(func = ".update_models_fal",        name = "Fal"),
     "replicate"  = list(func = ".update_models_replicate",  name = "Replicate"),
     "hf"         = list(func = ".update_models_hf",         name = "Hugging Face"),
-    "hf-local"   = list(func = ".update_models_hf_local",   name = "Hugging Face local"),
     "ollama"     = list(func = ".update_models_ollama",     name = "Ollama"),
-    "llamacpp"   = list(func = ".update_models_llamacpp",   name = "llama-cpp")
+    "llamacpp"   = list(func = ".update_models_llamacpp",   name = "llama-cpp"),
+    "local-native" = list(
+      func = ".update_models_local_native",
+      name = "Native STT",
+      allow_empty = TRUE
+    )
   )
 
   # Track progress
@@ -2852,7 +2974,8 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
           provider = prov,
           update_function = update_info$func,
           directory = directory,
-          verbose = verbose
+          verbose = verbose,
+          allow_empty = isTRUE(update_info$allow_empty)
         )
         updated_providers <- c(updated_providers, prov)
       }, error = function(e) {
@@ -2980,6 +3103,13 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
   }
   base_names <- tolower(tools::file_path_sans_ext(basename(csv_paths)))
+  active_files <- !.genflow_is_retired_service(base_names)
+  csv_paths <- csv_paths[active_files]
+  base_names <- base_names[active_files]
+  if (!length(csv_paths)) {
+    if (verbose) message("No active provider CSV files found in ", directory)
+    return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
+  }
   if (!is.null(providers)) {
     p_sel <- tolower(trimws(as.character(unlist(providers))))
     sel <- base_names %in% p_sel
@@ -2997,6 +3127,8 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     if (all(is.na(df$provider)) || !nzchar(df$provider[1])) {
       df$provider <- tolower(tools::file_path_sans_ext(basename(p)))
     }
+    df <- df[!.genflow_is_retired_service(df$provider), , drop = FALSE]
+    if (!nrow(df)) return(NULL)
     df
   })
   dfs <- Filter(Negate(is.null), dfs)

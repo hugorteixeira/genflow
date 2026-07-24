@@ -12,8 +12,8 @@ Current runtime surfaces:
 
 - `gen_txt()`: cloud providers plus local Ollama and llama.cpp servers.
 - `gen_img()`: OpenAI, Hugging Face Inference Providers, Replicate, and FAL.
-- `gen_stt()`: cloud transcription, local Hugging Face/Transformers models,
-  native STT engines, and OpenAI-compatible local STT servers.
+- `gen_stt()`: cloud transcription, native STT engines, and
+  OpenAI-compatible local STT servers.
 - `gen_tts()`: OpenAI and Replicate.
 
 The package is experimental. Provider APIs and individual model schemas can
@@ -98,25 +98,22 @@ Refresh one or more catalogs explicitly:
 
 ```r
 gen_update_models(
-  provider = c("openai", "hf", "hf-local"),
+  provider = c("openai", "hf", "local-native"),
   fail_on_error = TRUE
 )
 
 gen_show_models(provider = "hf", type = "Chat")
-gen_show_models(provider = "hf-local", type = "Audio")
+gen_show_models(provider = "local-native", type = "Audio")
 ```
 
-The two Hugging Face catalogs have intentionally different contracts:
+`hf.csv` contains models with a live Hugging Face Inference Provider mapping;
+`service = "hf"` is remote inference. `local-native.csv` is instead a local
+inventory of compatible model files already downloaded into the managed
+CrispASR cache.
 
-- `hf.csv` contains models with a live Hugging Face Inference Provider mapping.
-- `hf-local.csv` contains Hub models suitable for local discovery, including
-  ASR and audio-to-text candidates that are not hosted by an Inference
-  Provider.
-
-This prevents the UI from presenting a local-only model as if `service = "hf"`
-could call it remotely. The model
-`OpenMOSS-Team/MOSS-Transcribe-Diarize`, for example, belongs in the local
-catalog.
+The app uses **Models** to select provider/model pairs for setups and agents.
+The **Local** tab configures runtimes and manages native model files; it is not
+a second model picker.
 
 Gemini model discovery and text generation accept `GOOGLE_API_KEY` first and
 `GEMINI_API_KEY` as its compatibility alias. The catalog follows all model-list
@@ -150,65 +147,27 @@ llamacpp_result <- gen_txt(
 ```
 
 Default endpoints are `http://127.0.0.1:11434` for Ollama and
-`http://127.0.0.1:8080` for llama.cpp. Configure them in **Local inference**,
+`http://127.0.0.1:8080` for llama.cpp. Configure them in **Local**,
 with `gen_local_config()`, or through `OLLAMA_*` and
 `LLAMACPP_*` environment variables.
 
 genflow talks to these servers; it does not install or supervise them.
-The app keeps Ollama, llama.cpp, Hugging Face STT, native STT, and compatible
-STT servers in separate sub-tabs. Saving applies the complete configuration;
+The app keeps Ollama, llama.cpp, native STT, and compatible STT servers in
+separate sub-tabs. Saving applies the complete runtime configuration;
 **Check adapter** diagnoses only the currently selected adapter.
 
 ## Local speech-to-text
 
-`service = "hf-local"` starts an isolated Python subprocess for each
-transcription. Its default is the generic Transformers ASR pipeline with
-`openai/whisper-large-v3-turbo`; `openai/whisper-tiny` is a smaller first-run
-smoke test. A dedicated `OpenMOSS-Team/MOSS-Transcribe-Diarize` adapter remains
-available as an advanced profile with additional dependencies.
-
-```r
-gen_local_config(
-  python = "/absolute/path/to/stt-venv/bin/python",
-  hf_cache_dir = "/absolute/path/to/huggingface-cache",
-  hf_stt_model = "openai/whisper-large-v3-turbo",
-  hf_stt_profile = "transformers",
-  device = "cpu",
-  dtype = "auto"
-)
-
-gen_local_diagnostics(
-  adapters = "hf-local",
-  check_endpoints = FALSE
-)
-
-transcript <- gen_stt(
-  "meeting.wav",
-  service = "hf-local",
-  timeout_api = 1800
-)
-
-transcript$response_value
-transcript$metadata
-```
-
-To avoid Python, `service = "local-native"` invokes an external native STT
-engine. The experimental CrispASR integration is the broader option: it
-supports multiple ASR architectures and chooses a model-specific backend.
-`moss-transcribe` remains available as a MOSS-specific engine. A Vulkan build
-is independent of the PyTorch accelerator setting. Configure the compiled
-file under the CMake build directory, not the CrispASR source directory:
+`service = "local-native"` invokes an external native STT engine. CrispASR
+supports multiple compatible GGUF speech architectures; `moss-transcribe`
+remains available as a MOSS-specific engine. Configure engine/device in
+**Local**, and choose the downloaded model for a setup or agent in **Models**:
 
 ```r
 gen_local_config(
   stt_native_engine = "crispasr",
   stt_native_executable =
     "/absolute/path/to/CrispASR/build-vulkan/bin/crispasr",
-  stt_native_model = paste0(
-    "hf://cstr/granite-speech-4.1-2b-GGUF/",
-    "granite-speech-4.1-2b-q4_k.gguf"
-  ),
-  stt_native_backend = "granite-4.1",
   stt_native_device = "vulkan"
 )
 
@@ -220,6 +179,7 @@ gen_local_diagnostics(
 native_transcript <- gen_stt(
   "meeting.wav",
   service = "local-native",
+  model = "granite-speech-4.1-2b-q4_k.gguf",
   timeout_api = 1800
 )
 
@@ -234,22 +194,25 @@ the transcript and complete structured provider/runtime data remain available
 through `response_value` and `metadata`.
 
 The native model selector may be a local model path, `auto`, or a supported
-`hf://OWNER/REPO:FILE` reference. The copy-and-paste form
-`hf://OWNER/REPO/FILE` is also accepted and normalized; a filename is
-required. This is not universal Hugging Face compatibility: the selected
-engine must implement the architecture and the exact model packaging.
-In the app, the Native STT panel inventories the CrispASR cache, lets you use
-or remove a downloaded model, and can download an exact `hf://` selection
-in a cancellable background process with byte progress. Before downloading,
-genflow verifies that the named file is actually published by that repository;
-it never invents a quantized filename or silently substitutes another
-quantization. The transfer uses the repository's immutable revision and
-verifies the Hugging Face LFS SHA-256 before installing the file.
+`hf://OWNER/REPO:FILE` reference. The copy-and-paste forms
+`hf://OWNER/REPO/FILE` and
+`https://huggingface.co/OWNER/REPO/blob/main/FILE` are also accepted and
+normalized; a filename is required. This is not universal Hugging Face
+compatibility: the selected engine must implement the architecture and the
+exact model packaging.
 
-For `service = "local-native"`, an omitted model or `model = "auto"` uses the
-model selected in the saved local configuration. Select `auto` in that
-configuration to delegate to CrispASR's registry, together with a model
-architecture and optional preferred quantization.
+In **Local > Native STT**, paste either reference style into the model search
+field. **Verify** confirms the exact remote file without downloading it;
+**Download** repeats validation in a cancellable background worker with byte
+progress. The transfer uses the repository's immutable revision and verifies
+the Hugging Face LFS SHA-256 before publishing the file. The downloaded table
+only deletes managed cache entries.
+
+After download or deletion, genflow synchronizes `local-native.csv`. Model
+selection remains in **Models**, alongside every other provider. Catalog ids
+are filenames, and the runtime resolves them only inside the managed cache.
+An explicit `model = "auto"` remains a CrispASR registry request; it is not
+replaced by an old model saved in local configuration.
 
 For example, the IBM llama.cpp
 [Granite Speech GGUF repository](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-GGUF/tree/main)
@@ -257,14 +220,10 @@ uses a model GGUF plus a separate `mmproj` file. CrispASR instead needs its
 [single-file Granite Speech conversion](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF).
 Models downloaded by CrispASR normally live under `~/.cache/crispasr`, or the
 directory selected by `CRISPASR_CACHE_DIR`/`CRISPASR_MODELS_DIR`;
-`gen_local_diagnostics()` reports when the configured filename is already
-cached and refuses to reuse an entry whose CrispASR `.src` sidecar identifies
-a different artifact. This native
-cache is independent of the Python `hf_cache_dir`/`HF_HOME` setting. An
-`hf://` reference is resolved against the repository's current metadata, then
-the transfer is pinned to that exact commit and checked against its LFS
-SHA-256. For a permanently user-pinned revision, download the reviewed
-artifact yourself and configure its local file path.
+`gen_local_diagnostics()` reports the managed cache inventory. An `hf://`
+reference or supported Hugging Face `/blob/main/FILE` URL is resolved against
+the repository's current metadata, then the transfer is pinned to that exact
+commit and checked against its LFS SHA-256.
 
 CrispASR is currently experimental/beta despite its broader model coverage.
 The pre-release `moss-cpp` service name is retained only as a compatibility
@@ -283,28 +242,15 @@ server_result <- gen_stt(
 )
 ```
 
-Local Python inference is optional. It requires a compatible Python
-environment, PyTorch, Transformers, and usually FFmpeg. Whisper uses the
-generic profile without remote repository code. MOSS additionally requires
-helper code from its official GitHub project plus the custom code in its
-Hugging Face model repository. The two artifacts are separate.
+genflow does not embed Python or Transformers. If a Python runtime should own
+the model and keep it resident, expose it as an OpenAI-compatible STT server
+and use `service = "local-openai"`.
 
-The pinned MOSS helper currently requires Transformers `>=5.6.0,<6.0.0`.
-Do not upgrade a shared environment in place when another application pins an
-incompatible version. `revision` passed to `gen_stt()` pins Hugging Face model
-files only; it does not pin the separately installed helper.
+For AMD GPUs, use a Vulkan-enabled CrispASR build with
+`stt_native_device = "vulkan"`, or a separately managed compatible server.
 
-For AMD, genflow accepts `device = "rocm"`/`"hip"` and maps it to PyTorch's
-`cuda` device API, which is also how PyTorch represents HIP devices. Hardware,
-OS, PyTorch wheel, and ROCm compatibility still need to match. Diagnostics
-reject a CUDA wheel when ROCm is selected, but a real transcription remains
-the end-to-end readiness check. Selecting ROCm does not convert a CUDA PyTorch
-wheel. Native Vulkan inference uses `local-native` or a compatible server
-through `local-openai` instead.
-
-See [Local inference](inst/doc/local-inference.md) for configuration precedence,
-dependencies, native engine/model compatibility, MOSS behavior, Vulkan, server
-mode, security, and AMD diagnostics.
+See [Local runtimes](inst/doc/local-inference.md) for configuration precedence,
+native model management, Vulkan, diagnostics, and server mode.
 
 ## Images, STT, and TTS
 
@@ -477,11 +423,11 @@ gen_import_bundle(bundle, overwrite = FALSE)
 | --- | --- |
 | `gen_txt()` | Cloud and local text generation |
 | `gen_img()` | Image generation |
-| `gen_stt()` | Cloud, local Python, native GGUF, and local-server transcription |
+| `gen_stt()` | Cloud, native GGUF, and local-server transcription |
 | `gen_tts()` | Speech synthesis |
 | `gen_batch()` / `gen_batch_agent()` | Parallel, checkpointable workloads |
 | `gen_local_config()` | Read or update non-secret local settings |
-| `gen_local_diagnostics()` | Check Python, native backends, Vulkan, FFmpeg, and endpoints |
+| `gen_local_diagnostics()` | Check native backends, Vulkan, FFmpeg, and endpoints |
 | `gen_update_models()` / `gen_show_models()` | Refresh and browse catalogs |
 | `set_*()` / `get_*()` / `list_*()` | Persist setups, content, and agents |
 | `mv_*()` / `rm_*()` | Rename or remove persisted entities |

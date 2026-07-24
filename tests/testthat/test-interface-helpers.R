@@ -45,49 +45,74 @@ test_that("entity selection keeps names out of executable JavaScript", {
 
 test_that("app exposes the local inference configuration surface", {
   html <- htmltools::renderTags(genflow:::.app_ui())$html
-  expect_match(html, "Local inference", fixed = TRUE)
-  expect_match(html, "local_hf_stt_model", fixed = TRUE)
-  expect_match(html, "local_hf_revision", fixed = TRUE)
+  expect_match(html, "data-value=\"Local\"", fixed = TRUE)
+  expect_false(grepl("Local inference", html, fixed = TRUE))
+  expect_false(grepl("local_python", html, fixed = TRUE))
+  expect_false(grepl("local_device", html, fixed = TRUE))
+  expect_false(grepl("local_dtype", html, fixed = TRUE))
+  expect_false(grepl("local_hf_stt_model", html, fixed = TRUE))
+  expect_false(grepl("local_hf_revision", html, fixed = TRUE))
   expect_match(html, "local_stt_native_engine", fixed = TRUE)
-  expect_match(html, "local_stt_native_executable", fixed = TRUE)
-  expect_match(html, "local_stt_native_model", fixed = TRUE)
-  expect_match(html, "hf://owner/repo/model.gguf", fixed = TRUE)
-  expect_match(html, "local_stt_native_backend", fixed = TRUE)
-  expect_match(html, "local_stt_native_quant", fixed = TRUE)
+  expect_false(grepl("local_stt_native_executable", html, fixed = TRUE))
+  expect_false(grepl("local_stt_native_model", html, fixed = TRUE))
+  expect_false(grepl("local_stt_native_backend", html, fixed = TRUE))
+  expect_false(grepl("local_stt_native_quant", html, fixed = TRUE))
+  expect_match(html, "local_stt_new_model_reference", fixed = TRUE)
+  expect_match(html, "local_stt_model_verify", fixed = TRUE)
+  expect_match(html, "hf://owner/repository:model.gguf", fixed = TRUE)
+  expect_match(html, "/blob/main/model.gguf", fixed = TRUE)
   expect_match(html, "local_stt_native_device", fixed = TRUE)
   expect_match(html, "local_stt_models_table", fixed = TRUE)
-  expect_match(html, "local_stt_models_refresh", fixed = TRUE)
-  expect_match(html, "local_stt_model_use", fixed = TRUE)
   expect_match(html, "local_stt_model_download", fixed = TRUE)
   expect_match(html, "local_stt_download_progress_ui", fixed = TRUE)
+  expect_match(html, "local_stt_new_model_status_ui", fixed = TRUE)
   expect_match(html, "local_stt_model_delete", fixed = TRUE)
   expect_match(html, "Downloaded models", fixed = TRUE)
-  expect_match(html, "Download current model", fixed = TRUE)
-  expect_match(html, "Choose selected", fixed = TRUE)
+  expect_match(html, "Hugging Face model link", fixed = TRUE)
+  expect_match(html, ">Download<", fixed = TRUE)
+  expect_match(html, ">Verify<", fixed = TRUE)
   expect_match(html, "Delete selected", fixed = TRUE)
-  expect_match(html, "Requested quantization", fixed = TRUE)
-  expect_match(html, "Availability is verified before download", fixed = TRUE)
+  expect_match(html, "Verify checks the exact remote file", fixed = TRUE)
   expect_lt(
-    regexpr("Download current model", html, fixed = TRUE)[[1]],
+    regexpr("Hugging Face model link", html, fixed = TRUE)[[1]],
     regexpr("Downloaded models", html, fixed = TRUE)[[1]]
   )
-  expect_false(grepl(">Use selected<", html, fixed = TRUE))
-  expect_match(html, "or an omitted model uses this selection", fixed = TRUE)
+  expect_false(grepl("local_stt_models_refresh", html, fixed = TRUE))
+  expect_false(grepl("local_stt_model_use", html, fixed = TRUE))
+  expect_false(grepl("Download current model", html, fixed = TRUE))
+  expect_false(grepl("Requested quantization", html, fixed = TRUE))
+  expect_false(grepl("local_stt_server_model", html, fixed = TRUE))
+  expect_false(grepl("__new__", html, fixed = TRUE))
+  expect_match(html, "local_adapter_tabs", fixed = TRUE)
   expect_match(
-    html,
-    "does not silently substitute another quantization",
+    genflow:::.theme_css,
+    ".gf-local-shell > .tabbable > .tab-content { padding: 32px 24px 24px; }",
     fixed = TRUE
   )
-  expect_match(html, "local_adapter_tabs", fixed = TRUE)
+  expect_match(
+    genflow:::.theme_css,
+    ".gf-local-shell > .tabbable > .tab-content { padding: 26px 16px 18px; }",
+    fixed = TRUE
+  )
+  expect_match(
+    genflow:::.theme_css,
+    ".gf-local-shell > .tabbable > .nav > li > a",
+    fixed = TRUE
+  )
+  expect_match(
+    genflow:::.theme_css,
+    ".gf-local-shell > .tabbable > .nav > li > a.active",
+    fixed = TRUE
+  )
   expect_match(html, "CrispASR \\(multiple GGUF families\\)")
   expect_match(html, "moss-transcribe.cpp \\(MOSS only\\)")
   expect_match(html, "service = \"local-native\"", fixed = TRUE)
   expect_false(grepl("local_moss_cpp_", html, fixed = TRUE))
   expect_false(grepl(">Runtime<", html, fixed = TRUE))
   expect_false(grepl(">Native STT runtime<", html, fixed = TRUE))
-  expect_match(html, "This adapter uses PyTorch", fixed = TRUE)
-  expect_match(html, "openai/whisper-large-v3-turbo", fixed = TRUE)
-  expect_match(html, "openai/whisper-tiny", fixed = TRUE)
+  expect_false(grepl("This adapter uses PyTorch", html, fixed = TRUE))
+  expect_false(grepl("openai/whisper-large-v3-turbo", html, fixed = TRUE))
+  expect_false(grepl("openai/whisper-tiny", html, fixed = TRUE))
   expect_match(html, "Advanced settings", fixed = TRUE)
   expect_match(html, "local_diagnostics_run", fixed = TRUE)
   expect_match(html, "gf-diagnostics-table", fixed = TRUE)
@@ -99,7 +124,7 @@ test_that("app exposes the local inference configuration surface", {
   expect_match(genflow:::.theme_css, "overflow-wrap: anywhere", fixed = TRUE)
 })
 
-test_that("Native STT model choices combine automatic, cached, and custom values", {
+test_that("Native STT helpers expose managed downloads and exact HF references", {
   inventory <- data.frame(
     path = c("/cache/granite-q4_k.gguf", "/models/granite-q8_0.gguf"),
     filename = c("granite-q4_k.gguf", "granite-q8_0.gguf"),
@@ -115,34 +140,101 @@ test_that("Native STT model choices combine automatic, cached, and custom values
   normalized <- genflow:::.local_native_inventory_normalize(inventory)
   expect_identical(normalized$size, c("1.00 KB", "2 KB"))
 
-  choices <- genflow:::.local_native_model_choices(
-    normalized,
+  managed <- genflow:::.local_native_managed_inventory(normalized)
+  expect_identical(managed$path, "/cache/granite-q4_k.gguf")
+  expect_identical(managed$filename, "granite-q4_k.gguf")
+  expect_identical(
+    genflow:::.local_native_hf_selector(
+      "hf://owner/repo:model-q8_0.gguf"
+    ),
     "hf://owner/repo:model-q8_0.gguf"
   )
   expect_identical(
-    unname(choices[[1]]),
-    "auto"
+    genflow:::.local_native_hf_selector(
+      "https://huggingface.co/owner/repo/blob/main/model-q8_0.gguf"
+    ),
+    "hf://owner/repo:model-q8_0.gguf"
   )
-  expect_true(all(inventory$path %in% unname(choices)))
-  expect_true("hf://owner/repo:model-q8_0.gguf" %in% unname(choices))
-
-  backend_choices <- genflow:::.local_native_backend_choices()
-  expect_identical(unname(backend_choices[[1]]), "")
+  expect_error(
+    genflow:::.local_native_hf_selector("https://example.com/model.gguf"),
+    "Hugging Face"
+  )
+  expect_error(
+    genflow:::.local_native_hf_selector(""),
+    "Enter a Hugging Face model reference",
+    fixed = TRUE
+  )
 })
 
-test_that("Hugging Face STT presets stay simple and preserve custom models", {
-  presets <- genflow:::.local_hf_stt_model_choices()
-  expect_identical(
-    unname(presets[["Whisper Large v3 Turbo (recommended)"]]),
-    "openai/whisper-large-v3-turbo"
+test_that("Native STT deletion discovers models referenced by saved state", {
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_model <- "configured.gguf"
+
+  setups <- list(
+    native = list(service = "local-native", model = "setup.gguf"),
+    remote = list(service = "hf", model = "remote/model"),
+    automatic = list(service = "local-native", model = "auto")
   )
-  expect_identical(
-    unname(presets[["Whisper Tiny (smoke test)"]]),
-    "openai/whisper-tiny"
+  agents <- list(
+    native = list(service = "moss-cpp", model = "agent.gguf"),
+    remote = list(service = "openai", model = "gpt-5")
+  )
+  referenced <- genflow:::.local_native_referenced_models(
+    config = config,
+    setup_names = names(setups),
+    agent_names = names(agents),
+    setup_reader = function(name) setups[[name]],
+    agent_reader = function(name) agents[[name]]
   )
 
-  custom <- genflow:::.local_hf_stt_model_choices("owner/custom-asr")
-  expect_true("owner/custom-asr" %in% unname(custom))
+  expect_setequal(
+    referenced,
+    c("configured.gguf", "setup.gguf", "agent.gguf")
+  )
+})
+
+test_that("Hugging Face remains the remote provider label only", {
+  expect_identical(genflow:::.model_label("hf"), "Hugging Face")
+  expect_identical(get_provider("huggingface")$label, "Hugging Face")
+  expect_false("hf-local" %in% genflow:::.model_provider_ids())
+})
+
+test_that("retired local Hugging Face ids cannot return through saved state", {
+  retired <- c(
+    "hf-local",
+    "hf_local",
+    "huggingface-local",
+    "huggingface_local",
+    "transformers"
+  )
+  favorites <- data.frame(
+    service = c(retired, "hf"),
+    model = c(paste0("legacy/", retired), "remote/model"),
+    type = "Audio",
+    stringsAsFactors = FALSE
+  )
+
+  normalized <- genflow:::.normalize_favorites(favorites, data.frame())
+  expect_identical(normalized$service, "hf")
+  expect_identical(normalized$model, "remote/model")
+
+  directory <- tempfile("genflow-retired-favorites-")
+  dir.create(directory)
+  on.exit(unlink(directory, recursive = TRUE), add = TRUE)
+  saveRDS(favorites, genflow:::.favorites_path(directory))
+  loaded <- genflow:::.load_favorites(directory)
+  expect_identical(loaded$service, "hf")
+  expect_identical(loaded$model, "remote/model")
+
+  for (service in retired) {
+    expect_error(
+      genflow:::.genflow_normalize_custom_provider_config(list(
+        id = service,
+        base_urls = "http://127.0.0.1:8000"
+      )),
+      "retired"
+    )
+  }
 })
 
 test_that("interface binds locally unless remote exposure is explicit", {

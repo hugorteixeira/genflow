@@ -56,6 +56,12 @@ environment variables. The expected order is:
 2. Run **Update selected provider** or **Update all** in the Models tab.
 3. Pick a model from the refreshed catalog in setup or agent configuration.
 
+The same ownership rule applies to local adapters: Models selects the model
+stored in a setup or agent, while Local configures runtimes and manages local
+resources. Local does not maintain a second model selection for a setup or
+agent. In particular, the STT server panel exposes only its URL; its model comes
+from Models, the setup/agent, or an explicit runtime call.
+
 ## Model Update Preflight
 
 The interface checks required credentials before calling a provider's model
@@ -72,23 +78,47 @@ gen_update_models(provider = "openai", fail_on_error = TRUE)
 The default remains compatible with prior behavior, but UI calls use checked
 mode so provider failures are visible instead of being reported as success.
 
-## Hugging Face Catalogs
+## Hugging Face Catalog
 
-Hugging Face has two different execution surfaces, so genflow keeps two
-catalogs:
-
-- `provider = "hf"` writes `hf.csv` with models that currently advertise at
-  least one live Hugging Face Inference Provider mapping.
-- `provider = "hf-local"` writes `hf-local.csv` with Hub models intended for
-  local discovery, including compatible speech-to-text candidates.
+Hugging Face is a remote provider in genflow. `provider = "hf"` writes
+`hf.csv` with models that currently advertise at least one live Hugging Face
+Inference Provider mapping.
 
 ```r
 gen_update_models(
-  provider = c("hf", "hf-local"),
+  provider = "hf",
   fail_on_error = TRUE
 )
 ```
 
 A local-only Hub model is deliberately excluded from `hf.csv`; otherwise the
 app could offer it for a remote `service = "hf"` call that cannot execute it.
-See [Local inference](local-inference.md) for local STT configuration.
+There is no `hf-local` provider/catalog and no bundled Python/Transformers
+bridge. A user-managed Python transcription service remains supported through
+the OpenAI-compatible STT server adapter described in
+[Local inference](local-inference.md).
+
+## Native STT Catalog
+
+`provider = "local-native"` writes `local-native.csv` from the canonical
+CrispASR cache:
+
+```r
+gen_update_models(
+  provider = "local-native",
+  fail_on_error = TRUE
+)
+```
+
+Only downloaded files marked as managed by genflow are listed. External model
+paths, symbolic links, and incomplete downloads do not become selectable
+catalog entries. Models are identified by their cache filename and use
+`type = "Audio"`. If the managed cache is empty, genflow publishes an empty
+catalog instead of retaining stale rows.
+
+Use **Local > Native STT** to choose the engine/device and to search, verify,
+download, monitor, or delete CrispASR cache files. Use **Models**, setup, or
+agent configuration to select which downloaded model is executed. The
+OpenAI-compatible STT server remains available under Local for a server
+operated by the user; its model choice belongs to the setup or agent rather
+than a Local fallback setting.

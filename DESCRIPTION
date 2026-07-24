@@ -19,8 +19,7 @@ RoxygenNote: 7.3.3
 License: GPL (>= 3)
 URL: https://github.com/hugorteixeira/genflow
 BugReports: https://github.com/hugorteixeira/genflow/issues
-SystemRequirements: Python (>= 3.10, optional, for local Hugging Face
-    inference), FFmpeg (optional, for audio conversion), CrispASR or
+SystemRequirements: FFmpeg (optional, for audio conversion), CrispASR or
     moss-transcribe.cpp CLI (optional, for native speech-to-text inference)
 Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
 Imports: 

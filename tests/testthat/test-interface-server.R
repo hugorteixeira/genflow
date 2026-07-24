@@ -66,6 +66,23 @@ test_that("model catalogs tolerate heterogeneous columns and invalid rows", {
     file.path(directory, "hf.csv"),
     row.names = FALSE
   )
+  retired_services <- c(
+    "hf-local",
+    "hf_local",
+    "huggingface-local",
+    "huggingface_local",
+    "transformers"
+  )
+  for (service in retired_services) {
+    write.csv(
+      data.frame(
+        service = service,
+        model = paste0("legacy/", service)
+      ),
+      file.path(directory, paste0(service, ".csv")),
+      row.names = FALSE
+    )
+  }
 
   catalog <- genflow:::.load_models_catalog(directory)
   expect_identical(
@@ -74,7 +91,11 @@ test_that("model catalogs tolerate heterogeneous columns and invalid rows", {
   )
   expect_identical(catalog$model, c("model-b", "model-a"))
   expect_identical(catalog$service, c("hf", "openai"))
-  expect_false(anyNA(genflow:::.model_service_choices(catalog)))
+  expect_false(any(startsWith(catalog$model, "legacy/")))
+  expect_false(any(catalog$service %in% retired_services))
+  service_choices <- genflow:::.model_service_choices(catalog)
+  expect_false(any(unname(service_choices) %in% retired_services))
+  expect_false(anyNA(service_choices))
   expect_false(anyNA(genflow:::.model_model_choices(catalog, "hf")))
 
   favorites <- data.frame(
@@ -84,6 +105,142 @@ test_that("model catalogs tolerate heterogeneous columns and invalid rows", {
   )
   normalized <- genflow:::.normalize_favorites(favorites, data.frame())
   expect_identical(normalized$type, "")
+})
+
+test_that("provider switch drops models from the previous provider", {
+  restore <- interface_test_scope()
+  on.exit(restore(), add = TRUE)
+
+  seen <- new.env(parent = emptyenv())
+  seen$calls <- list()
+
+  testthat::local_mocked_bindings(
+    updateSelectizeInput = function(session, inputId, choices = NULL,
+                                    selected = NULL, ...) {
+      seen$calls[[length(seen$calls) + 1L]] <- list(
+        id = inputId,
+        choices = unname(choices),
+        selected = selected
+      )
+    },
+    .package = "genflow"
+  )
+
+  shiny::testServer(genflow:::server, {
+    session$flushReact()
+    models_state$catalog <- data.frame(
+      service = c("openai", "local-native"),
+      model = c("gpt-5", "granite.gguf"),
+      type = c("Chat", "Audio"),
+      pricing = "",
+      description = "",
+      source_file = c("openai.csv", "local-native.csv")
+    )
+    session$flushReact()
+
+    session$setInputs(
+      setup_service = "openai",
+      setup_model = "gpt-5",
+      setup_type = "Chat"
+    )
+    session$flushReact()
+    seen$calls <- list()
+    session$setInputs(setup_service = "local-native")
+    session$flushReact()
+
+    setup_call <- tail(Filter(
+      \(x) identical(x$id, "setup_model"),
+      seen$calls
+    ), 1)[[1]]
+    expect_identical(setup_call$choices, "granite.gguf")
+    expect_identical(setup_call$selected, "granite.gguf")
+
+    session$setInputs(
+      agent_setup_mode = "custom",
+      agent_setup_service = "openai",
+      agent_setup_model = "gpt-5",
+      agent_setup_type = "Chat"
+    )
+    session$flushReact()
+    seen$calls <- list()
+    session$setInputs(agent_setup_service = "local-native")
+    session$flushReact()
+
+    agent_call <- tail(Filter(
+      \(x) identical(x$id, "agent_setup_model"),
+      seen$calls
+    ), 1)[[1]]
+    expect_identical(agent_call$choices, "granite.gguf")
+    expect_identical(agent_call$selected, "granite.gguf")
+  })
+})
+
+test_that("provider switch clears a previous model when the catalog is empty", {
+  restore <- interface_test_scope()
+  on.exit(restore(), add = TRUE)
+
+  seen <- new.env(parent = emptyenv())
+  seen$calls <- list()
+  latest_call <- function(id) {
+    calls <- Filter(\(x) identical(x$id, id), seen$calls)
+    tail(calls, 1)[[1]]
+  }
+
+  testthat::local_mocked_bindings(
+    updateSelectizeInput = function(session, inputId, choices = NULL,
+                                    selected = NULL, ...) {
+      seen$calls[[length(seen$calls) + 1L]] <- list(
+        id = inputId,
+        choices = unname(choices),
+        selected = selected
+      )
+    },
+    .package = "genflow"
+  )
+
+  shiny::testServer(genflow:::server, {
+    session$flushReact()
+    models_state$catalog <- data.frame(
+      service = "openai",
+      model = "gpt-5",
+      type = "Chat",
+      pricing = "",
+      description = "",
+      source_file = "openai.csv"
+    )
+    session$flushReact()
+
+    session$setInputs(
+      setup_service = "openai",
+      setup_model = "gpt-5",
+      setup_type = "Chat"
+    )
+    session$flushReact()
+    seen$calls <- list()
+    session$setInputs(setup_service = "local-native")
+    session$flushReact()
+
+    expect_identical(latest_call("setup_model")$choices, character())
+    expect_identical(latest_call("setup_model")$selected, "")
+    expect_identical(latest_call("setup_type")$choices, character())
+    expect_identical(latest_call("setup_type")$selected, "")
+
+    session$setInputs(
+      agent_setup_mode = "custom",
+      agent_setup_service = "openai",
+      agent_setup_model = "gpt-5",
+      agent_setup_type = "Chat"
+    )
+    session$flushReact()
+    seen$calls <- list()
+    session$setInputs(agent_setup_service = "local-native")
+    session$flushReact()
+
+    expect_identical(latest_call("agent_setup_model")$choices, character())
+    expect_identical(latest_call("agent_setup_model")$selected, "")
+    expect_identical(latest_call("agent_setup_type")$choices, character())
+    expect_identical(latest_call("agent_setup_type")$selected, "")
+  })
 })
 
 test_that("server starts and NULL form inputs do not terminate observers", {
@@ -176,9 +333,6 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
   on.exit(restore(), add = TRUE)
   config_path <- getOption("genflow.local_config_path")
   config <- genflow:::.genflow_local_config_defaults()
-  config$python <- "/custom/python"
-  config$hf_stt_model <- "owner/custom-stt"
-  config$hf_revision <- "reviewed-model-commit"
   config$ollama_base_url <- "http://127.0.0.1:22434"
   config$stt_native_engine <- "crispasr"
   config$stt_native_executable <- "/custom/crispasr"
@@ -208,9 +362,11 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     session$flushReact()
 
     saved <- genflow:::.genflow_read_local_config(config_path)
-    expect_identical(saved$python, config$python)
-    expect_identical(saved$hf_stt_model, config$hf_stt_model)
-    expect_identical(saved$hf_revision, config$hf_revision)
+    expect_false(any(c(
+      "python",
+      "hf_stt_model",
+      "hf_revision"
+    ) %in% names(saved)))
     expect_identical(saved$ollama_base_url, config$ollama_base_url)
     expect_identical(saved$stt_native_engine, config$stt_native_engine)
     expect_identical(saved$stt_native_executable, config$stt_native_executable)
@@ -220,29 +376,28 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     expect_identical(saved$stt_native_device, config$stt_native_device)
 
     session$setInputs(
-      local_hf_revision = "ui-selected-commit",
+      local_stt_new_model_reference = paste0(
+        "https://huggingface.co/owner/repo/blob/main/",
+        "new-model-q4_k.gguf"
+      ),
       local_config_save = 2
     )
     session$flushReact()
     saved <- genflow:::.genflow_read_local_config(config_path)
-    expect_identical(saved$hf_revision, "ui-selected-commit")
+    expect_identical(saved$stt_native_model, config$stt_native_model)
 
     session$setInputs(
       local_stt_native_engine = "moss-transcribe",
-      local_stt_native_executable = "/custom/moss-transcribe",
-      local_stt_native_model = "/models/moss.gguf",
-      local_stt_native_backend = "",
-      local_stt_native_quant = "",
       local_stt_native_device = "cpu",
       local_config_save = 3
     )
     session$flushReact()
     saved <- genflow:::.genflow_read_local_config(config_path)
     expect_identical(saved$stt_native_engine, "moss-transcribe")
-    expect_identical(saved$stt_native_executable, "/custom/moss-transcribe")
-    expect_identical(saved$stt_native_model, "/models/moss.gguf")
-    expect_identical(saved$stt_native_backend, "")
-    expect_identical(saved$stt_native_quant, "")
+    expect_identical(saved$stt_native_executable, "")
+    expect_identical(saved$stt_native_model, config$stt_native_model)
+    expect_identical(saved$stt_native_backend, config$stt_native_backend)
+    expect_identical(saved$stt_native_quant, config$stt_native_quant)
     expect_identical(saved$stt_native_device, "cpu")
 
     session$setInputs(local_diagnostics_run = 1)
@@ -255,15 +410,23 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
   })
 })
 
-test_that("Native STT model manager refreshes, selects, downloads, and deletes safely", {
+test_that("Native STT manager verifies, downloads, and deletes cached models", {
   restore <- interface_test_scope()
   on.exit(restore(), add = TRUE)
 
   inventory_calls <- 0L
+  verify_args <- NULL
   download_args <- NULL
   download_status_reads <- 0L
   removed_args <- NULL
   downloaded <- FALSE
+  starts <- 0L
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_executable <- "/opt/crispasr"
+  genflow:::.genflow_write_local_config(
+    config,
+    getOption("genflow.local_config_path")
+  )
   inventory <- data.frame(
     path = c("/cache/granite-q4_k.gguf", "/models/granite-q8_0.gguf"),
     filename = c("granite-q4_k.gguf", "granite-q8_0.gguf"),
@@ -303,10 +466,27 @@ test_that("Native STT model manager refreshes, selects, downloads, and deletes s
       rows$selected <- rows$path == configured
       rows
     },
+    .genflow_crispasr_resolve_download = function(selector,
+                                                  backend = "",
+                                                  quant = "",
+                                                  executable = "") {
+      verify_args <<- list(
+        selector = selector,
+        backend = backend,
+        quant = quant,
+        executable = executable
+      )
+      list(
+        filename = "granite-q8_0.gguf",
+        size_bytes = 2048,
+        revision = strrep("a", 40)
+      )
+    },
     .genflow_native_download_job_start = function(selector,
                                                   backend = "",
                                                   quant = "",
                                                   executable = "") {
+      starts <<- starts + 1L
       download_args <<- list(
         selector = selector,
         backend = backend,
@@ -364,37 +544,72 @@ test_that("Native STT model manager refreshes, selects, downloads, and deletes s
       state$native_models$filename,
       c("granite-q4_k.gguf", "granite-q8_0.gguf")
     )
-    expect_match(output$local_stt_models_summary, "2 files", fixed = TRUE)
-
-    session$setInputs(
-      local_stt_models_table_rows_selected = 1L,
-      local_stt_model_use = 1L
-    )
-    session$flushReact()
-    state <- reactiveValuesToList(local_state)
-    expect_match(state$native_model_status, "Click Save", fixed = TRUE)
-    expect_true(state$native_models$selected[[1]])
+    expect_match(output$local_stt_models_summary, "1 file", fixed = TRUE)
+    managed <- managed_native_models()
+    expect_identical(managed$filename, "granite-q4_k.gguf")
+    expect_false("granite-q8_0.gguf" %in% managed$filename)
+    expect_match(output$local_stt_models_table, "<th>Model", fixed = TRUE)
+    expect_false(grepl("<th>Location", output$local_stt_models_table, fixed = TRUE))
+    expect_false(grepl("<th>State", output$local_stt_models_table, fixed = TRUE))
 
     session$setInputs(
       local_stt_native_engine = "crispasr",
-      local_stt_native_model = "auto",
-      local_stt_native_backend = "granite-4.1",
-      local_stt_native_quant = "q8_0",
-      local_stt_native_executable = "/opt/crispasr",
+      local_stt_new_model_reference = paste0(
+        "https://huggingface.co/owner/repo/blob/main/",
+        "granite-q8_0.gguf"
+      ),
+      local_stt_model_verify = 1L
+    )
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_identical(
+      verify_args$selector,
+      "hf://owner/repo:granite-q8_0.gguf"
+    )
+    expect_identical(verify_args$backend, "")
+    expect_identical(verify_args$quant, "")
+    expect_identical(starts, 0L)
+    expect_identical(
+      state$native_verified_reference,
+      "hf://owner/repo:granite-q8_0.gguf"
+    )
+    expect_identical(state$native_verify_status$type, "ok")
+    expect_match(
+      state$native_verify_status$message,
+      "Available: granite-q8_0.gguf",
+      fixed = TRUE
+    )
+
+    session$setInputs(
+      local_stt_new_model_reference =
+        "hf://owner/repo:granite-q8_0.gguf"
+    )
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_identical(state$native_verified_reference, "")
+    expect_null(state$native_verify_status)
+
+    session$setInputs(
       local_stt_model_download = 1L
     )
     session$flushReact()
-    expect_identical(download_args$selector, "auto")
-    expect_identical(download_args$backend, "granite-4.1")
-    expect_identical(download_args$quant, "q8_0")
+    expect_identical(starts, 1L)
+    expect_identical(
+      download_args$selector,
+      "hf://owner/repo:granite-q8_0.gguf"
+    )
+    expect_identical(download_args$backend, "")
+    expect_identical(download_args$quant, "")
     expect_identical(download_args$executable, "/opt/crispasr")
     state <- reactiveValuesToList(local_state)
     expect_match(state$native_model_status, "Downloaded:", fixed = TRUE)
-    expect_match(state$native_model_status, "Click Save", fixed = TRUE)
-    expect_identical(
-      state$native_models$path[state$native_models$selected],
-      "/cache/granite-q8_0.gguf"
+    expect_match(
+      state$native_model_status,
+      "available under Models > Native STT",
+      fixed = TRUE
     )
+    expect_true("/cache/granite-q8_0.gguf" %in% state$native_models$path)
+    expect_false(any(state$native_models$selected))
 
     session$setInputs(
       local_stt_models_table_rows_selected = 1L,
@@ -410,18 +625,67 @@ test_that("Native STT model manager refreshes, selects, downloads, and deletes s
     session$setInputs(local_stt_model_delete_confirm = 1L)
     session$flushReact()
     expect_identical(removed_args$path, "/cache/granite-q4_k.gguf")
-    expect_identical(removed_args$active_model, "auto")
+    expect_length(removed_args$active_model, 0L)
     state <- reactiveValuesToList(local_state)
     expect_null(state$native_delete_path)
     expect_match(state$native_model_status, "Deleted", fixed = TRUE)
+  })
+})
 
+test_that("Native STT Verify never downloads and reports invalid remote models", {
+  restore <- interface_test_scope()
+  on.exit(restore(), add = TRUE)
+
+  resolve_calls <- 0L
+  starts <- 0L
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_inventory = function(config = NULL) {
+      genflow:::.genflow_crispasr_empty_inventory()
+    },
+    .genflow_crispasr_resolve_download = function(...) {
+      resolve_calls <<- resolve_calls + 1L
+      stop("The requested model file does not exist.", call. = FALSE)
+    },
+    .genflow_native_download_job_start = function(...) {
+      starts <<- starts + 1L
+      stop("download should not start", call. = FALSE)
+    },
+    .package = "genflow"
+  )
+
+  shiny::testServer(genflow:::server, {
+    session$flushReact()
     session$setInputs(
-      local_stt_models_table_rows_selected = 2L,
-      local_stt_model_delete = 2L
+      local_stt_native_engine = "crispasr",
+      local_stt_new_model_reference = "https://example.com/model.gguf",
+      local_stt_model_verify = 1L
     )
     session$flushReact()
     state <- reactiveValuesToList(local_state)
-    expect_match(state$native_model_status, "outside the managed", fixed = TRUE)
+    expect_identical(resolve_calls, 0L)
+    expect_identical(starts, 0L)
+    expect_identical(state$native_verify_status$type, "error")
+    expect_match(
+      state$native_verify_status$message,
+      "Hugging Face",
+      fixed = TRUE
+    )
+
+    session$setInputs(
+      local_stt_new_model_reference =
+        "hf://owner/repo:missing-q4_k.gguf",
+      local_stt_model_verify = 2L
+    )
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_identical(resolve_calls, 1L)
+    expect_identical(starts, 0L)
+    expect_identical(state$native_verify_status$type, "error")
+    expect_match(
+      state$native_verify_status$message,
+      "does not exist",
+      fixed = TRUE
+    )
   })
 })
 
@@ -432,6 +696,7 @@ test_that("Native STT processes a completed job before starting another", {
   alive <- TRUE
   starts <- 0L
   cleanups <- 0L
+  seen_selector <- NULL
   result_path <- "/cache/completed-before-next.gguf"
 
   testthat::local_mocked_bindings(
@@ -443,6 +708,7 @@ test_that("Native STT processes a completed job before starting another", {
                                                   quant = "",
                                                   executable = "") {
       starts <<- starts + 1L
+      seen_selector <<- selector
       structure(
         list(
           id = "completed-before-next",
@@ -478,12 +744,18 @@ test_that("Native STT processes a completed job before starting another", {
     session$flushReact()
     session$setInputs(
       local_stt_native_engine = "crispasr",
-      local_stt_native_model = "auto",
-      local_stt_native_backend = "granite-4.1",
+      local_stt_new_model_reference = paste0(
+        "https://huggingface.co/owner/repo/blob/main/",
+        "completed-before-next.gguf"
+      ),
       local_stt_model_download = 1L
     )
     session$flushReact()
     expect_identical(starts, 1L)
+    expect_identical(
+      seen_selector,
+      "hf://owner/repo:completed-before-next.gguf"
+    )
 
     alive <<- FALSE
     session$setInputs(local_stt_model_download = 2L)
@@ -493,10 +765,8 @@ test_that("Native STT processes a completed job before starting another", {
     expect_identical(starts, 1L)
     expect_identical(cleanups, 1L)
     expect_match(state$native_model_status, "Downloaded:", fixed = TRUE)
-    expect_identical(
-      state$native_models$path[state$native_models$selected],
-      result_path
-    )
+    expect_true(result_path %in% state$native_models$path)
+    expect_false(any(state$native_models$selected))
   })
 })
 

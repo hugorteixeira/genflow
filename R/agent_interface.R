@@ -12,8 +12,7 @@
   fireworks = "Fireworks",
   deepinfra = "DeepInfra",
   hyperbolic = "Hyperbolic",
-  hf = "Hugging Face (API)",
-  `hf-local` = "Hugging Face (local)",
+  hf = "Hugging Face",
   `local-native` = "Native STT (local)",
   `local-openai` = "OpenAI-compatible STT (local)",
   gemini = "Gemini",
@@ -36,23 +35,6 @@
 .DEFAULT_MODEL_TYPE <- "Chat"
 .DEFAULT_THINKING_LEVEL <- "medium"
 .THINKING_LEVEL_CHOICES <- c("minimal", "low", "medium", "high", "xhigh")
-.LOCAL_HF_STT_MODEL_CHOICES <- c(
-  "Whisper Large v3 Turbo (recommended)" = "openai/whisper-large-v3-turbo",
-  "Whisper Tiny (smoke test)" = "openai/whisper-tiny",
-  "MOSS Transcribe + Diarize (advanced)" =
-    "OpenMOSS-Team/MOSS-Transcribe-Diarize"
-)
-
-.local_hf_stt_model_choices <- function(selected = "") {
-  selected <- trimws(as.character(selected %||% "")[1])
-  choices <- .LOCAL_HF_STT_MODEL_CHOICES
-  if (!is.na(selected) &&
-      nzchar(selected) &&
-      !selected %in% unname(choices)) {
-    choices <- c(choices, stats::setNames(selected, selected))
-  }
-  choices
-}
 
 .normalize_setup_reasoning <- function(setup) {
   candidates <- list(
@@ -122,6 +104,9 @@
     error = function(e) character()
   )
   if (length(custom_labels)) {
+    custom_labels <- custom_labels[
+      !.genflow_is_retired_service(names(custom_labels))
+    ]
     labels <- c(labels, custom_labels[setdiff(names(custom_labels), names(labels))])
   }
   labels
@@ -129,6 +114,10 @@
 
 .model_provider_ids <- function() {
   names(.model_provider_labels())
+}
+
+.model_update_provider_ids <- function() {
+  setdiff(.model_provider_ids(), "local-openai")
 }
 
 .default_models_dir <- function() {
@@ -167,6 +156,7 @@
   favs$type[is.na(favs$type)] <- ""
   valid <- !is.na(favs$service) &
     nzchar(favs$service) &
+    !.genflow_is_retired_service(favs$service) &
     !is.na(favs$model) &
     nzchar(favs$model)
   favs <- favs[valid, , drop = FALSE]
@@ -198,6 +188,7 @@
   favorites$type[is.na(favorites$type)] <- ""
   valid <- !is.na(favorites$service) &
     nzchar(favorites$service) &
+    !.genflow_is_retired_service(favorites$service) &
     !is.na(favorites$model) &
     nzchar(favorites$model)
   favorites <- favorites[valid, , drop = FALSE]
@@ -315,12 +306,22 @@
     df$service <- tolower(trimws(as.character(df$service)))
     missing_service <- is.na(df$service) | !nzchar(df$service)
     df$service[missing_service] <- fallback_service
+    df <- df[!.genflow_is_retired_service(df$service), , drop = FALSE]
+    if (!nrow(df)) {
+      return(NULL)
+    }
     df$service <- vapply(
       df$service,
       .genflow_normalize_service_alias,
       character(1),
       USE.NAMES = FALSE
     )
+    # The Python/Transformers bridge was retired. Ignore old user catalogs
+    # without deleting user-owned data.
+    df <- df[!.genflow_is_retired_service(df$service), , drop = FALSE]
+    if (!nrow(df)) {
+      return(NULL)
+    }
 
     if (!"model" %in% names(df)) {
       if ("id" %in% names(df)) {
@@ -674,10 +675,11 @@
   .gf-local-toolbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
   .gf-local-status { min-height: 20px; margin: -4px 4px 12px; color: #64748b; font-size: 0.8rem; overflow-wrap: anywhere; }
   .gf-local-shell { overflow: hidden; background: #ffffff; border: 1px solid #dbe1ea; border-radius: 14px; }
-  .gf-local-shell > .nav { gap: 4px; margin: 0; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; background: #f8fafc; }
-  .gf-local-shell > .nav .nav-link { border-radius: 9px; padding: 8px 13px; color: #475569; font-size: 0.9rem; }
-  .gf-local-shell > .nav .nav-link.active { background: #4f46e5; color: #ffffff; }
-  .gf-local-shell > .tab-content { padding: 24px; }
+  .gf-local-shell > .tabbable > .nav { gap: 4px; margin: 0; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; background: #f8fafc; }
+  .gf-local-shell > .tabbable > .nav > li > a { border-radius: 9px; padding: 8px 13px; color: #475569; font-size: 0.9rem; }
+  .gf-local-shell > .tabbable > .nav > li > a.active,
+  .gf-local-shell > .tabbable > .nav > li.active > a { background: #4f46e5; color: #ffffff; }
+  .gf-local-shell > .tabbable > .tab-content { padding: 32px 24px 24px; }
   .gf-local-pane { max-width: 820px; margin: 0 auto; }
   .gf-local-adapter-header { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-bottom: 5px; }
   .gf-local-adapter-header h3 { margin: 0; font-size: 1.08rem; font-weight: 650; }
@@ -697,12 +699,19 @@
   .gf-local-model-table table.dataTable { table-layout: fixed; }
   .gf-local-model-table table.dataTable th,
   .gf-local-model-table table.dataTable td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
-  .gf-local-download-action { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .gf-local-new-model { margin-top: 10px; padding: 14px; border: 1px solid #c7d2fe; border-radius: 12px; background: #f8faff; }
+  .gf-local-new-model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+  .gf-local-new-model-row .shiny-input-container { width: 100%; max-width: none; margin-bottom: 0; }
+  .gf-local-new-model-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .gf-local-new-model-note { margin: 8px 0 0; color: #64748b; font-size: 0.82rem; }
+  .gf-local-verification { min-height: 20px; margin-top: 9px; font-size: 0.82rem; overflow-wrap: anywhere; }
+  .gf-local-verification.is-ok { color: #047857; }
+  .gf-local-verification.is-error { color: #b91c1c; }
   .gf-native-download-progress { flex: 1 1 320px; min-width: 240px; }
   .gf-native-download-progress .progress { height: 8px; margin: 0 0 5px; background: #e2e8f0; }
   .gf-native-download-progress .progress-bar { background: #4f46e5; transition: width 0.2s ease; }
   .gf-native-download-detail { color: #64748b; font-size: 0.78rem; overflow-wrap: anywhere; }
-  .gf-local-model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .gf-local-model-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 10px; }
   .gf-local-model-status { min-height: 18px; margin-top: 8px; color: #64748b; font-size: 0.8rem; overflow-wrap: anywhere; }
   .gf-local-advanced { margin-top: 16px; border-top: 1px solid #e5e7eb; }
   .gf-local-advanced summary { padding: 13px 0 4px; color: #475569; cursor: pointer; font-size: 0.86rem; font-weight: 600; user-select: none; }
@@ -712,11 +721,13 @@
   @media (max-width: 768px) {
     .gf-local-toolbar { flex-direction: column; }
     .gf-local-toolbar-actions { justify-content: flex-start; }
-    .gf-local-shell > .nav { overflow-x: auto; flex-wrap: nowrap; }
-    .gf-local-shell > .nav .nav-link { white-space: nowrap; }
-    .gf-local-shell > .tab-content { padding: 18px 16px; }
+    .gf-local-shell > .tabbable > .nav { overflow-x: auto; flex-wrap: nowrap; }
+    .gf-local-shell > .tabbable > .nav > li > a { white-space: nowrap; }
+    .gf-local-shell > .tabbable > .tab-content { padding: 26px 16px 18px; }
     .gf-local-form-grid { grid-template-columns: 1fr; }
     .gf-local-field-wide { grid-column: auto; }
+    .gf-local-new-model-row { grid-template-columns: 1fr; }
+    .gf-local-new-model-actions { justify-content: flex-start; }
   }
   .favorite-star { cursor: pointer; color: #cfd8f3; font-size: 1.1rem; transition: color 0.15s ease-in-out; }
   .favorite-star:hover { color: #facc15; }
@@ -991,7 +1002,10 @@
             selectInput(
               "models_update_provider",
               "Update single provider",
-              choices = setNames(.model_provider_ids(), .model_label(.model_provider_ids())),
+              choices = setNames(
+                .model_update_provider_ids(),
+                .model_label(.model_update_provider_ids())
+              ),
               selected = .DEFAULT_MODEL_SERVICE
             ),
             actionButton("models_update_selected", "Update selected provider", icon = icon("download")),
@@ -1069,7 +1083,7 @@
 
 .local_inference_tab_ui <- function() {
   tabPanel(
-    "Local inference",
+    "Local",
     div(
       class = "gf-tab-body gf-local-page",
       div(
@@ -1140,7 +1154,7 @@
               ),
               tags$p(
                 class = "gf-local-note",
-                "Ollama owns model files and GPU execution. Python settings do not affect it."
+                "Ollama owns its model files, process lifetime, and GPU execution."
               ),
               tags$details(
                 class = "gf-local-advanced",
@@ -1208,107 +1222,6 @@
             )
           ),
           tabPanel(
-            "Hugging Face STT",
-            value = "hf-local",
-            div(
-              class = "gf-local-pane",
-              div(
-                class = "gf-local-adapter-header",
-                h3("Hugging Face speech-to-text"),
-                span('service = "hf-local"', class = "gf-service-badge")
-              ),
-              tags$p(
-                class = "gf-local-description",
-                "Run a supported Transformers speech model in an isolated Python process."
-              ),
-              div(
-                class = "gf-local-form-grid",
-                div(
-                  class = "gf-local-field-wide",
-                  selectizeInput(
-                    "local_hf_stt_model",
-                    "Model",
-                    choices = .local_hf_stt_model_choices(),
-                    selected = "openai/whisper-large-v3-turbo",
-                    options = list(
-                      create = TRUE,
-                      createOnBlur = TRUE,
-                      persist = FALSE
-                    )
-                  )
-                ),
-                div(
-                  class = "gf-local-field-wide",
-                  textInput(
-                    "local_python",
-                    "Python executable",
-                    value = "",
-                    placeholder = "python3 or /path/to/venv/bin/python"
-                  )
-                ),
-                selectInput(
-                  "local_device",
-                  "Accelerator",
-                  choices = c(
-                    "Automatic" = "auto",
-                    "AMD ROCm / HIP" = "rocm",
-                    "NVIDIA CUDA" = "cuda",
-                    "CPU" = "cpu",
-                    "Apple Metal (MPS)" = "mps"
-                  ),
-                  selected = "auto",
-                  selectize = FALSE
-                )
-              ),
-              tags$p(
-                class = "gf-local-note",
-                "Recommended: openai/whisper-large-v3-turbo. For a quick CPU smoke test, use openai/whisper-tiny. This adapter uses PyTorch and does not use Vulkan; MOSS is an advanced profile with extra dependencies."
-              ),
-              tags$details(
-                class = "gf-local-advanced",
-                tags$summary("Advanced settings"),
-                div(
-                  class = "gf-local-form-grid",
-                  selectInput(
-                    "local_hf_stt_profile",
-                    "Model adapter",
-                    choices = c(
-                      "Detect automatically" = "auto",
-                      "Generic Transformers ASR" = "transformers",
-                      "MOSS Transcribe + Diarize" = "moss"
-                    ),
-                    selected = "auto",
-                    selectize = FALSE
-                  ),
-                  selectInput(
-                    "local_dtype",
-                    "Precision",
-                    choices = c(
-                      "Automatic" = "auto",
-                      "Float 32" = "float32",
-                      "Float 16" = "float16",
-                      "BFloat 16" = "bfloat16"
-                    ),
-                    selected = "auto",
-                    selectize = FALSE
-                  ),
-                  textInput(
-                    "local_hf_revision",
-                    "Revision",
-                    value = "",
-                    placeholder = "Optional tag, branch, or commit SHA"
-                  ),
-                  textInput(
-                    "local_hf_cache_dir",
-                    "Cache directory",
-                    value = "",
-                    placeholder = "Use the Hugging Face default"
-                  )
-                )
-              )
-            )
-          ),
-          tabPanel(
             "Native STT",
             value = "local-native",
             div(
@@ -1348,93 +1261,51 @@
                   ),
                   selected = "auto",
                   selectize = FALSE
-                ),
-                div(
-                  class = "gf-local-field-wide",
-                  selectizeInput(
-                    "local_stt_native_model",
-                    "Model",
-                    choices = c(
-                      "Automatic (architecture + requested quantization)" = "auto"
-                    ),
-                    selected = "auto",
-                    options = list(
-                      create = TRUE,
-                      createOnBlur = TRUE,
-                      persist = FALSE,
-                      placeholder = paste0(
-                        "auto, /path/model.gguf, or ",
-                        "hf://owner/repo/model.gguf"
-                      )
-                    )
-                  )
                 )
               ),
               tags$p(
                 class = "gf-local-note",
-                tags$span(
-                  tags$code('model = "auto"'),
-                  " or an omitted model uses this selection. Choose Automatic ",
-                  "to use Model architecture and Requested quantization. For ",
-                  "AMD GPUs, prefer a Vulkan-enabled CrispASR build."
-                )
+                "Engine and device apply to Native STT execution. Models are ",
+                "selected for setups and agents from the Models catalog. Use this ",
+                "page only to verify, download, and remove model files. For ",
+                "AMD GPUs, prefer a Vulkan-enabled CrispASR build."
               ),
-              conditionalPanel(
-                condition = paste0(
-                  "input.local_stt_native_model === 'auto' || ",
-                  "!input.local_stt_native_model"
-                ),
+              div(
+                class = "gf-local-new-model",
                 div(
-                  class = "gf-local-form-grid",
-                  selectizeInput(
-                    "local_stt_native_backend",
-                    "Model architecture",
-                    choices = c(
-                      "Select architecture\u2026" = "",
-                      "Whisper" = "whisper",
-                      "Parakeet" = "parakeet",
-                      "Canary" = "canary",
-                      "Granite 4.1" = "granite-4.1",
-                      "MOSS Diarize" = "moss-diarize"
-                    ),
-                    selected = "",
-                    options = list(
-                      create = TRUE,
-                      createOnBlur = TRUE,
-                      persist = FALSE,
-                      placeholder = "For example: granite-4.1"
+                  class = "gf-local-new-model-row",
+                  textInput(
+                    "local_stt_new_model_reference",
+                    "Hugging Face model link",
+                    value = "",
+                    placeholder = paste0(
+                      "hf://owner/repository:model.gguf or ",
+                      "https://huggingface.co/.../blob/main/model.gguf"
                     )
                   ),
-                  selectizeInput(
-                    "local_stt_native_quant",
-                    "Requested quantization",
-                    choices = c(
-                      "CrispASR default (recommended)" = "",
-                      "Q4_K" = "q4_k",
-                      "Q8_0" = "q8_0",
-                      "F16" = "f16"
+                  div(
+                    class = "gf-local-new-model-actions",
+                    actionButton(
+                      "local_stt_model_verify",
+                      "Verify",
+                      icon = icon("circle-check")
                     ),
-                    selected = "",
-                    options = list(
-                      create = TRUE,
-                      createOnBlur = TRUE,
-                      persist = FALSE
+                    actionButton(
+                      "local_stt_model_download",
+                      "Download",
+                      icon = icon("download"),
+                      class = "btn-primary"
                     )
                   )
                 ),
                 tags$p(
-                  class = "gf-local-description",
-                  "Not every architecture publishes every quantization. Availability is verified before download; genflow does not silently substitute another quantization."
-                )
-              ),
-              div(
-                class = "gf-local-download-action",
-                actionButton(
-                  "local_stt_model_download",
-                  "Download current model",
-                  icon = icon("download"),
-                  class = "btn-primary"
+                  class = "gf-local-new-model-note",
+                  "Paste an hf:// reference or a model file URL copied from ",
+                  "Hugging Face. Verify checks the exact remote file without ",
+                  "downloading it. Download validates it again, verifies its ",
+                  "checksum, and publishes the downloaded model in Models."
                 ),
+                uiOutput("local_stt_new_model_status_ui"),
                 uiOutput("local_stt_download_progress_ui")
               ),
               div(
@@ -1451,16 +1322,6 @@
                 div(
                   class = "gf-local-model-actions",
                   actionButton(
-                    "local_stt_models_refresh",
-                    "Refresh",
-                    icon = icon("rotate")
-                  ),
-                  actionButton(
-                    "local_stt_model_use",
-                    "Choose selected",
-                    icon = icon("check")
-                  ),
-                  actionButton(
                     "local_stt_model_delete",
                     "Delete selected",
                     icon = icon("trash"),
@@ -1470,22 +1331,6 @@
                 div(
                   class = "gf-local-model-status",
                   textOutput("local_stt_model_status", inline = TRUE)
-                )
-              ),
-              tags$details(
-                class = "gf-local-advanced",
-                tags$summary("Advanced settings"),
-                div(
-                  class = "gf-local-form-grid",
-                  div(
-                    class = "gf-local-field-wide",
-                    textInput(
-                      "local_stt_native_executable",
-                      "Executable",
-                      value = "",
-                      placeholder = "Find on PATH, or enter an absolute path"
-                    )
-                  )
                 )
               )
             )
@@ -1518,22 +1363,6 @@
               tags$p(
                 class = "gf-local-note",
                 "If authentication is required, set GENFLOW_STT_API_KEY outside the saved configuration."
-              ),
-              tags$details(
-                class = "gf-local-advanced",
-                tags$summary("Advanced settings"),
-                div(
-                  class = "gf-local-form-grid",
-                  div(
-                    class = "gf-local-field-wide",
-                    textInput(
-                      "local_stt_server_model",
-                      "Fallback model",
-                      value = "",
-                      placeholder = "Server-defined model id"
-                    )
-                  )
-                )
               )
             )
           )
@@ -2089,89 +1918,84 @@
   paste0(format(round(value, digits), trim = TRUE, nsmall = digits), " ", units[[unit]])
 }
 
-.local_native_model_choices <- function(inventory = NULL, selected = "") {
+.local_native_managed_inventory <- function(inventory = NULL) {
   rows <- .local_native_inventory_normalize(inventory)
-  choices <- c(
-    "Automatic (architecture + requested quantization)" = "auto"
-  )
-  if (nrow(rows)) {
-    labels <- paste0(rows$filename, " \u2014 ", rows$size)
-    duplicate_names <- duplicated(rows$filename) |
-      duplicated(rows$filename, fromLast = TRUE)
-    labels[duplicate_names] <- paste0(
-      labels[duplicate_names],
-      " (",
-      dirname(rows$path[duplicate_names]),
-      ")"
-    )
-    choices <- c(
-      choices,
-      stats::setNames(rows$path, make.unique(labels, sep = " \u00b7 "))
+  rows[rows$managed, , drop = FALSE]
+}
+
+.local_native_hf_selector <- function(value) {
+  value <- trimws(as.character(value %||% "")[1])
+  if (is.na(value) || !nzchar(value)) {
+    stop("Enter a Hugging Face model reference first.", call. = FALSE)
+  }
+  if (!.stt_is_crispasr_hf_reference(value)) {
+    stop(
+      "Use an exact `hf://OWNER/REPOSITORY:FILE` reference or a ",
+      "Hugging Face `/blob/main/FILE` URL.",
+      call. = FALSE
     )
   }
-
-  selected <- trimws(as.character(selected %||% "")[1])
-  if (is.na(selected) || !nzchar(selected)) selected <- "auto"
-  if (!selected %in% unname(choices)) {
-    choices <- c(choices, stats::setNames(selected, selected))
-  }
-  choices
+  reference <- .stt_parse_crispasr_hf_reference(value)
+  filename <- .genflow_crispasr_validate_filename(reference$file)
+  paste0("hf://", reference$repository, ":", filename)
 }
 
-.local_native_backend_choices <- function(selected = "") {
-  choices <- c(
-    "Select architecture\u2026" = "",
-    "Whisper" = "whisper",
-    "Parakeet" = "parakeet",
-    "Canary" = "canary",
-    "Granite 4.1" = "granite-4.1",
-    "MOSS Diarize" = "moss-diarize"
+.local_native_referenced_models <- function(
+  config = NULL,
+  setup_names = NULL,
+  agent_names = NULL,
+  setup_reader = function(name) get_setup(name, assign = FALSE),
+  agent_reader = function(name) get_agent(name, assign = FALSE)
+) {
+  config <- config %||% .genflow_local_config_defaults()
+  referenced <- c(
+    config$stt_native_model %||% "",
+    config$moss_cpp_model %||% ""
   )
-  selected <- trimws(as.character(selected %||% "")[1])
-  if (!is.na(selected) && nzchar(selected) &&
-      !selected %in% unname(choices)) {
-    choices <- c(choices, stats::setNames(selected, selected))
+  model_from_entry <- function(entry) {
+    if (!is.list(entry)) return("")
+    service <- tryCatch(
+      .stt_normalize_service(entry$service %||% ""),
+      error = function(e) ""
+    )
+    if (!identical(service, "local-native")) return("")
+    model <- trimws(as.character(entry$model %||% "")[1])
+    if (is.na(model)) "" else model
   }
-  choices
-}
+  read_models <- function(names, reader) {
+    names <- unique(trimws(as.character(names %||% character())))
+    names <- names[!is.na(names) & nzchar(names)]
+    if (!length(names)) return(character())
+    vapply(names, function(name) {
+      entry <- tryCatch(reader(name), error = function(e) NULL)
+      model_from_entry(entry)
+    }, character(1), USE.NAMES = FALSE)
+  }
 
-.local_native_quant_choices <- function(selected = "") {
-  choices <- c(
-    "CrispASR default (recommended)" = "",
-    "Q4_K" = "q4_k",
-    "Q8_0" = "q8_0",
-    "F16" = "f16"
+  if (is.null(setup_names)) {
+    setup_names <- tryCatch(.load_setup_names(), error = function(e) character())
+  }
+  if (is.null(agent_names)) {
+    agent_names <- tryCatch(.load_agent_names(), error = function(e) character())
+  }
+  referenced <- c(
+    referenced,
+    read_models(setup_names, setup_reader),
+    read_models(agent_names, agent_reader)
   )
-  selected <- trimws(as.character(selected %||% "")[1])
-  if (!is.na(selected) && nzchar(selected) &&
-      !selected %in% unname(choices)) {
-    choices <- c(choices, stats::setNames(selected, selected))
-  }
-  choices
+  referenced <- unique(trimws(as.character(referenced)))
+  referenced[
+    !is.na(referenced) &
+      nzchar(referenced) &
+      tolower(referenced) != "auto"
+  ]
 }
 
-.update_local_config_inputs <- function(session, config, native_inventory = NULL) {
+.update_local_config_inputs <- function(session, config) {
   if (!is.list(config)) {
     stop("`config` must be a local inference configuration list.", call. = FALSE)
   }
 
-  updateTextInput(session, "local_python", value = config$python)
-  updateSelectInput(session, "local_device", selected = config$device)
-  updateSelectInput(session, "local_dtype", selected = config$dtype)
-  updateTextInput(session, "local_hf_cache_dir", value = config$hf_cache_dir)
-  updateSelectizeInput(
-    session,
-    "local_hf_stt_model",
-    choices = .local_hf_stt_model_choices(config$hf_stt_model),
-    selected = config$hf_stt_model,
-    server = FALSE
-  )
-  updateTextInput(session, "local_hf_revision", value = config$hf_revision)
-  updateSelectInput(
-    session,
-    "local_hf_stt_profile",
-    selected = config$hf_stt_profile
-  )
   updateTextInput(
     session,
     "local_ollama_base_url",
@@ -2192,39 +2016,6 @@
     session,
     "local_stt_server_base_url",
     value = config$stt_server_base_url
-  )
-  updateTextInput(
-    session,
-    "local_stt_server_model",
-    value = config$stt_server_model
-  )
-  updateTextInput(
-    session,
-    "local_stt_native_executable",
-    value = config$stt_native_executable
-  )
-  native_model <- trimws(as.character(config$stt_native_model %||% "")[1])
-  if (is.na(native_model) || !nzchar(native_model)) native_model <- "auto"
-  updateSelectizeInput(
-    session,
-    "local_stt_native_model",
-    choices = .local_native_model_choices(native_inventory, native_model),
-    selected = native_model,
-    server = FALSE
-  )
-  updateSelectizeInput(
-    session,
-    "local_stt_native_backend",
-    choices = .local_native_backend_choices(config$stt_native_backend),
-    selected = config$stt_native_backend,
-    server = FALSE
-  )
-  updateSelectizeInput(
-    session,
-    "local_stt_native_quant",
-    choices = .local_native_quant_choices(config$stt_native_quant %||% ""),
-    selected = config$stt_native_quant %||% "",
-    server = FALSE
   )
   updateSelectInput(
     session,
@@ -2294,6 +2085,17 @@ server <- function(input, output, session) {
   agent_summary_cache <- new.env(parent = emptyenv())
 
   initial_models_dir <- .default_models_dir()
+  # Native STT is a local inventory, so keep it current without requiring a
+  # network-style manual provider refresh when the app opens.
+  try(
+    gen_update_models(
+      provider = "local-native",
+      directory = initial_models_dir,
+      verbose = FALSE,
+      fail_on_error = TRUE
+    ),
+    silent = TRUE
+  )
   initial_catalog <- .load_models_catalog(initial_models_dir)
   initial_favorites <- .normalize_favorites(.load_favorites(initial_models_dir), initial_catalog)
 
@@ -2361,6 +2163,8 @@ server <- function(input, output, session) {
       ""
     },
     native_download_status = NULL,
+    native_verify_status = NULL,
+    native_verified_reference = "",
     native_delete_path = NULL
   )
 
@@ -2373,40 +2177,31 @@ server <- function(input, output, session) {
       }
       as.character(value[[1]])
     }
+    native_engine <- input_or_current(
+      "local_stt_native_engine",
+      "stt_native_engine"
+    )
+    current_engine <- .stt_normalize_native_engine(
+      current$stt_native_engine %||% "auto"
+    )
+    selected_engine <- .stt_normalize_native_engine(native_engine)
+    native_executable <- if (!identical(selected_engine, current_engine)) {
+      ""
+    } else {
+      current$stt_native_executable %||% ""
+    }
     list(
-      python = input_or_current("local_python", "python"),
-      device = input_or_current("local_device", "device"),
-      dtype = input_or_current("local_dtype", "dtype"),
-      hf_cache_dir = input_or_current("local_hf_cache_dir", "hf_cache_dir"),
-      hf_stt_model = input_or_current("local_hf_stt_model", "hf_stt_model"),
-      hf_revision = input_or_current("local_hf_revision", "hf_revision"),
-      hf_stt_profile = input_or_current("local_hf_stt_profile", "hf_stt_profile"),
       ollama_base_url = input_or_current("local_ollama_base_url", "ollama_base_url"),
       ollama_model = input_or_current("local_ollama_model", "ollama_model"),
       llamacpp_base_url = input_or_current("local_llamacpp_base_url", "llamacpp_base_url"),
       llamacpp_model = input_or_current("local_llamacpp_model", "llamacpp_model"),
       stt_server_base_url = input_or_current("local_stt_server_base_url", "stt_server_base_url"),
-      stt_server_model = input_or_current("local_stt_server_model", "stt_server_model"),
-      stt_native_engine = input_or_current(
-        "local_stt_native_engine",
-        "stt_native_engine"
-      ),
-      stt_native_executable = input_or_current(
-        "local_stt_native_executable",
-        "stt_native_executable"
-      ),
-      stt_native_model = input_or_current(
-        "local_stt_native_model",
-        "stt_native_model"
-      ),
-      stt_native_backend = input_or_current(
-        "local_stt_native_backend",
-        "stt_native_backend"
-      ),
-      stt_native_quant = input_or_current(
-        "local_stt_native_quant",
-        "stt_native_quant"
-      ),
+      stt_server_model = current$stt_server_model %||% "",
+      stt_native_engine = native_engine,
+      stt_native_executable = native_executable,
+      stt_native_model = current$stt_native_model %||% "",
+      stt_native_backend = current$stt_native_backend %||% "",
+      stt_native_quant = current$stt_native_quant %||% "",
       stt_native_device = input_or_current(
         "local_stt_native_device",
         "stt_native_device"
@@ -2414,9 +2209,7 @@ server <- function(input, output, session) {
     )
   }
 
-  refresh_native_models <- function(config,
-                                    selected = config$stt_native_model %||% "",
-                                    status = NULL) {
+  refresh_native_models <- function(config, status = NULL) {
     inventory <- tryCatch(
       .local_native_inventory_normalize(
         .genflow_crispasr_inventory(config)
@@ -2435,24 +2228,11 @@ server <- function(input, output, session) {
 
     local_state$native_models <- inventory
     if (!is.null(status)) local_state$native_model_status <- status
-    selected <- trimws(as.character(selected %||% "")[1])
-    if (is.na(selected) || !nzchar(selected)) selected <- "auto"
-    updateSelectizeInput(
-      session,
-      "local_stt_native_model",
-      choices = .local_native_model_choices(inventory, selected),
-      selected = selected,
-      server = FALSE
-    )
     invisible(TRUE)
   }
 
   session$onFlushed(function() {
-    .update_local_config_inputs(
-      session,
-      initial_local_config,
-      native_inventory = initial_native_inventory$models
-    )
+    .update_local_config_inputs(session, initial_local_config)
   }, once = TRUE)
 
   current_models_dir <- function() {
@@ -2841,6 +2621,11 @@ server <- function(input, output, session) {
   refresh_provider_selectors <- function(preferred_custom = NULL) {
     provider_ids <- .model_provider_ids()
     base_choices <- setNames(provider_ids, .model_label(provider_ids))
+    update_provider_ids <- .model_update_provider_ids()
+    update_choices <- setNames(
+      update_provider_ids,
+      .model_label(update_provider_ids)
+    )
     provider_choices_view <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_choices)
     if (models_state$favorites_present) {
       provider_choices_view <- c(setNames("favorites", .model_label("favorites")), provider_choices_view)
@@ -2859,16 +2644,21 @@ server <- function(input, output, session) {
     updateSelectInput(session, "models_view_provider", choices = provider_choices_view, selected = current_view)
 
     current_update <- isolate(input$models_update_provider)
-    if (is.null(current_update) || !current_update %in% base_choices) {
-      if (.DEFAULT_MODEL_SERVICE %in% provider_ids) {
+    if (is.null(current_update) || !current_update %in% update_choices) {
+      if (.DEFAULT_MODEL_SERVICE %in% update_provider_ids) {
         current_update <- .DEFAULT_MODEL_SERVICE
-      } else if (length(provider_ids)) {
-        current_update <- provider_ids[[1]]
+      } else if (length(update_provider_ids)) {
+        current_update <- update_provider_ids[[1]]
       } else {
         current_update <- ""
       }
     }
-    updateSelectInput(session, "models_update_provider", choices = base_choices, selected = current_update)
+    updateSelectInput(
+      session,
+      "models_update_provider",
+      choices = update_choices,
+      selected = current_update
+    )
 
     custom_choices <- custom_provider_choices()
     current_custom <- preferred_custom %||% isolate(input$models_custom_provider) %||% ""
@@ -2988,6 +2778,15 @@ server <- function(input, output, session) {
     desired_raw <- setup_state$desired_service
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
+    if (any(.genflow_is_retired_service(c(current, desired)))) {
+      current_raw <- NULL
+      current <- ""
+      desired_raw <- .DEFAULT_MODEL_SERVICE
+      desired <- .DEFAULT_MODEL_SERVICE
+      setup_state$desired_service <- .DEFAULT_MODEL_SERVICE
+      setup_state$desired_model <- .DEFAULT_MODEL_NAME
+      setup_state$desired_type <- .DEFAULT_MODEL_TYPE
+    }
     choices <- .model_service_choices(catalog, include = c(current, desired, .model_provider_ids()))
     choices <- choices[choices != "favorites"]
     if (nrow(models_state$favorites) > 0) {
@@ -3014,7 +2813,10 @@ server <- function(input, output, session) {
     desired_raw <- setup_state$desired_model
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
-    include_values <- c(current, desired)
+    # A pending desired value belongs to the service currently being loaded or
+    # selected. Do not carry the previous service's current model into that
+    # provider's choices.
+    include_values <- if (!is.null(desired_raw)) desired else current
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
       base_choices <- if (nrow(favs)) favs$model else character()
@@ -3053,7 +2855,7 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
     }
-    if (!length(choices) && nzchar(current)) {
+    if (!length(choices) && is.null(desired_raw) && nzchar(current)) {
       choices <- current
     }
     selected <- if (!is.null(desired_raw)) desired else current
@@ -3079,7 +2881,7 @@ server <- function(input, output, session) {
     desired_raw <- setup_state$desired_type
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
-    include_values <- c(current, desired)
+    include_values <- if (!is.null(desired_raw)) desired else current
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
       fav_rows <- favs[favs$model == model, , drop = FALSE]
@@ -3109,7 +2911,7 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
     }
-    if (!length(choices) && nzchar(current)) {
+    if (!length(choices) && is.null(desired_raw) && nzchar(current)) {
       choices <- current
     }
     selected <- if (!is.null(desired_raw)) desired else current
@@ -3133,6 +2935,15 @@ server <- function(input, output, session) {
     desired_raw <- agent_state$custom_desired_service
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
+    if (any(.genflow_is_retired_service(c(current, desired)))) {
+      current_raw <- NULL
+      current <- ""
+      desired_raw <- .DEFAULT_MODEL_SERVICE
+      desired <- .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_service <- .DEFAULT_MODEL_SERVICE
+      agent_state$custom_desired_model <- .DEFAULT_MODEL_NAME
+      agent_state$custom_desired_type <- .DEFAULT_MODEL_TYPE
+    }
     choices <- .model_service_choices(catalog, include = c(current, desired, .model_provider_ids()))
     choices <- choices[choices != "favorites"]
     if (nrow(models_state$favorites) > 0) {
@@ -3159,7 +2970,7 @@ server <- function(input, output, session) {
     desired_raw <- agent_state$custom_desired_model
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
-    include_values <- c(current, desired)
+    include_values <- if (!is.null(desired_raw)) desired else current
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
       base_choices <- if (nrow(favs)) favs$model else character()
@@ -3198,7 +3009,7 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
     }
-    if (!length(choices) && nzchar(current)) {
+    if (!length(choices) && is.null(desired_raw) && nzchar(current)) {
       choices <- current
     }
     selected <- if (!is.null(desired_raw)) desired else current
@@ -3224,7 +3035,7 @@ server <- function(input, output, session) {
     desired_raw <- agent_state$custom_desired_type
     current <- .normalize_choice_value(current_raw)
     desired <- .normalize_choice_value(desired_raw)
-    include_values <- c(current, desired)
+    include_values <- if (!is.null(desired_raw)) desired else current
     if (identical(tolower(service), "favorites")) {
       favs <- models_state$favorites
       fav_rows <- favs[favs$model == model, , drop = FALSE]
@@ -3254,7 +3065,7 @@ server <- function(input, output, session) {
     if (!length(choices) && nzchar(desired)) {
       choices <- desired
     }
-    if (!length(choices) && nzchar(current)) {
+    if (!length(choices) && is.null(desired_raw) && nzchar(current)) {
       choices <- current
     }
     selected <- if (!is.null(desired_raw)) desired else current
@@ -3315,10 +3126,14 @@ server <- function(input, output, session) {
       current_model <- isolate(input$setup_model) %||% ""
       preferred_model <- if (tolower(svc) == .DEFAULT_MODEL_SERVICE) .DEFAULT_MODEL_NAME else NULL
       desired_model <- setup_state$desired_model %||% current_model
-      model_choices <- .model_model_choices(catalog, svc, include = c(current_model, desired_model))
-      selected_model <- if (nzchar(desired_model) && desired_model %in% model_choices) {
+      model_choices <- .model_model_choices(catalog, svc)
+      selected_model <- if (length(model_choices) &&
+                            nzchar(desired_model) &&
+                            desired_model %in% model_choices) {
         desired_model
-      } else if (nzchar(current_model) && current_model %in% model_choices) {
+      } else if (length(model_choices) &&
+                 nzchar(current_model) &&
+                 current_model %in% model_choices) {
         current_model
       } else if (length(model_choices)) {
         .pick_preferred_choice(model_choices, preferred_model)
@@ -3330,10 +3145,14 @@ server <- function(input, output, session) {
       current_type <- isolate(input$setup_type) %||% ""
       desired_type <- setup_state$desired_type %||% current_type
       preferred_type <- if (nzchar(selected_model) && tolower(selected_model) == tolower(.DEFAULT_MODEL_NAME)) .DEFAULT_MODEL_TYPE else NULL
-      type_choices <- .model_type_choices(catalog, svc, selected_model, include = c(current_type, desired_type))
-      selected_type <- if (nzchar(desired_type) && desired_type %in% type_choices) {
+      type_choices <- .model_type_choices(catalog, svc, selected_model)
+      selected_type <- if (length(type_choices) &&
+                           nzchar(desired_type) &&
+                           desired_type %in% type_choices) {
         desired_type
-      } else if (nzchar(current_type) && current_type %in% type_choices) {
+      } else if (length(type_choices) &&
+                 nzchar(current_type) &&
+                 current_type %in% type_choices) {
         current_type
       } else if (length(type_choices)) {
         .pick_preferred_choice(type_choices, preferred_type)
@@ -3342,10 +3161,6 @@ server <- function(input, output, session) {
       }
       setup_state$desired_type <- selected_type
 
-      if (!isTRUE(setup_state$loading)) {
-        if (!nzchar(setup_state$desired_model)) setup_state$desired_model <- NULL
-        if (!nzchar(setup_state$desired_type)) setup_state$desired_type <- NULL
-      }
   },
   priority = 5
 )
@@ -3417,6 +3232,11 @@ server <- function(input, output, session) {
     models_state$favorites_present <- has_favs
     provider_ids <- .model_provider_ids()
     base_provider_choices <- setNames(provider_ids, .model_label(provider_ids))
+    update_provider_ids <- .model_update_provider_ids()
+    update_provider_choices <- setNames(
+      update_provider_ids,
+      .model_label(update_provider_ids)
+    )
     view_choices <- c(setNames(.MODEL_ALL_OPTION, .model_label(.MODEL_ALL_OPTION)), base_provider_choices)
     if (has_favs) {
       view_choices <- c(setNames("favorites", .model_label("favorites")), view_choices)
@@ -3431,10 +3251,16 @@ server <- function(input, output, session) {
     }
     updateSelectInput(session, "models_view_provider", choices = view_choices, selected = current_view)
     current_update <- input$models_update_provider
-    if (is.null(current_update) || !current_update %in% base_provider_choices) {
+    if (is.null(current_update) ||
+        !current_update %in% update_provider_choices) {
       current_update <- .DEFAULT_MODEL_SERVICE
     }
-    updateSelectInput(session, "models_update_provider", choices = base_provider_choices, selected = current_update)
+    updateSelectInput(
+      session,
+      "models_update_provider",
+      choices = update_provider_choices,
+      selected = current_update
+    )
     update_setup_service_choices()
     update_agent_service_choices()
 
@@ -3817,7 +3643,7 @@ server <- function(input, output, session) {
       showNotification("Provide a directory for model CSV files.", type = "warning")
       return()
     }
-    providers <- .model_provider_ids()
+    providers <- .model_update_provider_ids()
     missing <- .genflow_required_credentials_missing(providers)
     if (nrow(missing)) {
       show_missing_credentials_modal(missing, dir, providers, mode = "all")
@@ -4117,13 +3943,9 @@ server <- function(input, output, session) {
       "Reloaded configuration from",
       .genflow_local_config_path()
     )
-    .update_local_config_inputs(
-      session,
-      config,
-      native_inventory = local_state$native_models
-    )
-    refresh_native_models(config, selected = config$stt_native_model)
-    showNotification("Local inference configuration reloaded.", type = "message")
+    .update_local_config_inputs(session, config)
+    refresh_native_models(config)
+    showNotification("Local configuration reloaded.", type = "message")
   })
 
   observeEvent(input$local_config_save, {
@@ -4143,13 +3965,9 @@ server <- function(input, output, session) {
       "Saved configuration to",
       .genflow_local_config_path()
     )
-    .update_local_config_inputs(
-      session,
-      config,
-      native_inventory = local_state$native_models
-    )
-    refresh_native_models(config, selected = config$stt_native_model)
-    showNotification("Local inference configuration saved.", type = "message")
+    .update_local_config_inputs(session, config)
+    refresh_native_models(config)
+    showNotification("Local configuration saved.", type = "message")
   })
 
   local_adapter_label <- function(adapter) {
@@ -4157,7 +3975,6 @@ server <- function(input, output, session) {
       as.character(adapter %||% "ollama")[1],
       ollama = "Ollama",
       llamacpp = "llama.cpp",
-      `hf-local` = "Hugging Face STT",
       `local-native` = "Native STT",
       `local-openai` = "STT server",
       "local adapter"
@@ -4190,16 +4007,17 @@ server <- function(input, output, session) {
         .genflow_validate_local_config(local_config_from_inputs()),
         error = function(e) local_state$config
       )
-      refresh_native_models(
-        preview,
-        selected = preview$stt_native_model %||% "auto"
-      )
+      refresh_native_models(preview)
     }
   }, ignoreInit = FALSE)
 
+  managed_native_models <- reactive({
+    .local_native_managed_inventory(local_state$native_models)
+  })
+
   native_model_selected_row <- reactive({
     selected <- input$local_stt_models_table_rows_selected
-    models <- local_state$native_models
+    models <- managed_native_models()
     if (!length(selected) || length(selected) != 1L ||
         !is.data.frame(models) || selected < 1L || selected > nrow(models)) {
       return(NULL)
@@ -4207,8 +4025,42 @@ server <- function(input, output, session) {
     models[selected, , drop = FALSE]
   })
 
+  active_native_models <- function() {
+    referenced <- .local_native_referenced_models(local_state$config)
+    form_model <- function(service, model) {
+      normalized_service <- tryCatch(
+        .stt_normalize_service(service %||% ""),
+        error = function(e) ""
+      )
+      if (!identical(normalized_service, "local-native")) return("")
+      value <- trimws(as.character(model %||% "")[1])
+      if (is.na(value)) "" else value
+    }
+    referenced <- c(
+      referenced,
+      form_model(
+        isolate(input$setup_service),
+        isolate(input$setup_model)
+      ),
+      if (identical(isolate(input$agent_setup_mode), "custom")) {
+        form_model(
+          isolate(input$agent_setup_service),
+          isolate(input$agent_setup_model)
+        )
+      } else {
+        ""
+      }
+    )
+    referenced <- unique(trimws(as.character(referenced)))
+    referenced[
+      !is.na(referenced) &
+        nzchar(referenced) &
+        tolower(referenced) != "auto"
+    ]
+  }
+
   output$local_stt_models_summary <- renderText({
-    models <- local_state$native_models
+    models <- managed_native_models()
     if (!is.data.frame(models) || !nrow(models)) {
       return("No cached models found")
     }
@@ -4218,22 +4070,16 @@ server <- function(input, output, session) {
     } else {
       "size unknown"
     }
-    managed <- sum(models$managed, na.rm = TRUE)
     sprintf(
-      "%d file%s \u00b7 %s%s",
+      "%d file%s \u00b7 %s",
       nrow(models),
       if (nrow(models) == 1L) "" else "s",
-      total_size,
-      if (managed < nrow(models)) {
-        sprintf(" \u00b7 %d external", nrow(models) - managed)
-      } else {
-        ""
-      }
+      total_size
     )
   })
 
   output$local_stt_models_table <- renderDT({
-    models <- local_state$native_models
+    models <- managed_native_models()
     if (!is.data.frame(models) || !nrow(models)) {
       return(datatable(
         data.frame(Model = "No downloaded models found."),
@@ -4247,24 +4093,13 @@ server <- function(input, output, session) {
       Model = models$filename,
       Quant = ifelse(nzchar(models$quant), toupper(models$quant), "\u2014"),
       Size = models$size,
-      Location = ifelse(
-        models$managed,
-        "CrispASR cache",
-        "External (read-only)"
-      ),
-      State = ifelse(models$selected, "Selected", "Cached"),
       stringsAsFactors = FALSE
     )
-    selected_rows <- which(models$selected)
     datatable(
       display,
       rownames = FALSE,
       escape = TRUE,
-      selection = list(
-        mode = "single",
-        selected = if (length(selected_rows)) selected_rows[[1]] else NULL,
-        target = "row"
-      ),
+      selection = "single",
       class = "compact stripe",
       options = list(
         dom = "t",
@@ -4274,11 +4109,9 @@ server <- function(input, output, session) {
         scrollCollapse = TRUE,
         autoWidth = FALSE,
         columnDefs = list(
-          list(width = "38%", targets = 0),
-          list(width = "12%", targets = 1),
-          list(width = "14%", targets = 2),
-          list(width = "22%", targets = 3),
-          list(width = "14%", targets = 4)
+          list(width = "60%", targets = 0),
+          list(width = "16%", targets = 1),
+          list(width = "24%", targets = 2)
         )
       )
     )
@@ -4288,55 +4121,32 @@ server <- function(input, output, session) {
     local_state$native_model_status
   })
 
-  observeEvent(input$local_stt_models_refresh, {
-    preview <- tryCatch(
-      .genflow_validate_local_config(local_config_from_inputs()),
-      error = function(e) {
-        local_state$native_model_status <- paste(
-          "Could not refresh models:",
-          conditionMessage(e)
+  sync_native_models_catalog <- function() {
+    directory <- current_models_dir()
+    result <- tryCatch(
+      {
+        gen_update_models(
+          provider = "local-native",
+          directory = directory,
+          verbose = FALSE,
+          fail_on_error = TRUE
         )
-        showNotification(conditionMessage(e), type = "error")
-        NULL
-      }
+        reload_model_state(directory)
+        TRUE
+      },
+      error = function(e) e
     )
-    if (is.null(preview)) return()
-    current_model <- input$local_stt_native_model %||%
-      preview$stt_native_model %||% "auto"
-    refresh_native_models(
-      preview,
-      selected = current_model,
-      status = paste(
-        "Cache refreshed at",
-        format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    if (inherits(result, "error")) {
+      warning_message <- paste(
+        "Native model cache changed, but the Models catalog could not be updated:",
+        conditionMessage(result)
       )
-    )
-  })
-
-  observeEvent(input$local_stt_model_use, {
-    selected <- native_model_selected_row()
-    if (is.null(selected)) {
-      local_state$native_model_status <- "Select one downloaded model first."
-      showNotification("Select one downloaded model first.", type = "warning")
-      return()
+      models_state$status <- warning_message
+      showNotification(warning_message, type = "warning")
+      return(invisible(FALSE))
     }
-
-    models <- local_state$native_models
-    models$selected <- models$path == selected$path[[1]]
-    local_state$native_models <- models
-    updateSelectizeInput(
-      session,
-      "local_stt_native_model",
-      choices = .local_native_model_choices(models, selected$path[[1]]),
-      selected = selected$path[[1]],
-      server = FALSE
-    )
-    local_state$native_model_status <- paste0(
-      "Selected ",
-      selected$filename[[1]],
-      ". Click Save to persist this choice."
-    )
-  })
+    invisible(TRUE)
+  }
 
   select_native_download_result <- function(result) {
     downloaded_path <- trimws(as.character(result$path %||% "")[1])
@@ -4353,16 +4163,14 @@ server <- function(input, output, session) {
     message <- paste0(
       if (cached) "Already downloaded: " else "Downloaded: ",
       filename,
-      ". Local file selected. Click Save to persist this choice."
+      ". It is now available under Models > Native STT."
     )
     preview <- tryCatch(
       .genflow_validate_local_config(local_config_from_inputs()),
       error = function(e) local_state$config
     )
-    preview$stt_native_model <- downloaded_path
     refresh_native_models(
       preview,
-      selected = downloaded_path,
       status = message
     )
 
@@ -4379,26 +4187,111 @@ server <- function(input, output, session) {
           size_bytes = size_bytes,
           size = .local_native_format_bytes(size_bytes),
           source_url = as.character(result$source_url %||% "")[1],
-          managed = FALSE,
-          selected = TRUE,
+          managed = TRUE,
+          selected = FALSE,
           stringsAsFactors = FALSE
         )
       )
     } else {
-      models$selected <- models$path == downloaded_path
+      models$selected <- FALSE
     }
     local_state$native_models <- models
-    updateSelectizeInput(
-      session,
-      "local_stt_native_model",
-      choices = .local_native_model_choices(models, downloaded_path),
-      selected = downloaded_path,
-      server = FALSE
-    )
+    sync_native_models_catalog()
+    local_state$native_verified_reference <- ""
+    local_state$native_verify_status <- NULL
     local_state$native_model_status <- message
     showNotification(message, type = "message")
     invisible(TRUE)
   }
+
+  native_new_model_selector <- function() {
+    .local_native_hf_selector(input$local_stt_new_model_reference)
+  }
+
+  observeEvent(input$local_stt_new_model_reference, {
+    local_state$native_verified_reference <- ""
+    local_state$native_verify_status <- NULL
+  }, ignoreInit = TRUE)
+
+  output$local_stt_new_model_status_ui <- renderUI({
+    status <- local_state$native_verify_status
+    if (!is.list(status)) return(NULL)
+    type <- as.character(status$type %||% "info")[1]
+    message <- as.character(status$message %||% "")[1]
+    if (!nzchar(message)) return(NULL)
+    div(
+      class = paste(
+        "gf-local-verification",
+        if (identical(type, "ok")) {
+          "is-ok"
+        } else if (identical(type, "error")) {
+          "is-error"
+        } else {
+          ""
+        }
+      ),
+      icon(if (identical(type, "ok")) "circle-check" else "triangle-exclamation"),
+      " ",
+      message
+    )
+  })
+
+  observeEvent(input$local_stt_model_verify, {
+    engine <- input$local_stt_native_engine %||% "auto"
+    result <- tryCatch({
+      if (identical(engine, "moss-transcribe")) {
+        stop(
+          "The Hugging Face model manager is available for CrispASR only.",
+          call. = FALSE
+        )
+      }
+      selector <- native_new_model_selector()
+      artifact <- withProgress(
+        message = "Verifying Hugging Face model...",
+        value = 0.25,
+        {
+          resolved <- .genflow_crispasr_resolve_download(
+            selector = selector,
+            backend = "",
+            quant = "",
+            executable = ""
+          )
+          incProgress(0.75)
+          resolved
+        }
+      )
+      list(selector = selector, artifact = artifact)
+    }, error = function(e) e)
+
+    if (inherits(result, "error")) {
+      local_state$native_verified_reference <- ""
+      local_state$native_verify_status <- list(
+        type = "error",
+        message = conditionMessage(result)
+      )
+      showNotification(conditionMessage(result), type = "error")
+      return()
+    }
+
+    artifact <- result$artifact
+    revision <- trimws(as.character(artifact$revision %||% "")[1])
+    revision_label <- if (nzchar(revision)) {
+      paste0(" \u00b7 revision ", substr(revision, 1L, 10L))
+    } else {
+      ""
+    }
+    local_state$native_verified_reference <- result$selector
+    local_state$native_verify_status <- list(
+      type = "ok",
+      message = paste0(
+        "Available: ",
+        artifact$filename,
+        " \u00b7 ",
+        .local_native_format_bytes(artifact$size_bytes),
+        revision_label
+      )
+    )
+  })
 
   output$local_stt_download_progress_ui <- renderUI({
     status <- local_state$native_download_status
@@ -4493,6 +4386,10 @@ server <- function(input, output, session) {
           "Model download failed:",
           detail
         )
+        local_state$native_verify_status <- list(
+          type = "error",
+          message = detail
+        )
         showNotification(detail, type = "error")
       }
       try(.genflow_native_download_job_cleanup(existing_job), silent = TRUE)
@@ -4500,7 +4397,7 @@ server <- function(input, output, session) {
       updateActionButton(
         session,
         "local_stt_model_download",
-        label = "Download current model",
+        label = "Download",
         icon = icon("download")
       )
       # Process the previous terminal result first. A second click starts a
@@ -4515,18 +4412,34 @@ server <- function(input, output, session) {
         "Select CrispASR or Detect automatically first."
       )
       local_state$native_model_status <- message
+      local_state$native_verify_status <- list(
+        type = "error",
+        message = message
+      )
       showNotification(message, type = "warning")
       return()
     }
 
-    selector <- trimws(input$local_stt_native_model %||% "auto")
-    if (!nzchar(selector)) selector <- "auto"
+    selector <- tryCatch(
+      native_new_model_selector(),
+      error = function(e) e
+    )
+    if (inherits(selector, "error")) {
+      local_state$native_verify_status <- list(
+        type = "error",
+        message = conditionMessage(selector)
+      )
+      showNotification(conditionMessage(selector), type = "error")
+      return()
+    }
     job <- tryCatch(
       .genflow_native_download_job_start(
         selector = selector,
-        backend = trimws(input$local_stt_native_backend %||% ""),
-        quant = trimws(input$local_stt_native_quant %||% ""),
-        executable = trimws(input$local_stt_native_executable %||% "")
+        backend = "",
+        quant = "",
+        executable = trimws(
+          local_state$config$stt_native_executable %||% ""
+        )
       ),
       error = function(e) e
     )
@@ -4538,12 +4451,20 @@ server <- function(input, output, session) {
         stage = "error",
         message = conditionMessage(job)
       )
+      local_state$native_verify_status <- list(
+        type = "error",
+        message = conditionMessage(job)
+      )
       showNotification(conditionMessage(job), type = "error")
       return()
     }
     native_download_holder$job <- job
     local_state$native_download_status <-
       .genflow_native_download_job_read(job)
+    local_state$native_verify_status <- list(
+      type = "info",
+      message = "Download started. The remote model is being verified again."
+    )
     updateActionButton(
       session,
       "local_stt_model_download",
@@ -4575,6 +4496,10 @@ server <- function(input, output, session) {
       }
       if (!nzchar(detail)) detail <- "The background download stopped unexpectedly."
       local_state$native_model_status <- paste("Model download failed:", detail)
+      local_state$native_verify_status <- list(
+        type = "error",
+        message = detail
+      )
       showNotification(detail, type = "error")
     }
 
@@ -4583,7 +4508,7 @@ server <- function(input, output, session) {
     updateActionButton(
       session,
       "local_stt_model_download",
-      label = "Download current model",
+      label = "Download",
       icon = icon("download")
     )
   })
@@ -4610,16 +4535,24 @@ server <- function(input, output, session) {
       detail <- trimws(as.character(cancelled$message %||% "")[1])
       if (!nzchar(detail)) detail <- "The background download failed."
       local_state$native_model_status <- paste("Model download failed:", detail)
+      local_state$native_verify_status <- list(
+        type = "error",
+        message = detail
+      )
       showNotification(detail, type = "error")
     } else {
       local_state$native_model_status <- "Native STT model download cancelled."
+      local_state$native_verify_status <- list(
+        type = "info",
+        message = "Download cancelled."
+      )
     }
     try(.genflow_native_download_job_cleanup(job), silent = TRUE)
     native_download_holder$job <- NULL
     updateActionButton(
       session,
       "local_stt_model_download",
-      label = "Download current model",
+      label = "Download",
       icon = icon("download")
     )
   })
@@ -4687,15 +4620,10 @@ server <- function(input, output, session) {
       removeModal()
       return()
     }
-    active_model <- isolate(
-      input$local_stt_native_model %||%
-        local_state$config$stt_native_model %||%
-        ""
-    )
     removed <- tryCatch(
       .genflow_crispasr_remove_model(
         path = path[[1]],
-        active_model = active_model
+        active_model = active_native_models()
       ),
       error = function(e) e
     )
@@ -4715,9 +4643,9 @@ server <- function(input, output, session) {
     )
     refresh_native_models(
       preview,
-      selected = active_model,
       status = message
     )
+    sync_native_models_catalog()
     showNotification(message, type = "message")
   })
 

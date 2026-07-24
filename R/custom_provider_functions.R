@@ -15,8 +15,7 @@
     fireworks = "Fireworks",
     deepinfra = "DeepInfra",
     hyperbolic = "Hyperbolic",
-    hf = "Hugging Face (API)",
-    `hf-local` = "Hugging Face (local)",
+    hf = "Hugging Face",
     `local-native` = "Native STT (local)",
     `local-openai` = "OpenAI-compatible STT (local)",
     ollama = "Ollama",
@@ -31,6 +30,27 @@
 #' @noRd
 .genflow_builtin_services <- function() {
   names(.genflow_builtin_provider_labels())
+}
+
+#' @keywords internal
+#' @noRd
+.genflow_retired_service_ids <- function() {
+  c(
+    "hf-local",
+    "hf_local",
+    "huggingface-local",
+    "huggingface_local",
+    "transformers"
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.genflow_is_retired_service <- function(service) {
+  service_id <- tolower(trimws(as.character(service %||% character())))
+  !is.na(service_id) &
+    nzchar(service_id) &
+    service_id %in% .genflow_retired_service_ids()
 }
 
 #' @keywords internal
@@ -57,10 +77,6 @@
     "huggingface" = "hf",
     "hugging-face" = "hf",
     "hugging_face" = "hf",
-    "huggingface-local" = "hf-local",
-    "huggingface_local" = "hf-local",
-    "hf_local" = "hf-local",
-    "transformers" = "hf-local",
     "local_native" = "local-native",
     "native-stt" = "local-native",
     "native_stt" = "local-native",
@@ -202,6 +218,13 @@
   }
 
   id <- .genflow_normalize_provider_id(config$id)
+  if (.genflow_is_retired_service(id)) {
+    stop(
+      "`id` '", id,
+      "' is retired and cannot be registered as a custom provider.",
+      call. = FALSE
+    )
+  }
   if (id %in% .genflow_builtin_services()) {
     stop("`id` '", id, "' conflicts with a built-in provider id.", call. = FALSE)
   }

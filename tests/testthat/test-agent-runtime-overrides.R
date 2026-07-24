@@ -64,21 +64,19 @@ test_that("image agents reuse content context and support explicit override", {
   )
 })
 
-test_that("TTS agents reuse content context and STT accepts an audio override", {
+test_that("TTS agents reuse context and STT uses only current runtime fields", {
   testthat::local_mocked_bindings(
     gen_tts.default = function(text, service = "openai", ...) {
       list(text = text, service = service)
     },
     gen_stt.default = function(audio,
                                service = "openai",
-                               revision = NULL,
                                native_engine = NULL,
                                native_backend = NULL,
                                ...) {
       list(
         audio = audio,
         service = service,
-        revision = revision,
         native_engine = native_engine,
         native_backend = native_backend
       )
@@ -92,8 +90,7 @@ test_that("TTS agents reuse content context and STT accepts an audio override", 
   stt_agent <- structure(
     list(
       audio = "saved.wav",
-      service = "hf-local",
-      revision = "saved-commit"
+      service = "local-openai"
     ),
     class = "genflow_agent"
   )
@@ -112,10 +109,17 @@ test_that("TTS agents reuse content context and STT accepts an audio override", 
   expect_identical(
     genflow:::gen_stt.genflow_agent(
       stt_agent,
-      audio_override = "replacement.wav",
-      revision = "override-commit"
-    )[c("audio", "revision")],
-    list(audio = "replacement.wav", revision = "override-commit")
+      audio_override = "replacement.wav"
+    )[c("audio", "service")],
+    list(audio = "replacement.wav", service = "local-openai")
+  )
+  expect_error(
+    genflow:::gen_stt.genflow_agent(
+      stt_agent,
+      revision = "retired-python-bridge-field"
+    ),
+    "Unsupported `gen_stt()` override(s): revision.",
+    fixed = TRUE
   )
 
   native_agent <- structure(

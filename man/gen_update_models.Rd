@@ -16,7 +16,8 @@ gen_update_models(
 Otherwise one of the built-ins ("openrouter", "openai", "anthropic",
 "groq", "cerebras", "together", "sambanova", "nebius", "deepseek",
 "perplexity", "fireworks", "deepinfra", "hyperbolic", "gemini",
-"fal", "replicate", "hf", "hf-local", "ollama", "llamacpp") or a custom provider id
+"fal", "replicate", "hf", "ollama", "llamacpp", "local-native") or
+a custom provider id
 configured with \code{\link[=set_provider_openai_compat]{set_provider_openai_compat()}}.}
 
 \item{directory}{Character path where CSVs will be saved. Defaults to working dir.}

@@ -39,8 +39,7 @@ sufficient to make it executable.
 | DeepInfra | yes |  |  |  | yes |
 | Hyperbolic | yes |  |  |  | yes |
 | Gemini | yes |  |  |  | yes |
-| Hugging Face API (`hf`) | yes | yes | yes |  | yes |
-| Hugging Face local (`hf-local`) |  |  | yes |  | yes |
+| Hugging Face (`hf`, remote inference) | yes | yes | yes |  | yes |
 | FAL |  | yes |  |  | yes |
 | Replicate |  | yes | yes | yes | yes |
 | Ollama | yes |  |  |  | yes |
@@ -49,7 +48,7 @@ sufficient to make it executable.
 | Cloudflare |  |  | yes |  |  |
 | Voicegain |  |  | yes |  |  |
 | Local OpenAI-compatible STT (`local-openai`) |  |  | yes |  |  |
-| Native STT engine (`local-native`) |  |  | yes |  |  |
+| Native STT engine (`local-native`) |  |  | yes |  | yes |
 
 Custom providers created with `set_provider_openai_compat()` extend the text
 runtime and model catalog through an OpenAI-compatible contract.
@@ -151,14 +150,23 @@ validates the result, takes a provider lock, and promotes the validated CSV
 atomically. A failed updater or invalid schema leaves the previous catalog
 byte-for-byte unchanged.
 
-Hugging Face intentionally has two catalogs:
+Hugging Face has one remote execution/catalog contract:
 
-- `hf.csv`: models with a live Hugging Face Inference Provider mapping;
-- `hf-local.csv`: Hub models discoverable for local execution.
+- `hf.csv` contains models with a live Hugging Face Inference Provider mapping
+  and routes them through `service = "hf"`;
+- there is no `hf-local` catalog or Python/Transformers bridge.
 
-This distinction prevents local-only repositories such as
-`OpenMOSS-Team/MOSS-Transcribe-Diarize` from being advertised as remotely
-callable through `service = "hf"`.
+Native speech models use a separate local contract. `local-native.csv` is
+generated from the canonical CrispASR cache and contains only downloaded,
+regular files that genflow recognizes as managed cache entries. Its `model`
+values are stable cache filenames rather than machine-specific absolute paths.
+External files, symbolic links, partial downloads, and arbitrary Hugging Face
+repositories are not advertised in that catalog. An empty managed cache
+publishes an empty catalog so deleted models cannot remain selectable.
+
+The Models area owns model discovery and selection for setups and agents. The
+Local area owns runtime connections, engine/device configuration, diagnostics,
+and native cache management; it is not a second model picker.
 
 ## Local inference boundary
 
@@ -172,35 +180,34 @@ Text:
 
 STT:
 
-- `hf-local` launches `inst/python/genflow_stt.py` as an isolated subprocess;
 - `local-native` launches a configured external native CLI and separates the
-  transport (`service`), engine, model backend, and model selector;
+  transport (`service`) from the selected engine and device;
   `native_engine = "crispasr"` is the experimental/beta multi-architecture
   route, while `native_engine = "moss-transcribe"` is MOSS-specific;
 - `local-openai` calls a user-managed `/v1/audio/transcriptions` endpoint.
 
-The native model selector can be a local path, `auto`, or an engine-compatible
-`hf://OWNER/REPO:FILE` reference. A slash before the required filename is
-accepted at the public boundary and normalized to the colon form used by
-CrispASR. This does not make arbitrary Hugging Face repositories executable:
-the selected engine must implement the architecture and support that exact
-packaging; genflow does not combine split model/projector GGUF artifacts. The
-old `moss-cpp` service id is a pre-release compatibility alias, not the
-canonical provider contract.
+For the standard app workflow, a Native STT model is downloaded and deleted in
+Local, then selected for a setup or agent in Models. Direct `gen_stt()` calls
+may still provide a compatible local path or explicit model argument. The
+CrispASR cache manager accepts exact `hf://OWNER/REPO:FILE` references and
+supported Hugging Face file URLs for search, verification, and download. It
+resolves repository metadata to an immutable revision and validates the
+artifact before publishing it into the managed cache. This does not make an
+arbitrary Hugging Face repository executable: the native engine must implement
+the architecture and exact packaging, and genflow does not combine split
+model/projector GGUF artifacts.
 
-genflow does not install external engines, manage native model caches,
-supervise servers, or silently change any local backend. Explicit `auto` or
-`hf://` selectors may authorize the selected engine to download a compatible
-model. Diagnostics reject a directory used as an executable and may inspect
-the CrispASR cache read-only to distinguish a pending download from an existing
-non-empty model file, including a source-origin sidecar when present. The
-native cache is separate from the Python Hugging Face cache configuration.
-Native `hf://` downloads follow the repository's mutable `main` revision, so
-auditable deployments should use a verified local artifact. Only engine
-execution proves architecture compatibility and actual accelerator use.
+genflow does not install external engines, supervise servers, or silently
+change a local backend. It does manage the files it downloaded into the
+canonical CrispASR cache, including verification, progress, cancellation, and
+safe deletion. The STT server remains a separate user-managed,
+OpenAI-compatible option; genflow stores its connection settings but does not
+own its process or models. The old `moss-cpp` service id is a pre-release
+compatibility alias, not the canonical provider contract. Only engine execution
+proves architecture compatibility and actual accelerator use.
 See
 [Local inference](local-inference.md) for configuration, engine/backend/model
-compatibility, MOSS, revision pinning, ROCm, Vulkan, and security details.
+compatibility, cache management, MOSS, Vulkan, and security details.
 
 ## Shiny application
 
@@ -216,7 +223,7 @@ The app has five ownership areas:
 - setup/content/agent CRUD;
 - model catalogs and favorites;
 - credentials;
-- local inference configuration and diagnostics;
+- local runtime configuration, diagnostics, and managed native model cache;
 - validated bundle import/export.
 
 Values read from persisted entities and catalogs must be escaped before they
