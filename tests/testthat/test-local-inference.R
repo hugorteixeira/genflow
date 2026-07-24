@@ -23,7 +23,7 @@ test_that("local inference config round-trips and normalizes values", {
   expect_equal(config$dtype, "bfloat16")
   expect_equal(config$hf_revision, "reviewed-model-commit")
   expect_equal(config$ollama_base_url, "http://127.0.0.1:11434")
-  expect_equal(config$version, 2L)
+  expect_equal(config$version, 3L)
   expect_equal(config$stt_native_engine, "crispasr")
   expect_equal(config$stt_native_device, "vulkan")
   expect_equal(config$stt_native_model, "/models/parakeet-q4_k.gguf")
@@ -71,7 +71,7 @@ test_that("legacy MOSS config migrates once and canonical values can be cleared"
   )
 
   migrated <- gen_local_config(path = path)
-  expect_identical(migrated$version, 2L)
+  expect_identical(migrated$version, 3L)
   expect_identical(migrated$stt_native_engine, "moss-transcribe")
   expect_identical(
     migrated$stt_native_executable,
@@ -192,6 +192,47 @@ test_that("canonical native environment values override saved configuration", {
   expect_identical(config$stt_native_model, "auto")
   expect_identical(config$stt_native_backend, "parakeet")
   expect_identical(config$stt_native_device, "vulkan")
+})
+
+test_that("legacy MOSS environment values apply only to the MOSS engine", {
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_ENGINE = NA,
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_STT_NATIVE_MODEL = NA,
+    GENFLOW_STT_NATIVE_DEVICE = NA,
+    GENFLOW_MOSS_CPP_EXECUTABLE = "/legacy/moss-transcribe",
+    GENFLOW_MOSS_CPP_MODEL = "/legacy/moss.gguf",
+    GENFLOW_MOSS_CPP_DEVICE = "vulkan"
+  ))
+
+  crisp <- genflow:::.genflow_local_config_defaults()
+  crisp$stt_native_engine <- "crispasr"
+  crisp$stt_native_executable <- "/current/crispasr"
+  crisp$stt_native_model <- "/current/crisp.gguf"
+  crisp$stt_native_device <- "cpu"
+  crisp_effective <- genflow:::.genflow_local_effective_config(crisp)
+  expect_identical(crisp_effective$stt_native_engine, "crispasr")
+  expect_identical(
+    crisp_effective$stt_native_executable,
+    "/current/crispasr"
+  )
+  expect_identical(crisp_effective$stt_native_model, "/current/crisp.gguf")
+  expect_identical(crisp_effective$stt_native_device, "cpu")
+
+  moss <- genflow:::.genflow_local_config_defaults()
+  moss$stt_native_engine <- "auto"
+  moss_effective <- genflow:::.genflow_local_effective_config(moss)
+  expect_identical(moss_effective$stt_native_engine, "moss-transcribe")
+  expect_identical(
+    moss_effective$stt_native_executable,
+    "/legacy/moss-transcribe"
+  )
+  expect_identical(moss_effective$stt_native_model, "/legacy/moss.gguf")
+  expect_identical(moss_effective$stt_native_device, "vulkan")
+  expect_identical(
+    genflow:::.stt_resolve_native_engine(config = moss),
+    "moss-transcribe"
+  )
 })
 
 test_that("Hugging Face revision environment overrides the saved pin", {
@@ -554,6 +595,22 @@ test_that("native STT diagnostics explain explicit CrispASR downloads", {
   )
   expect_identical(matching_source$status[[2]], "ok")
 
+  writeLines(
+    paste0(
+      "https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF/",
+      "resolve/",
+      strrep("a", 40),
+      "/",
+      basename(cached_model)
+    ),
+    sidecar
+  )
+  pinned_source <- do.call(
+    rbind,
+    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
+  )
+  expect_identical(pinned_source$status[[2]], "ok")
+
   models_dir <- tempfile("genflow-crispasr-models-")
   dir.create(models_dir)
   on.exit(unlink(models_dir, recursive = TRUE), add = TRUE)
@@ -577,6 +634,44 @@ test_that("native STT diagnostics explain explicit CrispASR downloads", {
   )
   expect_identical(missing_file$status[[2]], "error")
   expect_match(missing_file$detail[[2]], "one model filename", fixed = TRUE)
+})
+
+test_that("native STT diagnostics reject unpublished remote quantizations", {
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "crispasr"
+  config$stt_native_executable <- file.path(R.home("bin"), "R")
+  config$stt_native_backend <- "granite-4.1"
+  config$stt_native_model <- paste0(
+    "hf://cstr/granite-speech-4.1-2b-GGUF:",
+    "granite-speech-4.1-2b-q8_0.gguf"
+  )
+
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_hf_metadata = function(repository, timeout = 30) {
+      list(
+        sha = strrep("a", 40),
+        gguf = list(architecture = "granite_speech"),
+        siblings = list(list(
+          rfilename = "granite-speech-4.1-2b-q4_k.gguf",
+          size = 8,
+          lfs = list(sha256 = strrep("b", 64), size = 8)
+        ))
+      )
+    },
+    .package = "genflow"
+  )
+
+  rows <- do.call(
+    rbind,
+    genflow:::.genflow_native_stt_diagnostics(
+      config,
+      timeout = 2,
+      check_remote = TRUE
+    )
+  )
+  expect_identical(rows$status[[2]], "error")
+  expect_match(rows$detail[[2]], "does not exist", fixed = TRUE)
+  expect_match(rows$detail[[2]], "q8_0", fixed = TRUE)
 })
 
 test_that("native STT diagnostics reject a directory used as the executable", {
@@ -717,4 +812,756 @@ test_that("authenticated local endpoint diagnostics forward bearer tokens", {
     unname(calls[["Local STT server"]]$headers),
     "Bearer stt-secret"
   )
+})
+
+test_that("CrispASR inventory separates managed models from cache noise", {
+  cache_dir <- tempfile("genflow-crispasr-managed-")
+  external_dir <- tempfile("genflow-crispasr-external-")
+  dir.create(cache_dir)
+  dir.create(external_dir)
+  on.exit(unlink(c(cache_dir, external_dir), recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+
+  filename <- "granite-speech-4.1-2b-q4_k.gguf"
+  source_url <- paste0(
+    "https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF/",
+    "resolve/main/",
+    filename
+  )
+  managed <- file.path(cache_dir, filename)
+  writeBin(as.raw(1:8), managed)
+  writeChar(source_url, paste0(managed, ".src"), eos = NULL)
+  writeBin(as.raw(1:4), file.path(cache_dir, paste0(filename, ".part.42")))
+  writeBin(raw(), file.path(cache_dir, "empty-q8_0.gguf"))
+  writeLines("not a model", file.path(cache_dir, "notes.txt"))
+
+  external <- file.path(external_dir, "parakeet-q8_0.gguf")
+  writeBin(as.raw(1:3), external)
+  link <- file.path(cache_dir, "linked-q8_0.gguf")
+  link_created <- file.symlink(external, link)
+
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_model <- paste0(
+    "hf://cstr/granite-speech-4.1-2b-GGUF:",
+    filename
+  )
+  inventory <- genflow:::.genflow_crispasr_inventory(
+    config = config,
+    cache_dirs = c(cache_dir, external_dir)
+  )
+
+  expect_named(inventory, c(
+    "path",
+    "filename",
+    "quant",
+    "size_bytes",
+    "size",
+    "source_url",
+    "managed",
+    "selected"
+  ))
+  expect_true(filename %in% inventory$filename)
+  expect_false(any(grepl("\\.src$|\\.part\\.", inventory$filename)))
+  expect_false("empty-q8_0.gguf" %in% inventory$filename)
+
+  managed_row <- inventory[inventory$filename == filename, , drop = FALSE]
+  expect_identical(managed_row$quant, "q4_k")
+  expect_identical(managed_row$size_bytes, 8)
+  expect_identical(managed_row$source_url, source_url)
+  expect_true(managed_row$managed)
+  expect_true(managed_row$selected)
+
+  external_row <- inventory[
+    inventory$filename == basename(external),
+    ,
+    drop = FALSE
+  ]
+  expect_false(external_row$managed)
+  if (isTRUE(link_created)) {
+    link_row <- inventory[
+      inventory$filename == basename(link),
+      ,
+      drop = FALSE
+    ]
+    expect_false(link_row$managed)
+  }
+})
+
+test_that("CrispASR Hugging Face discovery accepts only real compatible files", {
+  revision <- strrep("a", 40)
+  cstr_metadata <- list(
+    sha = revision,
+    gguf = list(architecture = "granite_speech"),
+    siblings = list(
+      list(
+        rfilename = "granite-speech-4.1-2b-q4_k.gguf",
+        size = 2941043168,
+        lfs = list(sha256 = strrep("1", 64), size = 2941043168)
+      ),
+      list(
+        rfilename = "granite-speech-4.1-2b-f16.gguf",
+        size = 5581887616,
+        lfs = list(sha256 = strrep("2", 64), size = 5581887616)
+      ),
+      list(rfilename = "README.md", size = 4000)
+    )
+  )
+
+  artifact <- genflow:::.genflow_crispasr_hf_artifact(
+    metadata = cstr_metadata,
+    repository = "cstr/granite-speech-4.1-2b-GGUF",
+    filename = "granite-speech-4.1-2b-q4_k.gguf",
+    backend = "granite-4.1"
+  )
+  expect_identical(artifact$size_bytes, 2941043168)
+  expect_identical(artifact$architecture, "granite_speech")
+  expect_match(
+    artifact$source_url,
+    paste0("/resolve/", revision, "/"),
+    fixed = TRUE
+  )
+  expect_identical(artifact$sha256, strrep("1", 64))
+
+  mutable_metadata <- cstr_metadata
+  mutable_metadata$sha <- "main"
+  expect_error(
+    genflow:::.genflow_crispasr_hf_artifact(
+      metadata = mutable_metadata,
+      repository = "cstr/granite-speech-4.1-2b-GGUF",
+      filename = "granite-speech-4.1-2b-q4_k.gguf",
+      backend = "granite-4.1"
+    ),
+    "immutable repository revision"
+  )
+
+  missing_hash <- cstr_metadata
+  missing_hash$siblings[[1]]$lfs$sha256 <- ""
+  expect_error(
+    genflow:::.genflow_crispasr_hf_artifact(
+      metadata = missing_hash,
+      repository = "cstr/granite-speech-4.1-2b-GGUF",
+      filename = "granite-speech-4.1-2b-q4_k.gguf",
+      backend = "granite-4.1"
+    ),
+    "LFS SHA-256"
+  )
+
+  expect_error(
+    genflow:::.genflow_crispasr_hf_artifact(
+      metadata = cstr_metadata,
+      repository = "cstr/granite-speech-4.1-2b-GGUF",
+      filename = "granite-speech-4.1-2b-q8_0.gguf",
+      backend = "granite-4.1"
+    ),
+    "does not exist"
+  )
+
+  ibm_metadata <- list(
+    gguf = list(architecture = "granite"),
+    siblings = list(list(
+      rfilename = "granite-speech-4.1-2b-Q8_0.gguf",
+      size = 1956154944
+    ))
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_hf_artifact(
+      metadata = ibm_metadata,
+      repository = "ibm-granite/granite-speech-4.1-2b-GGUF",
+      filename = "granite-speech-4.1-2b-Q8_0.gguf",
+      backend = "granite-4.1"
+    ),
+    "requires a monolithic `granite_speech` model",
+    fixed = TRUE
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_validate_filename("../model.gguf"),
+    "flat"
+  )
+})
+
+test_that("CrispASR auto preview forwards quant without downloading", {
+  cache_dir <- tempfile("genflow-crispasr-preview-")
+  dir.create(cache_dir)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+  withr::local_envvar(CRISPASR_CACHE_DIR = cache_dir)
+  captured_args <- NULL
+
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_cache_executable = function(executable = "") {
+      "/mock/crispasr"
+    },
+    .stt_run_process = function(command,
+                                args,
+                                timeout_secs,
+                                environment = character()) {
+      captured_args <<- args
+      list(
+        status = 0L,
+        output = c(
+          "crispasr 0.8.21",
+          "model:",
+          "  requested: auto",
+          "  backend:   granite-4.1",
+          "  registry:  granite-speech-4.1-2b-q8_0.gguf",
+          paste0(
+            "  url:       https://huggingface.co/cstr/",
+            "granite-speech-4.1-2b-GGUF/resolve/main/",
+            "granite-speech-4.1-2b-q8_0.gguf"
+          ),
+          "  size:      ~2.94 GB",
+          "  status:    would download",
+          paste0(
+            "  path:      ",
+            cache_dir,
+            "/granite-speech-4.1-2b-q8_0.gguf"
+          ),
+          "companion:",
+          "  registry:  unrelated-codec.gguf",
+          "  url:       https://huggingface.co/test/codec/resolve/main/unrelated-codec.gguf",
+          paste0(
+            "  path:      ",
+            cache_dir,
+            "/unrelated-codec.gguf"
+          )
+        )
+      )
+    },
+    .package = "genflow"
+  )
+
+  preview <- genflow:::.genflow_crispasr_preview_auto(
+    selector = "auto:q8_0",
+    backend = "granite-4.1"
+  )
+  expect_identical(preview$quant, "q8_0")
+  expect_identical(
+    preview$registry,
+    "granite-speech-4.1-2b-q8_0.gguf"
+  )
+  expect_true("--model-quant" %in% captured_args)
+  expect_identical(
+    captured_args[[match("--model-quant", captured_args) + 1L]],
+    "q8_0"
+  )
+  expect_true("--dry-run-resolve" %in% captured_args)
+  expect_false("--hf-repo" %in% captured_args)
+  expect_error(
+    genflow:::.genflow_crispasr_preview_auto(
+      selector = "auto:q8_0",
+      backend = "granite-4.1",
+      quant = "q4_k"
+    ),
+    "Conflicting"
+  )
+})
+
+test_that("CrispASR resolution validates API siblings and HEAD before download", {
+  revision <- strrep("b", 40)
+  metadata <- list(
+    sha = revision,
+    gguf = list(architecture = "granite_speech"),
+    siblings = list(list(
+      rfilename = "granite-speech-4.1-2b-q4_k.gguf",
+      size = 8,
+      lfs = list(sha256 = strrep("3", 64), size = 8)
+    ))
+  )
+  preview_file <- "granite-speech-4.1-2b-q4_k.gguf"
+  head_calls <- list()
+
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_preview_auto = function(selector,
+                                              backend,
+                                              quant = "",
+                                              executable = "") {
+      list(
+        registry = preview_file,
+        url = paste0(
+          "https://huggingface.co/cstr/",
+          "granite-speech-4.1-2b-GGUF/resolve/main/",
+          preview_file
+        ),
+        path = file.path("/cache", preview_file),
+        status = "would download"
+      )
+    },
+    .genflow_crispasr_hf_metadata = function(repository, timeout = 30) {
+      metadata
+    },
+    .genflow_crispasr_hf_head = function(url,
+                                         expected_size = NA_real_,
+                                         timeout = 30) {
+      head_calls[[length(head_calls) + 1L]] <<- list(
+        url = url,
+        expected_size = expected_size
+      )
+      list(status = 200L, size_bytes = expected_size)
+    },
+    .package = "genflow"
+  )
+
+  artifact <- genflow:::.genflow_crispasr_resolve_download(
+    selector = "auto",
+    backend = "granite-4.1"
+  )
+  expect_identical(artifact$filename, preview_file)
+  expect_match(
+    artifact$source_url,
+    paste0("/resolve/", revision, "/"),
+    fixed = TRUE
+  )
+  expect_length(head_calls, 1L)
+  expect_identical(head_calls[[1]]$expected_size, 8)
+
+  preview_file <- "granite-speech-4.1-2b-q8_0.gguf"
+  expect_error(
+    genflow:::.genflow_crispasr_resolve_download(
+      selector = "auto:q8_0",
+      backend = "granite-4.1"
+    ),
+    "does not exist"
+  )
+  expect_length(head_calls, 1L)
+})
+
+test_that("CrispASR download installs atomically and reports progress", {
+  cache_dir <- tempfile("genflow-crispasr-download-")
+  dir.create(cache_dir)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+
+  artifact <- list(
+    filename = "test-model-q4_k.gguf",
+    source_url = paste0(
+      "https://huggingface.co/test/model/resolve/",
+      strrep("c", 40),
+      "/",
+      "test-model-q4_k.gguf"
+    ),
+    size_bytes = 4,
+    sha256 = paste0(
+      "9f64a747e1b97f131fabb6b447296c9b6",
+      "f0201e79fb3c5356e6c77e89b6a806a"
+    )
+  )
+  fetch_count <- 0L
+  updates <- list()
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_resolve_download = function(selector,
+                                                  backend = "",
+                                                  quant = "",
+                                                  executable = "") {
+      artifact
+    },
+    .genflow_crispasr_fetch = function(url,
+                                       destination,
+                                       expected_size,
+                                       filename,
+                                       progress = NULL,
+                                       timeout = 3600) {
+      fetch_count <<- fetch_count + 1L
+      connection <- file(destination, open = "wb")
+      on.exit(close(connection), add = TRUE)
+      writeBin(as.raw(1:4), connection)
+      genflow:::.genflow_crispasr_report_progress(
+        progress,
+        "downloading",
+        filename,
+        4,
+        expected_size
+      )
+      invisible(4)
+    },
+    .package = "genflow"
+  )
+
+  result <- genflow:::.genflow_crispasr_download(
+    selector = "hf://test/model:test-model-q4_k.gguf",
+    backend = "test",
+    progress = function(update) {
+      updates[[length(updates) + 1L]] <<- update
+    }
+  )
+  expect_false(result$cached)
+  expect_true(file.exists(result$path))
+  expect_identical(file.info(result$path)$size[[1]], 4)
+  expect_identical(
+    genflow:::.genflow_crispasr_read_source(result$path),
+    artifact$source_url
+  )
+  expect_false(any(grepl(
+    "\\.part\\.",
+    list.files(cache_dir, all.files = TRUE)
+  )))
+  expect_true(all(c(
+    "resolving",
+    "downloading",
+    "verifying",
+    "publishing",
+    "complete"
+  ) %in%
+    vapply(updates, `[[`, character(1), "stage")))
+
+  cached <- genflow:::.genflow_crispasr_download(
+    selector = "hf://test/model:test-model-q4_k.gguf",
+    backend = "test"
+  )
+  expect_true(cached$cached)
+  expect_identical(fetch_count, 1L)
+
+  unlink(paste0(result$path, ".src"))
+  recovery_stages <- character()
+  recovered <- genflow:::.genflow_crispasr_download(
+    selector = "hf://test/model:test-model-q4_k.gguf",
+    backend = "test",
+    progress = function(update) {
+      recovery_stages <<- c(recovery_stages, update$stage)
+    }
+  )
+  expect_true(recovered$cached)
+  expect_true(all(c("verifying", "publishing", "complete") %in%
+    recovery_stages))
+  expect_identical(
+    genflow:::.genflow_crispasr_read_source(recovered$path),
+    artifact$source_url
+  )
+
+  writeLines(
+    paste0(
+      "https://huggingface.co/test/model/resolve/main/",
+      artifact$filename
+    ),
+    paste0(result$path, ".src")
+  )
+  migrated <- genflow:::.genflow_crispasr_download(
+    selector = "hf://test/model:test-model-q4_k.gguf",
+    backend = "test"
+  )
+  expect_true(migrated$cached)
+  expect_identical(
+    genflow:::.genflow_crispasr_read_source(migrated$path),
+    artifact$source_url
+  )
+
+  writeBin(as.raw(4:1), result$path)
+  expect_error(
+    genflow:::.genflow_crispasr_download(
+      selector = "hf://test/model:test-model-q4_k.gguf",
+      backend = "test"
+    ),
+    "SHA-256"
+  )
+  expect_true(file.exists(paste0(result$path, ".src")))
+
+  artifact$filename <- "wrong-hash-q8_0.gguf"
+  artifact$source_url <- paste0(
+    "https://huggingface.co/test/model/resolve/",
+    strrep("c", 40),
+    "/",
+    artifact$filename
+  )
+  artifact$size_bytes <- 4
+  artifact$sha256 <- strrep("0", 64)
+  expect_error(
+    genflow:::.genflow_crispasr_download(
+      selector = "hf://test/model:wrong-hash-q8_0.gguf",
+      backend = "test"
+    ),
+    "SHA-256"
+  )
+  expect_false(file.exists(file.path(cache_dir, artifact$filename)))
+
+  artifact$filename <- "wrong-size-q8_0.gguf"
+  artifact$source_url <- paste0(
+    "https://huggingface.co/test/model/resolve/",
+    strrep("c", 40),
+    "/",
+    artifact$filename
+  )
+  artifact$size_bytes <- 5
+  artifact$sha256 <- strrep("4", 64)
+  expect_error(
+    genflow:::.genflow_crispasr_download(
+      selector = "hf://test/model:wrong-size-q8_0.gguf",
+      backend = "test"
+    ),
+    "size does not match"
+  )
+  expect_false(file.exists(file.path(cache_dir, artifact$filename)))
+  expect_false(any(grepl(
+    "wrong-size.*\\.part\\.",
+    list.files(cache_dir, all.files = TRUE)
+  )))
+})
+
+test_that("CrispASR rolls back a downloaded payload when sidecar install fails", {
+  cache_dir <- tempfile("genflow-crispasr-sidecar-rollback-")
+  dir.create(cache_dir)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+
+  filename <- "rollback-model-q4_k.gguf"
+  artifact <- list(
+    filename = filename,
+    source_url = paste0(
+      "https://huggingface.co/test/model/resolve/",
+      strrep("d", 40),
+      "/",
+      filename
+    ),
+    size_bytes = 4,
+    sha256 = paste0(
+      "9f64a747e1b97f131fabb6b447296c9b6",
+      "f0201e79fb3c5356e6c77e89b6a806a"
+    )
+  )
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_resolve_download = function(selector,
+                                                  backend = "",
+                                                  quant = "",
+                                                  executable = "") {
+      artifact
+    },
+    .genflow_crispasr_fetch = function(url,
+                                       destination,
+                                       expected_size,
+                                       filename,
+                                       progress = NULL,
+                                       timeout = 3600) {
+      writeBin(as.raw(1:4), destination)
+      invisible(4)
+    },
+    .genflow_crispasr_write_source = function(path, source_url) {
+      stop("simulated sidecar failure", call. = FALSE)
+    },
+    .package = "genflow"
+  )
+
+  expect_error(
+    genflow:::.genflow_crispasr_download(
+      selector = paste0("hf://test/model:", filename),
+      backend = "test"
+    ),
+    "payload was rolled back"
+  )
+  expect_false(file.exists(file.path(cache_dir, filename)))
+  expect_false(file.exists(file.path(cache_dir, paste0(filename, ".src"))))
+  expect_false(any(grepl(
+    "\\.part\\.",
+    list.files(cache_dir, all.files = TRUE)
+  )))
+})
+
+test_that("CrispASR throttles byte-level progress callbacks", {
+  now <- 0
+  updates <- list()
+  report <- genflow:::.genflow_crispasr_progress_throttler(
+    progress = function(update) {
+      updates[[length(updates) + 1L]] <<- update
+    },
+    filename = "model.gguf",
+    bytes_total = 100 * 1024^2,
+    clock = function() now
+  )
+
+  report(1024)
+  now <- 0.1
+  report(2 * 1024^2)
+  expect_length(updates, 0L)
+
+  report(9 * 1024^2)
+  expect_length(updates, 1L)
+  now <- 0.2
+  report(10 * 1024^2)
+  expect_length(updates, 1L)
+
+  now <- 0.4
+  report(11 * 1024^2)
+  expect_length(updates, 2L)
+  report(100 * 1024^2)
+  expect_length(updates, 3L)
+  expect_identical(updates[[3]]$proportion, 1)
+})
+
+test_that("CrispASR cache and Hugging Face credentials use safe defaults", {
+  withr::local_envvar(c(
+    HF_TOKEN = NA,
+    HUGGING_FACE_HUB_TOKEN = NA,
+    HUGGINGFACE_API_TOKEN = "api-token"
+  ))
+  expect_identical(genflow:::.genflow_crispasr_hf_token(), "api-token")
+
+  withr::local_envvar(HF_TOKEN = "preferred-token")
+  expect_identical(
+    genflow:::.genflow_crispasr_hf_token(),
+    "preferred-token"
+  )
+
+  withr::local_envvar(CRISPASR_CACHE_DIR = "/")
+  expect_error(
+    genflow:::.genflow_crispasr_canonical_cache_dir(create = FALSE),
+    "root or home"
+  )
+  withr::local_envvar(CRISPASR_CACHE_DIR = path.expand("~"))
+  expect_error(
+    genflow:::.genflow_crispasr_canonical_cache_dir(create = FALSE),
+    "root or home"
+  )
+})
+
+test_that("CrispASR cleans only stale payload and sidecar part files", {
+  cache_dir <- tempfile("genflow-crispasr-stale-parts-")
+  dir.create(cache_dir)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+
+  filename <- "managed-model-q4_k.gguf"
+  dead_pid <- file.path(
+    cache_dir,
+    paste0(".", filename, ".part.999999.dead")
+  )
+  live_pid <- file.path(
+    cache_dir,
+    paste0(".", filename, ".part.4242.live")
+  )
+  old_legacy <- file.path(cache_dir, paste0(filename, ".part.legacy"))
+  old_sidecar <- file.path(
+    cache_dir,
+    paste0(".", filename, ".src.part.legacy")
+  )
+  fresh_sidecar <- file.path(
+    cache_dir,
+    paste0(".", filename, ".src.part.fresh")
+  )
+  unrelated <- file.path(cache_dir, ".another-model.gguf.part.999999.dead")
+  for (path in c(
+    dead_pid,
+    live_pid,
+    old_legacy,
+    old_sidecar,
+    fresh_sidecar,
+    unrelated
+  )) {
+    writeBin(as.raw(1), path)
+  }
+  Sys.setFileTime(c(old_legacy, old_sidecar), Sys.time() - 120)
+
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_pid_alive = function(pid) identical(pid, 4242L),
+    .package = "genflow"
+  )
+  result <- genflow:::.genflow_crispasr_cleanup_stale_parts(
+    cache_dir = cache_dir,
+    filename = filename,
+    stale_after = 60,
+    now = Sys.time()
+  )
+
+  expect_false(any(file.exists(c(dead_pid, old_legacy, old_sidecar))))
+  expect_true(all(file.exists(c(live_pid, fresh_sidecar, unrelated))))
+  expect_setequal(
+    basename(result$removed),
+    basename(c(dead_pid, old_legacy, old_sidecar))
+  )
+  expect_setequal(
+    basename(result$active),
+    basename(c(live_pid, fresh_sidecar))
+  )
+})
+
+test_that("CrispASR removal is exact and confined to its managed cache", {
+  cache_dir <- tempfile("genflow-crispasr-remove-")
+  external_dir <- tempfile("genflow-crispasr-remove-external-")
+  dir.create(cache_dir)
+  dir.create(external_dir)
+  on.exit(unlink(c(cache_dir, external_dir), recursive = TRUE), add = TRUE)
+  withr::local_envvar(c(
+    CRISPASR_CACHE_DIR = cache_dir,
+    CRISPASR_MODELS_DIR = NA
+  ))
+
+  filename <- "managed-model-q4_k.gguf"
+  model <- file.path(cache_dir, filename)
+  source_url <- paste0(
+    "https://huggingface.co/test/model/resolve/main/",
+    filename
+  )
+  writeBin(as.raw(1:4), model)
+  writeChar(source_url, paste0(model, ".src"), eos = NULL)
+  external <- file.path(external_dir, "external-q4_k.gguf")
+  writeBin(as.raw(1:4), external)
+
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(model, active_model = model),
+    "selected"
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(
+      model,
+      active_model = paste0("hf://test/model:", filename)
+    ),
+    "selected"
+  )
+  writeChar(
+    paste0(
+      "https://huggingface.co/test/model/resolve/",
+      strrep("a", 40),
+      "/",
+      filename
+    ),
+    paste0(model, ".src"),
+    eos = NULL
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(
+      model,
+      active_model = paste0("hf://test/model:", filename)
+    ),
+    "selected"
+  )
+
+  active_part <- file.path(cache_dir, paste0(".", filename, ".part.job"))
+  writeBin(as.raw(1), active_part)
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(model),
+    "active download"
+  )
+  stale_sidecar_part <- file.path(
+    cache_dir,
+    paste0(".", filename, ".src.part.legacy")
+  )
+  writeBin(as.raw(1), stale_sidecar_part)
+  Sys.setFileTime(
+    c(active_part, stale_sidecar_part),
+    Sys.time() - 7200
+  )
+
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(external),
+    "managed CrispASR cache"
+  )
+  expect_error(
+    genflow:::.genflow_crispasr_remove_model(
+      file.path(cache_dir, "nested", "..", filename)
+    ),
+    "absolute flat path"
+  )
+  expect_true(genflow:::.genflow_crispasr_remove_model(model))
+  expect_false(file.exists(model))
+  expect_false(file.exists(paste0(model, ".src")))
+  expect_false(file.exists(active_part))
+  expect_false(file.exists(stale_sidecar_part))
+  expect_true(file.exists(external))
 })

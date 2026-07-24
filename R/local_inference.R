@@ -18,6 +18,7 @@
   "stt_native_executable",
   "stt_native_model",
   "stt_native_backend",
+  "stt_native_quant",
   "stt_native_device",
   "moss_cpp_executable",
   "moss_cpp_model",
@@ -26,7 +27,7 @@
 
 .genflow_local_config_defaults <- function() {
   list(
-    version = 2L,
+    version = 3L,
     python = "",
     hf_cache_dir = "",
     hf_stt_model = "openai/whisper-large-v3-turbo",
@@ -44,6 +45,7 @@
     stt_native_executable = "",
     stt_native_model = "",
     stt_native_backend = "",
+    stt_native_quant = "",
     stt_native_device = "auto",
     moss_cpp_executable = "",
     moss_cpp_model = "",
@@ -58,10 +60,11 @@
     "stt_native_executable",
     "stt_native_model",
     "stt_native_backend",
+    "stt_native_quant",
     "stt_native_device"
   )
-  # A v2 key is an explicit source of truth, including an intentionally empty
-  # value. Legacy fields are copied only when reading a genuinely old object.
+  # A canonical key is an explicit source of truth, including an intentionally
+  # empty value. Legacy fields are copied only from a genuinely old object.
   if (any(canonical_fields %in% names(config))) return(config)
 
   legacy_executable <- .genflow_local_scalar(
@@ -218,6 +221,10 @@
     )
   }
 
+  validated$stt_native_quant <- .stt_validate_native_quant(
+    validated$stt_native_quant
+  )
+
   validated$moss_cpp_device <- tolower(validated$moss_cpp_device)
   if (!validated$moss_cpp_device %in% c(
     "auto",
@@ -284,7 +291,7 @@
   validated$moss_cpp_executable <- ""
   validated$moss_cpp_model <- ""
   validated$moss_cpp_device <- "auto"
-  validated$version <- 2L
+  validated$version <- 3L
   validated
 }
 
@@ -368,8 +375,10 @@
 #'   `dtype`, `ollama_base_url`, `ollama_model`, `llamacpp_base_url`,
 #'   `llamacpp_model`, `stt_server_base_url`, `stt_server_model`,
 #'   `stt_native_engine`, `stt_native_executable`, `stt_native_model`,
-#'   `stt_native_backend`, and `stt_native_device`. The old `moss_cpp_*`
-#'   names are accepted only as migration aliases.
+#'   `stt_native_backend`, `stt_native_quant`, and `stt_native_device`.
+#'   `stt_native_quant` is a CrispASR registry preference used only with
+#'   `model = "auto"`; it does not assert that a remote artifact exists. The
+#'   old `moss_cpp_*` names are accepted only as migration aliases.
 #' @param path Optional JSON config path. Primarily useful for portable
 #'   installations and tests.
 #' @param save Logical; persist updates when TRUE.
@@ -478,19 +487,11 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     stt_server_base_url = c("GENFLOW_STT_BASE_URL"),
     stt_server_model = c("GENFLOW_STT_MODEL"),
     stt_native_engine = c("GENFLOW_STT_NATIVE_ENGINE"),
-    stt_native_executable = c(
-      "GENFLOW_STT_NATIVE_EXECUTABLE",
-      "GENFLOW_MOSS_CPP_EXECUTABLE"
-    ),
-    stt_native_model = c(
-      "GENFLOW_STT_NATIVE_MODEL",
-      "GENFLOW_MOSS_CPP_MODEL"
-    ),
+    stt_native_executable = c("GENFLOW_STT_NATIVE_EXECUTABLE"),
+    stt_native_model = c("GENFLOW_STT_NATIVE_MODEL"),
     stt_native_backend = c("GENFLOW_STT_NATIVE_BACKEND"),
-    stt_native_device = c(
-      "GENFLOW_STT_NATIVE_DEVICE",
-      "GENFLOW_MOSS_CPP_DEVICE"
-    )
+    stt_native_quant = c("GENFLOW_STT_NATIVE_QUANT"),
+    stt_native_device = c("GENFLOW_STT_NATIVE_DEVICE")
   )
   for (field in names(mapping)) {
     env_value <- .genflow_first_env(mapping[[field]])
@@ -507,6 +508,34 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
       identical(tolower(config$stt_native_engine), "auto") &&
       !nzchar(Sys.getenv("GENFLOW_STT_NATIVE_ENGINE", unset = ""))) {
     config$stt_native_engine <- "moss-transcribe"
+  }
+  effective_native_engine <- .stt_normalize_native_engine(
+    config$stt_native_engine
+  )
+  if (identical(effective_native_engine, "moss-transcribe")) {
+    legacy_mapping <- c(
+      stt_native_executable = "GENFLOW_MOSS_CPP_EXECUTABLE",
+      stt_native_model = "GENFLOW_MOSS_CPP_MODEL",
+      stt_native_device = "GENFLOW_MOSS_CPP_DEVICE"
+    )
+    canonical_mapping <- c(
+      stt_native_executable = "GENFLOW_STT_NATIVE_EXECUTABLE",
+      stt_native_model = "GENFLOW_STT_NATIVE_MODEL",
+      stt_native_device = "GENFLOW_STT_NATIVE_DEVICE"
+    )
+    for (field in names(legacy_mapping)) {
+      canonical_value <- trimws(Sys.getenv(
+        canonical_mapping[[field]],
+        unset = ""
+      ))
+      legacy_value <- trimws(Sys.getenv(
+        legacy_mapping[[field]],
+        unset = ""
+      ))
+      if (!nzchar(canonical_value) && nzchar(legacy_value)) {
+        config[[field]] <- legacy_value
+      }
+    }
   }
   .genflow_validate_local_config(config)
 }
@@ -619,7 +648,13 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
         recorded_source,
         perl = TRUE
       )
-      if (!identical(recorded_source, expected_source)) next
+      if (!identical(recorded_source, expected_source) &&
+          !.genflow_crispasr_same_hf_artifact(
+            recorded_source,
+            expected_source
+          )) {
+        next
+      }
     }
 
     return(normalizePath(candidate, winslash = "/", mustWork = TRUE))
@@ -1024,7 +1059,9 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
   )
 }
 
-.genflow_native_stt_diagnostics <- function(config, timeout) {
+.genflow_native_stt_diagnostics <- function(config,
+                                            timeout,
+                                            check_remote = FALSE) {
   config <- .genflow_validate_local_config(config)
   engine_result <- tryCatch(
     .stt_resolve_native_engine(
@@ -1163,6 +1200,10 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     config$stt_native_backend,
     "stt_native_backend"
   )
+  quant <- .genflow_local_scalar(
+    config$stt_native_quant,
+    "stt_native_quant"
+  )
   model_row <- if (!nzchar(model)) {
     .genflow_diagnostic_row(
       "Native STT model",
@@ -1171,13 +1212,44 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     )
   } else if (identical(tolower(model), "auto")) {
     compatible <- identical(detected_engine, "crispasr") && nzchar(backend)
+    remote <- if (compatible && isTRUE(check_remote) && nzchar(executable)) {
+      tryCatch(
+        .genflow_crispasr_resolve_download(
+          selector = "auto",
+          backend = backend,
+          quant = quant,
+          executable = executable
+        ),
+        error = function(e) e
+      )
+    } else {
+      NULL
+    }
     .genflow_diagnostic_row(
       "Native STT model",
-      if (compatible) "info" else "error",
-      if (compatible) {
+      if (!compatible || inherits(remote, "error")) {
+        "error"
+      } else {
+        "info"
+      },
+      if (inherits(remote, "error")) {
         paste0(
-          "CrispASR will download and cache the default model for backend ",
+          "CrispASR could not resolve the requested registry model: ",
+          conditionMessage(remote)
+        )
+      } else if (!is.null(remote)) {
+        paste0(
+          "Available registry model: ",
+          remote$filename,
+          " (",
+          .genflow_crispasr_format_size(remote$size_bytes),
+          "). Use Download current model to cache and select it."
+        )
+      } else if (compatible) {
+        paste0(
+          "CrispASR will resolve, download and cache the requested model for backend ",
           backend,
+          if (nzchar(quant)) paste0(" with quantization ", quant) else "",
           " on first use."
         )
       } else {
@@ -1199,16 +1271,42 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     } else {
       ""
     }
+    remote <- if (compatible && isTRUE(check_remote)) {
+      tryCatch(
+        {
+          metadata <- .genflow_crispasr_hf_metadata(
+            reference$repository,
+            timeout = timeout
+          )
+          .genflow_crispasr_hf_artifact(
+            metadata = metadata,
+            repository = reference$repository,
+            filename = reference$file,
+            backend = backend
+          )
+        },
+        error = function(e) e
+      )
+    } else {
+      NULL
+    }
     .genflow_diagnostic_row(
       "Native STT model",
       if (!compatible) {
+        "error"
+      } else if (inherits(remote, "error")) {
         "error"
       } else if (nzchar(cached)) {
         "ok"
       } else {
         "info"
       },
-      if (compatible) {
+      if (inherits(remote, "error")) {
+        paste0(
+          "The selected Hugging Face model is unavailable or incompatible: ",
+          conditionMessage(remote)
+        )
+      } else if (compatible) {
         if (nzchar(cached)) {
           paste0(
             "Cached model: ",
@@ -1216,13 +1314,23 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
             ". CrispASR validates its architecture when loaded."
           )
         } else {
-          paste0(
-            reference$file,
-            " will be downloaded from ",
-            reference$repository,
-            " by CrispASR on first use; it must be a ",
-            "CrispASR-compatible model."
-          )
+          if (!is.null(remote)) {
+            paste0(
+              "Available model: ",
+              reference$file,
+              " (",
+              .genflow_crispasr_format_size(remote$size_bytes),
+              "). Use Download current model to cache and select it."
+            )
+          } else {
+            paste0(
+              reference$file,
+              " will be downloaded from ",
+              reference$repository,
+              " by CrispASR on first use; it must be a ",
+              "CrispASR-compatible model."
+            )
+          }
         }
       } else if (!identical(detected_engine, "crispasr")) {
         "Remote native models require engine crispasr."
@@ -1331,7 +1439,8 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
 #' compatibility check.
 #'
 #' @param config Optional configuration returned by [gen_local_config()].
-#' @param check_endpoints Logical; probe configured local HTTP services.
+#' @param check_endpoints Logical; probe configured local HTTP services and
+#'   verify that a selected remote CrispASR artifact is actually published.
 #' @param timeout Numeric timeout in seconds for each subprocess or HTTP probe.
 #' @param adapters Optional local adapter id or character vector to check.
 #'   Supported ids are `"ollama"`, `"llamacpp"`, `"hf-local"`,
@@ -1436,7 +1545,11 @@ gen_local_diagnostics <- function(config = NULL,
   }
 
   if (wants("local-native")) {
-    rows <- c(rows, .genflow_native_stt_diagnostics(config, timeout))
+    rows <- c(rows, .genflow_native_stt_diagnostics(
+      config,
+      timeout,
+      check_remote = isTRUE(check_endpoints)
+    ))
     rows[[length(rows) + 1L]] <- .genflow_vulkan_diagnostic(
       timeout,
       required = identical(config$stt_native_device, "vulkan")

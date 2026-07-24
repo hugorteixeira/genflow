@@ -53,7 +53,31 @@ test_that("app exposes the local inference configuration surface", {
   expect_match(html, "local_stt_native_model", fixed = TRUE)
   expect_match(html, "hf://owner/repo/model.gguf", fixed = TRUE)
   expect_match(html, "local_stt_native_backend", fixed = TRUE)
+  expect_match(html, "local_stt_native_quant", fixed = TRUE)
   expect_match(html, "local_stt_native_device", fixed = TRUE)
+  expect_match(html, "local_stt_models_table", fixed = TRUE)
+  expect_match(html, "local_stt_models_refresh", fixed = TRUE)
+  expect_match(html, "local_stt_model_use", fixed = TRUE)
+  expect_match(html, "local_stt_model_download", fixed = TRUE)
+  expect_match(html, "local_stt_download_progress_ui", fixed = TRUE)
+  expect_match(html, "local_stt_model_delete", fixed = TRUE)
+  expect_match(html, "Downloaded models", fixed = TRUE)
+  expect_match(html, "Download current model", fixed = TRUE)
+  expect_match(html, "Choose selected", fixed = TRUE)
+  expect_match(html, "Delete selected", fixed = TRUE)
+  expect_match(html, "Requested quantization", fixed = TRUE)
+  expect_match(html, "Availability is verified before download", fixed = TRUE)
+  expect_lt(
+    regexpr("Download current model", html, fixed = TRUE)[[1]],
+    regexpr("Downloaded models", html, fixed = TRUE)[[1]]
+  )
+  expect_false(grepl(">Use selected<", html, fixed = TRUE))
+  expect_match(html, "or an omitted model uses this selection", fixed = TRUE)
+  expect_match(
+    html,
+    "does not silently substitute another quantization",
+    fixed = TRUE
+  )
   expect_match(html, "local_adapter_tabs", fixed = TRUE)
   expect_match(html, "CrispASR \\(multiple GGUF families\\)")
   expect_match(html, "moss-transcribe.cpp \\(MOSS only\\)")
@@ -73,6 +97,37 @@ test_that("app exposes the local inference configuration surface", {
     fixed = TRUE
   )
   expect_match(genflow:::.theme_css, "overflow-wrap: anywhere", fixed = TRUE)
+})
+
+test_that("Native STT model choices combine automatic, cached, and custom values", {
+  inventory <- data.frame(
+    path = c("/cache/granite-q4_k.gguf", "/models/granite-q8_0.gguf"),
+    filename = c("granite-q4_k.gguf", "granite-q8_0.gguf"),
+    quant = c("q4_k", "q8_0"),
+    size_bytes = c(1024, 2048),
+    size = c("", "2 KB"),
+    source_url = c("", ""),
+    managed = c(TRUE, FALSE),
+    selected = c(FALSE, TRUE),
+    stringsAsFactors = FALSE
+  )
+
+  normalized <- genflow:::.local_native_inventory_normalize(inventory)
+  expect_identical(normalized$size, c("1.00 KB", "2 KB"))
+
+  choices <- genflow:::.local_native_model_choices(
+    normalized,
+    "hf://owner/repo:model-q8_0.gguf"
+  )
+  expect_identical(
+    unname(choices[[1]]),
+    "auto"
+  )
+  expect_true(all(inventory$path %in% unname(choices)))
+  expect_true("hf://owner/repo:model-q8_0.gguf" %in% unname(choices))
+
+  backend_choices <- genflow:::.local_native_backend_choices()
+  expect_identical(unname(backend_choices[[1]]), "")
 })
 
 test_that("Hugging Face STT presets stay simple and preserve custom models", {

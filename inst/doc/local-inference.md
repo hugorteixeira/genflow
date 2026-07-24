@@ -48,13 +48,13 @@ The bridge writes one temporary JSON result containing the transcript,
 structured metadata, or a structured error. For `local-openai`, genflow does
 not install, launch, stop, or supervise the server.
 
-For `local-native`, genflow also does not install the external project or
-own the lifecycle of its model cache. It invokes one configured binary per
-transcription. Explicit `auto` and `hf://` selectors authorize CrispASR itself
-to download into its cache. Diagnostics may inspect that cache read-only to
-report whether an explicitly selected filename is already present. The native
-route does not use the Python, PyTorch, Transformers, `device`, or `dtype`
-settings.
+For `local-native`, genflow does not install the external project and invokes
+one configured binary per transcription. Explicit `auto` and `hf://`
+selectors authorize CrispASR itself to download into its cache at runtime.
+Separately, the app provides deliberate cache management: it inventories
+downloaded artifacts, verifies and downloads a selected Hugging Face file in
+a background worker, and deletes a confirmed managed file. The native route
+does not use the Python, PyTorch, Transformers, `device`, or `dtype` settings.
 
 `local-native` is a transport/runtime contract, not a promise that one binary
 can run every Hugging Face speech model. CrispASR supports multiple ASR
@@ -151,6 +151,7 @@ The supported saved fields are:
 | `stt_native_executable` | `GENFLOW_STT_NATIVE_EXECUTABLE` | empty; engine executable on `PATH` |
 | `stt_native_model` | `GENFLOW_STT_NATIVE_MODEL` | empty; local path, `auto`, or supported `hf://` reference |
 | `stt_native_backend` | `GENFLOW_STT_NATIVE_BACKEND` | empty; engine-specific model architecture/backend |
+| `stt_native_quant` | `GENFLOW_STT_NATIVE_QUANT` | empty; CrispASR registry preference used only when the configured model is `auto` |
 | `stt_native_device` | `GENFLOW_STT_NATIVE_DEVICE` | `auto` |
 | `ollama_base_url` | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` |
 | `ollama_model` | `OLLAMA_MODEL` | empty |
@@ -179,6 +180,7 @@ cfg[c(
   "stt_native_executable",
   "stt_native_model",
   "stt_native_backend",
+  "stt_native_quant",
   "stt_native_device"
 )]
 ```
@@ -536,10 +538,14 @@ CrispASR's internal runtime backend and records accelerator selection as
 back produces a warning while preserving the successful transcription returned
 by CrispASR's automatic fallback selection.
 
-`stt_native_model = "auto"` delegates model selection/download to the engine
-and should be paired with a supported `stt_native_backend`. An `hf://`
-selector is passed to the engine only when that engine supports it. Neither
-form means that an arbitrary Hugging Face repository is compatible.
+For `service = "local-native"`, omitting `model` or passing `model = "auto"`
+uses an explicit `stt_native_model` saved in the local configuration. To
+delegate model selection to the engine registry, set `stt_native_model` to
+`"auto"` and pair it with a supported `stt_native_backend`. CrispASR also
+accepts an optional `stt_native_quant`, but a quantization preference is not a
+guarantee that the corresponding repository publishes that file. An `hf://`
+selector is passed to the engine only when that engine supports it. None of
+these forms means that an arbitrary Hugging Face repository is compatible.
 
 ```r
 remote_result <- gen_stt(
@@ -563,6 +569,23 @@ download path. A filename is required. The canonical form is
 normal `OWNER/REPO` string is never silently treated as a native model
 download.
 
+The app's Native STT panel lists files already present in the canonical
+CrispASR cache. A downloaded row can be selected for use or removed after
+confirmation. The Download action accepts the current explicit `hf://`
+selector, or resolves the current registry architecture and requested
+quantization. It verifies the exact repository filename before writing,
+reports byte progress from a cancellable background process, downloads to a
+temporary file in the same cache, and renames it only after a successful
+transfer. The resolved URL is pinned to the repository commit and the LFS
+SHA-256 is verified before installation. A missing quantization is reported as
+unavailable rather than falling back to another model.
+
+Interrupted transfers cannot appear as downloaded models. PID-labelled
+temporary files are removed after their worker is gone; older unlabelled
+partials are removed only after a one-hour safety window. A live worker,
+directory, or symlink remains a blocker rather than being deleted
+automatically.
+
 CrispASR downloads into its canonical cache selected in this order:
 `CRISPASR_CACHE_DIR`, `CRISPASR_MODELS_DIR`, then `~/.cache/crispasr`. It can
 also reuse a same-basename file from its other well-known search locations.
@@ -573,14 +596,17 @@ They do not parse all tensors or load the model.
 The native CrispASR cache is independent of genflow's Python
 `hf_cache_dir`/`HF_HOME` setting. Point `CRISPASR_CACHE_DIR` or
 `CRISPASR_MODELS_DIR` at an existing model disk to avoid another native copy.
-Private or gated repositories require `HF_TOKEN` or
-`HUGGING_FACE_HUB_TOKEN` in the CrispASR process environment.
+Private or gated repositories require `HF_TOKEN`,
+`HUGGING_FACE_HUB_TOKEN`, or `HUGGINGFACE_API_TOKEN` in the environment used
+to start genflow. The app downloader and a CrispASR child process both inherit
+those values.
 
-CrispASR currently resolves an `hf://` reference through the repository's
-mutable `main` revision. For an auditable model deployment, fetch the exact
-reviewed model revision separately, verify it, and configure
-`stt_native_model` with the resulting local file path. Pinning the CrispASR
-source revision and pinning the model artifact are separate decisions.
+genflow resolves an `hf://` reference from the repository's current metadata,
+then pins the transfer to the reported commit and verifies the artifact's LFS
+SHA-256. For a permanently user-pinned revision, fetch the reviewed artifact
+separately and configure `stt_native_model` with the resulting local file
+path. Pinning the CrispASR source revision and pinning the model artifact are
+separate decisions.
 
 #### Granite 4.1 packaging example
 

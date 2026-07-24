@@ -14,8 +14,10 @@ gen_local_config(config = NULL, ..., path = NULL, save = TRUE)
 \code{dtype}, \code{ollama_base_url}, \code{ollama_model}, \code{llamacpp_base_url},
 \code{llamacpp_model}, \code{stt_server_base_url}, \code{stt_server_model},
 \code{stt_native_engine}, \code{stt_native_executable}, \code{stt_native_model},
-\code{stt_native_backend}, and \code{stt_native_device}. The old \verb{moss_cpp_*}
-names are accepted only as migration aliases.}
+\code{stt_native_backend}, \code{stt_native_quant}, and \code{stt_native_device}.
+\code{stt_native_quant} is a CrispASR registry preference used only with
+\code{model = "auto"}; it does not assert that a remote artifact exists. The
+old \verb{moss_cpp_*} names are accepted only as migration aliases.}
 
 \item{path}{Optional JSON config path. Primarily useful for portable
 installations and tests.}

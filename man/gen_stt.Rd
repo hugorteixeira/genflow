@@ -28,6 +28,7 @@ gen_stt(audio, ...)
   executable = NULL,
   native_engine = NULL,
   native_backend = NULL,
+  native_quant = NULL,
   native_device = NULL,
   hf_cache_dir = NULL,
   trust_remote_code = NULL,
@@ -56,7 +57,10 @@ gen_stt(audio, ...)
 per provider. For \code{service = "local-native"}, this is normally a local
 model file. The CrispASR engine also accepts \code{"auto"} or an explicit
 \verb{hf://OWNER/REPO:FILE} reference. For copy-and-paste convenience,
-\verb{hf://OWNER/REPO/FILE} is accepted and normalized to the same form.}
+\verb{hf://OWNER/REPO/FILE} is accepted and normalized to the same form. With
+local-native CrispASR, \code{"auto"} first honors an explicit model saved in
+the local inference configuration; the registry is used only when that
+setting is empty or also \code{"auto"}.}
 
 \item{language}{Optional language code (e.g., "en", "pt"). If NULL, provider
 auto-detection is used when supported.}
@@ -109,6 +113,13 @@ selected engine, such as \code{"whisper"}, \code{"parakeet"}, \code{"canary"},
 \code{"granite-4.1"}, or \code{"moss-diarize"} for CrispASR. Leave NULL to use
 model auto-detection for an explicit local or \verb{hf://} model.
 CrispASR \code{model = "auto"} requires a backend.}
+
+\item{native_quant}{Optional CrispASR registry quantization preference, such
+as \code{"q8_0"}. It is passed as \code{--model-quant} only when
+\code{service = "local-native"} uses CrispASR with \code{model = "auto"}. The value
+selects a requested filename; neither genflow nor CrispASR guarantees that
+the corresponding remote artifact exists. Defaults to
+\code{GENFLOW_STT_NATIVE_QUANT}, then the saved \code{stt_native_quant} setting.}
 
 \item{native_device}{Native accelerator for \code{service = "local-native"}:
 \code{"auto"}, \code{"cpu"}, \code{"vulkan"}, \code{"hip"}, \code{"cuda"}, or \code{"metal"}.

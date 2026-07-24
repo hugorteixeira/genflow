@@ -14,7 +14,10 @@
 #'   per provider. For `service = "local-native"`, this is normally a local
 #'   model file. The CrispASR engine also accepts `"auto"` or an explicit
 #'   `hf://OWNER/REPO:FILE` reference. For copy-and-paste convenience,
-#'   `hf://OWNER/REPO/FILE` is accepted and normalized to the same form.
+#'   `hf://OWNER/REPO/FILE` is accepted and normalized to the same form. With
+#'   local-native CrispASR, `"auto"` first honors an explicit model saved in
+#'   the local inference configuration; the registry is used only when that
+#'   setting is empty or also `"auto"`.
 #' @param language Optional language code (e.g., "en", "pt"). If NULL, provider
 #'   auto-detection is used when supported.
 #' @param prompt Optional prompt to guide transcription (provider-specific).
@@ -51,6 +54,12 @@
 #'   `"granite-4.1"`, or `"moss-diarize"` for CrispASR. Leave NULL to use
 #'   model auto-detection for an explicit local or `hf://` model.
 #'   CrispASR `model = "auto"` requires a backend.
+#' @param native_quant Optional CrispASR registry quantization preference, such
+#'   as `"q8_0"`. It is passed as `--model-quant` only when
+#'   `service = "local-native"` uses CrispASR with `model = "auto"`. The value
+#'   selects a requested filename; neither genflow nor CrispASR guarantees that
+#'   the corresponding remote artifact exists. Defaults to
+#'   `GENFLOW_STT_NATIVE_QUANT`, then the saved `stt_native_quant` setting.
 #' @param native_device Native accelerator for `service = "local-native"`:
 #'   `"auto"`, `"cpu"`, `"vulkan"`, `"hip"`, `"cuda"`, or `"metal"`.
 #'   Support is engine-specific; CrispASR does not expose HIP and should use a
@@ -118,6 +127,7 @@ gen_stt.default <- function(
   executable = NULL,
   native_engine = NULL,
   native_backend = NULL,
+  native_quant = NULL,
   native_device = NULL,
   hf_cache_dir = NULL,
   trust_remote_code = NULL,
@@ -152,8 +162,20 @@ gen_stt.default <- function(
   }
   if (is.vector(service)) service <- as.character(service[1])
   legacy_moss_service <- .stt_is_legacy_moss_service(service)
-  if (legacy_moss_service && is.null(native_engine)) {
-    native_engine <- "moss-transcribe"
+  if (legacy_moss_service) {
+    if (is.null(native_engine)) {
+      native_engine <- "moss-transcribe"
+    } else if (!identical(
+      .stt_normalize_native_engine(native_engine),
+      "moss-transcribe"
+    )) {
+      stop(
+        '`service = "moss-cpp"` is a compatibility alias for ',
+        '`service = "local-native"` with ',
+        '`native_engine = "moss-transcribe"`; it cannot select another engine.',
+        call. = FALSE
+      )
+    }
   }
   if (is.list(model)) {
     model <- model$model %||% if (length(model)) model[[1]] else NULL
@@ -256,6 +278,7 @@ gen_stt.default <- function(
         executable = executable,
         native_engine = native_engine,
         native_backend = native_backend,
+        native_quant = native_quant,
         native_device = native_device,
         convert = convert,
         max_new_tokens = max_new_tokens,
@@ -1168,6 +1191,21 @@ gen_stt.genflow_agent <- function(audio, ...) {
   backend
 }
 
+#' @keywords internal
+#' @noRd
+.stt_validate_native_quant <- function(value) {
+  quant <- tolower(trimws(as.character(value %||% "")[1]))
+  if (is.na(quant) || !nzchar(quant)) return("")
+  if (!grepl("^[a-z0-9][a-z0-9._+-]*$", quant, perl = TRUE)) {
+    stop(
+      "`native_quant` must be empty or a quantization identifier containing ",
+      "only letters, numbers, dots, underscores, plus signs, and hyphens.",
+      call. = FALSE
+    )
+  }
+  quant
+}
+
 #' Parse an explicit CrispASR Hugging Face model reference
 #'
 #' `hf://` is genflow's opt-in marker, not a CrispASR URI scheme. CrispASR
@@ -1349,6 +1387,16 @@ gen_stt.genflow_agent <- function(audio, ...) {
   engine <- .stt_normalize_native_engine(requested)
   if (!identical(engine, "auto")) return(engine)
 
+  legacy_native_env <- any(nzchar(c(
+    Sys.getenv("GENFLOW_MOSS_CPP_EXECUTABLE", unset = ""),
+    Sys.getenv("GENFLOW_MOSS_CPP_MODEL", unset = ""),
+    Sys.getenv("GENFLOW_MOSS_CPP_DEVICE", unset = "")
+  )))
+  if (legacy_native_env &&
+      !nzchar(Sys.getenv("GENFLOW_STT_NATIVE_ENGINE", unset = ""))) {
+    return("moss-transcribe")
+  }
+
   executable_value <- .stt_native_setting(
     executable,
     field = "stt_native_executable",
@@ -1373,7 +1421,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
     env = "GENFLOW_STT_NATIVE_MODEL",
     config = config
   )
-  if (nzchar(backend) ||
+  if ((nzchar(backend) &&
+       !backend %in% c("moss", "moss-diarize", "moss-transcribe")) ||
       identical(tolower(model_value), "auto") ||
       startsWith(tolower(model_value), "hf://")) {
     return("crispasr")
@@ -1462,25 +1511,79 @@ gen_stt.genflow_agent <- function(audio, ...) {
                               executable = NULL,
                               native_engine = NULL,
                               native_backend = NULL,
+                              native_quant = NULL,
                               native_device = NULL,
                               convert = TRUE,
                               max_new_tokens = NULL,
                               legacy_service = FALSE,
                               runner = .stt_run_process) {
   config <- .genflow_read_local_config()
+  requested_model <- if (!is.null(model) && length(model)) {
+    candidate <- trimws(as.character(model)[1])
+    if (!is.na(candidate) && nzchar(candidate)) candidate else NULL
+  } else {
+    NULL
+  }
+  model_value <- .stt_native_setting(
+    model,
+    field = "stt_native_model",
+    env = "GENFLOW_STT_NATIVE_MODEL",
+    config = config
+  )
+  resolution_source <- if (is.null(requested_model)) {
+    if (identical(tolower(model_value), "auto")) "registry" else "configured"
+  } else if (identical(tolower(requested_model), "auto")) {
+    configured_model <- .genflow_local_setting(
+      field = "stt_native_model",
+      env = c("GENFLOW_STT_NATIVE_MODEL"),
+      default = "",
+      config = config
+    )
+    if (nzchar(configured_model) &&
+        !identical(tolower(configured_model), "auto")) {
+      model_value <- configured_model
+      "configured"
+    } else {
+      model_value <- "auto"
+      "registry"
+    }
+  } else {
+    "argument"
+  }
+
   engine <- .stt_resolve_native_engine(
     native_engine = native_engine,
     executable = executable,
-    model = model,
+    model = model_value,
     native_backend = native_backend,
     config = config
   )
+  if (identical(engine, "moss-transcribe") && !nzchar(model_value)) {
+    model_value <- .stt_native_setting(
+      NULL,
+      field = "stt_native_model",
+      env = "GENFLOW_STT_NATIVE_MODEL",
+      config = config,
+      legacy_field = "moss_cpp_model",
+      legacy_env = "GENFLOW_MOSS_CPP_MODEL"
+    )
+  }
   backend <- .stt_validate_native_backend(.stt_native_setting(
     native_backend,
     field = "stt_native_backend",
     env = "GENFLOW_STT_NATIVE_BACKEND",
     config = config
   ))
+  quant <- if (identical(engine, "crispasr")) {
+    .stt_validate_native_quant(.stt_native_setting(
+      native_quant,
+      field = "stt_native_quant",
+      env = "GENFLOW_STT_NATIVE_QUANT",
+      config = config
+    ))
+  } else {
+    ""
+  }
   if (identical(engine, "moss-transcribe") && nzchar(backend) &&
       !backend %in% c("moss", "moss-diarize", "moss-transcribe")) {
     stop(
@@ -1493,22 +1596,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
       backend %in% c("moss", "moss-transcribe")) {
     backend <- "moss-diarize"
   }
-  model_value <- .stt_native_setting(
-    model,
-    field = "stt_native_model",
-    env = "GENFLOW_STT_NATIVE_MODEL",
-    config = config,
-    legacy_field = if (identical(engine, "moss-transcribe")) {
-      "moss_cpp_model"
-    } else {
-      NULL
-    },
-    legacy_env = if (identical(engine, "moss-transcribe")) {
-      "GENFLOW_MOSS_CPP_MODEL"
-    } else {
-      character()
-    }
-  )
+  effective_auto_model <- identical(tolower(model_value), "auto")
+  effective_quant <- if (effective_auto_model) quant else ""
   device <- .stt_validate_native_device(.stt_native_setting(
     native_device,
     field = "stt_native_device",
@@ -1541,6 +1630,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       timeout_secs = timeout_secs,
       executable = executable_path,
       native_backend = backend,
+      native_quant = effective_quant,
       native_device = device,
       max_new_tokens = max_new_tokens,
       runner = runner
@@ -1572,6 +1662,10 @@ gen_stt.genflow_agent <- function(audio, ...) {
     native_device = device,
     model = result$metadata$model %||% model_value
   )
+  if (!is.null(requested_model)) {
+    engine_metadata$requested_model <- requested_model
+  }
+  engine_metadata$resolution_source <- resolution_source
   if (isTRUE(legacy_service)) engine_metadata$service_alias <- "moss-cpp"
   result$metadata <- utils::modifyList(result$metadata %||% list(), engine_metadata)
   result
@@ -1592,6 +1686,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                                  timeout_secs,
                                  executable,
                                  native_backend = NULL,
+                                 native_quant = NULL,
                                  native_device = "auto",
                                  max_new_tokens = NULL,
                                  runner = .stt_run_process) {
@@ -1601,6 +1696,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   audio_path <- normalizePath(audio_path, winslash = "/", mustWork = TRUE)
   timeout_secs <- .stt_validate_positive_number(timeout_secs, "timeout_secs")
   backend <- .stt_validate_native_backend(native_backend)
+  quant <- .stt_validate_native_quant(native_quant)
   device <- .stt_validate_native_device(native_device)
   max_new_tokens <- .stt_validate_max_new_tokens(max_new_tokens)
 
@@ -1625,7 +1721,10 @@ gen_stt.genflow_agent <- function(audio, ...) {
     }
     model_kind <- "auto"
     model_value <- "auto"
-    model_args <- c("-m", "auto")
+    model_args <- c(
+      "-m", "auto",
+      if (nzchar(quant)) c("--model-quant", quant)
+    )
   } else if (startsWith(tolower(model_value), "hf://")) {
     reference <- .stt_parse_crispasr_hf_reference(model_value)
     model_kind <- "hf"
@@ -1787,6 +1886,11 @@ gen_stt.genflow_agent <- function(audio, ...) {
       native_device = device,
       model = model_value,
       model_kind = model_kind,
+      requested_quant = if (identical(model_kind, "auto") && nzchar(quant)) {
+        quant
+      } else {
+        NULL
+      },
       resolved_model = crisp_metadata$model %||% NULL
     ), runtime_device)
   )

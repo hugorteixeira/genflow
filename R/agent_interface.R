@@ -687,6 +687,23 @@
   .gf-local-form-grid .shiny-input-container { width: 100%; max-width: none; }
   .gf-local-field-wide { grid-column: 1 / -1; }
   .gf-local-note { margin: 6px 0 0; padding: 10px 12px; border-left: 3px solid #a5b4fc; border-radius: 0 8px 8px 0; background: #f8fafc; color: #526173; font-size: 0.84rem; }
+  .gf-local-model-manager { margin-top: 18px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+  .gf-local-model-manager-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .gf-local-model-manager-header h4 { margin: 0; font-size: 0.96rem; font-weight: 650; }
+  .gf-local-model-summary { color: #64748b; font-size: 0.8rem; overflow-wrap: anywhere; }
+  .gf-local-model-table { width: 100%; max-width: 100%; overflow-x: auto; }
+  .gf-local-model-table .dataTables_wrapper,
+  .gf-local-model-table table.dataTable { width: 100% !important; max-width: 100%; }
+  .gf-local-model-table table.dataTable { table-layout: fixed; }
+  .gf-local-model-table table.dataTable th,
+  .gf-local-model-table table.dataTable td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+  .gf-local-download-action { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .gf-native-download-progress { flex: 1 1 320px; min-width: 240px; }
+  .gf-native-download-progress .progress { height: 8px; margin: 0 0 5px; background: #e2e8f0; }
+  .gf-native-download-progress .progress-bar { background: #4f46e5; transition: width 0.2s ease; }
+  .gf-native-download-detail { color: #64748b; font-size: 0.78rem; overflow-wrap: anywhere; }
+  .gf-local-model-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .gf-local-model-status { min-height: 18px; margin-top: 8px; color: #64748b; font-size: 0.8rem; overflow-wrap: anywhere; }
   .gf-local-advanced { margin-top: 16px; border-top: 1px solid #e5e7eb; }
   .gf-local-advanced summary { padding: 13px 0 4px; color: #475569; cursor: pointer; font-size: 0.86rem; font-weight: 600; user-select: none; }
   .gf-local-advanced[open] summary { margin-bottom: 7px; }
@@ -1334,17 +1351,126 @@
                 ),
                 div(
                   class = "gf-local-field-wide",
-                  textInput(
+                  selectizeInput(
                     "local_stt_native_model",
                     "Model",
-                    value = "",
-                    placeholder = "auto, /path/model.gguf, or hf://owner/repo/model.gguf"
+                    choices = c(
+                      "Automatic (architecture + requested quantization)" = "auto"
+                    ),
+                    selected = "auto",
+                    options = list(
+                      create = TRUE,
+                      createOnBlur = TRUE,
+                      persist = FALSE,
+                      placeholder = paste0(
+                        "auto, /path/model.gguf, or ",
+                        "hf://owner/repo/model.gguf"
+                      )
+                    )
                   )
                 )
               ),
               tags$p(
                 class = "gf-local-note",
-                "For AMD GPUs, prefer a Vulkan-enabled CrispASR build. Model support depends on the selected engine and GGUF architecture."
+                tags$span(
+                  tags$code('model = "auto"'),
+                  " or an omitted model uses this selection. Choose Automatic ",
+                  "to use Model architecture and Requested quantization. For ",
+                  "AMD GPUs, prefer a Vulkan-enabled CrispASR build."
+                )
+              ),
+              conditionalPanel(
+                condition = paste0(
+                  "input.local_stt_native_model === 'auto' || ",
+                  "!input.local_stt_native_model"
+                ),
+                div(
+                  class = "gf-local-form-grid",
+                  selectizeInput(
+                    "local_stt_native_backend",
+                    "Model architecture",
+                    choices = c(
+                      "Select architecture\u2026" = "",
+                      "Whisper" = "whisper",
+                      "Parakeet" = "parakeet",
+                      "Canary" = "canary",
+                      "Granite 4.1" = "granite-4.1",
+                      "MOSS Diarize" = "moss-diarize"
+                    ),
+                    selected = "",
+                    options = list(
+                      create = TRUE,
+                      createOnBlur = TRUE,
+                      persist = FALSE,
+                      placeholder = "For example: granite-4.1"
+                    )
+                  ),
+                  selectizeInput(
+                    "local_stt_native_quant",
+                    "Requested quantization",
+                    choices = c(
+                      "CrispASR default (recommended)" = "",
+                      "Q4_K" = "q4_k",
+                      "Q8_0" = "q8_0",
+                      "F16" = "f16"
+                    ),
+                    selected = "",
+                    options = list(
+                      create = TRUE,
+                      createOnBlur = TRUE,
+                      persist = FALSE
+                    )
+                  )
+                ),
+                tags$p(
+                  class = "gf-local-description",
+                  "Not every architecture publishes every quantization. Availability is verified before download; genflow does not silently substitute another quantization."
+                )
+              ),
+              div(
+                class = "gf-local-download-action",
+                actionButton(
+                  "local_stt_model_download",
+                  "Download current model",
+                  icon = icon("download"),
+                  class = "btn-primary"
+                ),
+                uiOutput("local_stt_download_progress_ui")
+              ),
+              div(
+                class = "gf-local-model-manager",
+                div(
+                  class = "gf-local-model-manager-header",
+                  h4("Downloaded models"),
+                  textOutput("local_stt_models_summary", inline = TRUE)
+                ),
+                div(
+                  class = "gf-local-model-table",
+                  DTOutput("local_stt_models_table")
+                ),
+                div(
+                  class = "gf-local-model-actions",
+                  actionButton(
+                    "local_stt_models_refresh",
+                    "Refresh",
+                    icon = icon("rotate")
+                  ),
+                  actionButton(
+                    "local_stt_model_use",
+                    "Choose selected",
+                    icon = icon("check")
+                  ),
+                  actionButton(
+                    "local_stt_model_delete",
+                    "Delete selected",
+                    icon = icon("trash"),
+                    class = "btn-danger"
+                  )
+                ),
+                div(
+                  class = "gf-local-model-status",
+                  textOutput("local_stt_model_status", inline = TRUE)
+                )
               ),
               tags$details(
                 class = "gf-local-advanced",
@@ -1358,15 +1484,6 @@
                       "Executable",
                       value = "",
                       placeholder = "Find on PATH, or enter an absolute path"
-                    )
-                  ),
-                  div(
-                    class = "gf-local-field-wide",
-                    textInput(
-                      "local_stt_native_backend",
-                      "Model architecture",
-                      value = "",
-                      placeholder = "Required with model = auto; for example whisper"
                     )
                   )
                 )
@@ -1898,7 +2015,142 @@
   })
 }
 
-.update_local_config_inputs <- function(session, config) {
+.local_native_inventory_empty <- function() {
+  data.frame(
+    path = character(),
+    filename = character(),
+    quant = character(),
+    size_bytes = numeric(),
+    size = character(),
+    source_url = character(),
+    managed = logical(),
+    selected = logical(),
+    stringsAsFactors = FALSE
+  )
+}
+
+.local_native_inventory_normalize <- function(inventory) {
+  if (!is.data.frame(inventory) || !nrow(inventory)) {
+    return(.local_native_inventory_empty())
+  }
+
+  rows <- inventory
+  required <- names(.local_native_inventory_empty())
+  defaults <- list(
+    path = "",
+    filename = "",
+    quant = "",
+    size_bytes = NA_real_,
+    size = "",
+    source_url = "",
+    managed = FALSE,
+    selected = FALSE
+  )
+  for (field in setdiff(required, names(rows))) {
+    rows[[field]] <- rep(defaults[[field]], nrow(rows))
+  }
+  rows <- rows[, required, drop = FALSE]
+
+  rows$path <- trimws(as.character(rows$path))
+  rows$filename <- trimws(as.character(rows$filename))
+  missing_filename <- is.na(rows$filename) | !nzchar(rows$filename)
+  rows$filename[missing_filename] <- basename(rows$path[missing_filename])
+  rows$quant <- trimws(as.character(rows$quant))
+  rows$quant[is.na(rows$quant)] <- ""
+  rows$size_bytes <- suppressWarnings(as.numeric(rows$size_bytes))
+  rows$size <- trimws(as.character(rows$size))
+  rows$size[is.na(rows$size)] <- ""
+  missing_size <- !nzchar(rows$size)
+  rows$size[missing_size] <- vapply(
+    rows$size_bytes[missing_size],
+    .local_native_format_bytes,
+    character(1)
+  )
+  rows$source_url <- as.character(rows$source_url)
+  rows$source_url[is.na(rows$source_url)] <- ""
+  rows$managed <- !is.na(rows$managed) & as.logical(rows$managed)
+  rows$selected <- !is.na(rows$selected) & as.logical(rows$selected)
+
+  valid <- !is.na(rows$path) & nzchar(rows$path)
+  rows[valid, , drop = FALSE]
+}
+
+.local_native_format_bytes <- function(bytes) {
+  bytes <- suppressWarnings(as.numeric(bytes)[1])
+  if (is.na(bytes) || !is.finite(bytes) || bytes < 0) return("Unknown")
+  units <- c("B", "KB", "MB", "GB", "TB")
+  unit <- 1L
+  value <- bytes
+  while (value >= 1024 && unit < length(units)) {
+    value <- value / 1024
+    unit <- unit + 1L
+  }
+  digits <- if (unit == 1L) 0L else if (value >= 10) 1L else 2L
+  paste0(format(round(value, digits), trim = TRUE, nsmall = digits), " ", units[[unit]])
+}
+
+.local_native_model_choices <- function(inventory = NULL, selected = "") {
+  rows <- .local_native_inventory_normalize(inventory)
+  choices <- c(
+    "Automatic (architecture + requested quantization)" = "auto"
+  )
+  if (nrow(rows)) {
+    labels <- paste0(rows$filename, " \u2014 ", rows$size)
+    duplicate_names <- duplicated(rows$filename) |
+      duplicated(rows$filename, fromLast = TRUE)
+    labels[duplicate_names] <- paste0(
+      labels[duplicate_names],
+      " (",
+      dirname(rows$path[duplicate_names]),
+      ")"
+    )
+    choices <- c(
+      choices,
+      stats::setNames(rows$path, make.unique(labels, sep = " \u00b7 "))
+    )
+  }
+
+  selected <- trimws(as.character(selected %||% "")[1])
+  if (is.na(selected) || !nzchar(selected)) selected <- "auto"
+  if (!selected %in% unname(choices)) {
+    choices <- c(choices, stats::setNames(selected, selected))
+  }
+  choices
+}
+
+.local_native_backend_choices <- function(selected = "") {
+  choices <- c(
+    "Select architecture\u2026" = "",
+    "Whisper" = "whisper",
+    "Parakeet" = "parakeet",
+    "Canary" = "canary",
+    "Granite 4.1" = "granite-4.1",
+    "MOSS Diarize" = "moss-diarize"
+  )
+  selected <- trimws(as.character(selected %||% "")[1])
+  if (!is.na(selected) && nzchar(selected) &&
+      !selected %in% unname(choices)) {
+    choices <- c(choices, stats::setNames(selected, selected))
+  }
+  choices
+}
+
+.local_native_quant_choices <- function(selected = "") {
+  choices <- c(
+    "CrispASR default (recommended)" = "",
+    "Q4_K" = "q4_k",
+    "Q8_0" = "q8_0",
+    "F16" = "f16"
+  )
+  selected <- trimws(as.character(selected %||% "")[1])
+  if (!is.na(selected) && nzchar(selected) &&
+      !selected %in% unname(choices)) {
+    choices <- c(choices, stats::setNames(selected, selected))
+  }
+  choices
+}
+
+.update_local_config_inputs <- function(session, config, native_inventory = NULL) {
   if (!is.list(config)) {
     stop("`config` must be a local inference configuration list.", call. = FALSE)
   }
@@ -1951,15 +2203,28 @@
     "local_stt_native_executable",
     value = config$stt_native_executable
   )
-  updateTextInput(
+  native_model <- trimws(as.character(config$stt_native_model %||% "")[1])
+  if (is.na(native_model) || !nzchar(native_model)) native_model <- "auto"
+  updateSelectizeInput(
     session,
     "local_stt_native_model",
-    value = config$stt_native_model
+    choices = .local_native_model_choices(native_inventory, native_model),
+    selected = native_model,
+    server = FALSE
   )
-  updateTextInput(
+  updateSelectizeInput(
     session,
     "local_stt_native_backend",
-    value = config$stt_native_backend
+    choices = .local_native_backend_choices(config$stt_native_backend),
+    selected = config$stt_native_backend,
+    server = FALSE
+  )
+  updateSelectizeInput(
+    session,
+    "local_stt_native_quant",
+    choices = .local_native_quant_choices(config$stt_native_quant %||% ""),
+    selected = config$stt_native_quant %||% "",
+    server = FALSE
   )
   updateSelectInput(
     session,
@@ -2065,6 +2330,20 @@ server <- function(input, output, session) {
     gen_local_config(),
     error = function(e) .genflow_local_config_defaults()
   )
+  initial_native_inventory <- tryCatch(
+    list(
+      models = .local_native_inventory_normalize(
+        .genflow_crispasr_inventory(initial_local_config)
+      ),
+      error = ""
+    ),
+    error = function(e) list(
+      models = .local_native_inventory_empty(),
+      error = conditionMessage(e)
+    )
+  )
+  native_download_holder <- new.env(parent = emptyenv())
+  native_download_holder$job <- NULL
 
   local_state <- reactiveValues(
     config = initial_local_config,
@@ -2074,7 +2353,15 @@ server <- function(input, output, session) {
       status = character(),
       detail = character(),
       stringsAsFactors = FALSE
-    )
+    ),
+    native_models = initial_native_inventory$models,
+    native_model_status = if (nzchar(initial_native_inventory$error)) {
+      paste("Could not inspect the CrispASR cache:", initial_native_inventory$error)
+    } else {
+      ""
+    },
+    native_download_status = NULL,
+    native_delete_path = NULL
   )
 
   local_config_from_inputs <- function() {
@@ -2116,6 +2403,10 @@ server <- function(input, output, session) {
         "local_stt_native_backend",
         "stt_native_backend"
       ),
+      stt_native_quant = input_or_current(
+        "local_stt_native_quant",
+        "stt_native_quant"
+      ),
       stt_native_device = input_or_current(
         "local_stt_native_device",
         "stt_native_device"
@@ -2123,8 +2414,45 @@ server <- function(input, output, session) {
     )
   }
 
+  refresh_native_models <- function(config,
+                                    selected = config$stt_native_model %||% "",
+                                    status = NULL) {
+    inventory <- tryCatch(
+      .local_native_inventory_normalize(
+        .genflow_crispasr_inventory(config)
+      ),
+      error = function(e) e
+    )
+    if (inherits(inventory, "error")) {
+      message <- paste(
+        "Could not inspect the CrispASR cache:",
+        conditionMessage(inventory)
+      )
+      local_state$native_model_status <- message
+      showNotification(message, type = "error")
+      return(invisible(FALSE))
+    }
+
+    local_state$native_models <- inventory
+    if (!is.null(status)) local_state$native_model_status <- status
+    selected <- trimws(as.character(selected %||% "")[1])
+    if (is.na(selected) || !nzchar(selected)) selected <- "auto"
+    updateSelectizeInput(
+      session,
+      "local_stt_native_model",
+      choices = .local_native_model_choices(inventory, selected),
+      selected = selected,
+      server = FALSE
+    )
+    invisible(TRUE)
+  }
+
   session$onFlushed(function() {
-    .update_local_config_inputs(session, initial_local_config)
+    .update_local_config_inputs(
+      session,
+      initial_local_config,
+      native_inventory = initial_native_inventory$models
+    )
   }, once = TRUE)
 
   current_models_dir <- function() {
@@ -3789,7 +4117,12 @@ server <- function(input, output, session) {
       "Reloaded configuration from",
       .genflow_local_config_path()
     )
-    .update_local_config_inputs(session, config)
+    .update_local_config_inputs(
+      session,
+      config,
+      native_inventory = local_state$native_models
+    )
+    refresh_native_models(config, selected = config$stt_native_model)
     showNotification("Local inference configuration reloaded.", type = "message")
   })
 
@@ -3810,7 +4143,12 @@ server <- function(input, output, session) {
       "Saved configuration to",
       .genflow_local_config_path()
     )
-    .update_local_config_inputs(session, config)
+    .update_local_config_inputs(
+      session,
+      config,
+      native_inventory = local_state$native_models
+    )
+    refresh_native_models(config, selected = config$stt_native_model)
     showNotification("Local inference configuration saved.", type = "message")
   })
 
@@ -3847,7 +4185,541 @@ server <- function(input, output, session) {
       "settings. Configuration:",
       .genflow_local_config_path()
     )
+    if (identical(adapter, "local-native")) {
+      preview <- tryCatch(
+        .genflow_validate_local_config(local_config_from_inputs()),
+        error = function(e) local_state$config
+      )
+      refresh_native_models(
+        preview,
+        selected = preview$stt_native_model %||% "auto"
+      )
+    }
   }, ignoreInit = FALSE)
+
+  native_model_selected_row <- reactive({
+    selected <- input$local_stt_models_table_rows_selected
+    models <- local_state$native_models
+    if (!length(selected) || length(selected) != 1L ||
+        !is.data.frame(models) || selected < 1L || selected > nrow(models)) {
+      return(NULL)
+    }
+    models[selected, , drop = FALSE]
+  })
+
+  output$local_stt_models_summary <- renderText({
+    models <- local_state$native_models
+    if (!is.data.frame(models) || !nrow(models)) {
+      return("No cached models found")
+    }
+    total_bytes <- sum(models$size_bytes, na.rm = TRUE)
+    total_size <- if (is.finite(total_bytes) && total_bytes > 0) {
+      .local_native_format_bytes(total_bytes)
+    } else {
+      "size unknown"
+    }
+    managed <- sum(models$managed, na.rm = TRUE)
+    sprintf(
+      "%d file%s \u00b7 %s%s",
+      nrow(models),
+      if (nrow(models) == 1L) "" else "s",
+      total_size,
+      if (managed < nrow(models)) {
+        sprintf(" \u00b7 %d external", nrow(models) - managed)
+      } else {
+        ""
+      }
+    )
+  })
+
+  output$local_stt_models_table <- renderDT({
+    models <- local_state$native_models
+    if (!is.data.frame(models) || !nrow(models)) {
+      return(datatable(
+        data.frame(Model = "No downloaded models found."),
+        rownames = FALSE,
+        selection = "none",
+        options = list(dom = "t", paging = FALSE, ordering = FALSE)
+      ))
+    }
+
+    display <- data.frame(
+      Model = models$filename,
+      Quant = ifelse(nzchar(models$quant), toupper(models$quant), "\u2014"),
+      Size = models$size,
+      Location = ifelse(
+        models$managed,
+        "CrispASR cache",
+        "External (read-only)"
+      ),
+      State = ifelse(models$selected, "Selected", "Cached"),
+      stringsAsFactors = FALSE
+    )
+    selected_rows <- which(models$selected)
+    datatable(
+      display,
+      rownames = FALSE,
+      escape = TRUE,
+      selection = list(
+        mode = "single",
+        selected = if (length(selected_rows)) selected_rows[[1]] else NULL,
+        target = "row"
+      ),
+      class = "compact stripe",
+      options = list(
+        dom = "t",
+        paging = FALSE,
+        ordering = TRUE,
+        scrollY = "220px",
+        scrollCollapse = TRUE,
+        autoWidth = FALSE,
+        columnDefs = list(
+          list(width = "38%", targets = 0),
+          list(width = "12%", targets = 1),
+          list(width = "14%", targets = 2),
+          list(width = "22%", targets = 3),
+          list(width = "14%", targets = 4)
+        )
+      )
+    )
+  })
+
+  output$local_stt_model_status <- renderText({
+    local_state$native_model_status
+  })
+
+  observeEvent(input$local_stt_models_refresh, {
+    preview <- tryCatch(
+      .genflow_validate_local_config(local_config_from_inputs()),
+      error = function(e) {
+        local_state$native_model_status <- paste(
+          "Could not refresh models:",
+          conditionMessage(e)
+        )
+        showNotification(conditionMessage(e), type = "error")
+        NULL
+      }
+    )
+    if (is.null(preview)) return()
+    current_model <- input$local_stt_native_model %||%
+      preview$stt_native_model %||% "auto"
+    refresh_native_models(
+      preview,
+      selected = current_model,
+      status = paste(
+        "Cache refreshed at",
+        format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+      )
+    )
+  })
+
+  observeEvent(input$local_stt_model_use, {
+    selected <- native_model_selected_row()
+    if (is.null(selected)) {
+      local_state$native_model_status <- "Select one downloaded model first."
+      showNotification("Select one downloaded model first.", type = "warning")
+      return()
+    }
+
+    models <- local_state$native_models
+    models$selected <- models$path == selected$path[[1]]
+    local_state$native_models <- models
+    updateSelectizeInput(
+      session,
+      "local_stt_native_model",
+      choices = .local_native_model_choices(models, selected$path[[1]]),
+      selected = selected$path[[1]],
+      server = FALSE
+    )
+    local_state$native_model_status <- paste0(
+      "Selected ",
+      selected$filename[[1]],
+      ". Click Save to persist this choice."
+    )
+  })
+
+  select_native_download_result <- function(result) {
+    downloaded_path <- trimws(as.character(result$path %||% "")[1])
+    if (is.na(downloaded_path) || !nzchar(downloaded_path)) {
+      message <- "Model download did not return a local model path."
+      local_state$native_model_status <- message
+      showNotification(message, type = "error")
+      return(invisible(FALSE))
+    }
+    filename <- as.character(
+      result$filename %||% basename(downloaded_path)
+    )[1]
+    cached <- isTRUE(result$cached)
+    message <- paste0(
+      if (cached) "Already downloaded: " else "Downloaded: ",
+      filename,
+      ". Local file selected. Click Save to persist this choice."
+    )
+    preview <- tryCatch(
+      .genflow_validate_local_config(local_config_from_inputs()),
+      error = function(e) local_state$config
+    )
+    preview$stt_native_model <- downloaded_path
+    refresh_native_models(
+      preview,
+      selected = downloaded_path,
+      status = message
+    )
+
+    models <- local_state$native_models
+    selected_rows <- which(models$path == downloaded_path)
+    if (!length(selected_rows)) {
+      size_bytes <- suppressWarnings(as.numeric(result$size_bytes)[1])
+      models <- rbind(
+        models,
+        data.frame(
+          path = downloaded_path,
+          filename = filename,
+          quant = .genflow_crispasr_model_quant(filename),
+          size_bytes = size_bytes,
+          size = .local_native_format_bytes(size_bytes),
+          source_url = as.character(result$source_url %||% "")[1],
+          managed = FALSE,
+          selected = TRUE,
+          stringsAsFactors = FALSE
+        )
+      )
+    } else {
+      models$selected <- models$path == downloaded_path
+    }
+    local_state$native_models <- models
+    updateSelectizeInput(
+      session,
+      "local_stt_native_model",
+      choices = .local_native_model_choices(models, downloaded_path),
+      selected = downloaded_path,
+      server = FALSE
+    )
+    local_state$native_model_status <- message
+    showNotification(message, type = "message")
+    invisible(TRUE)
+  }
+
+  output$local_stt_download_progress_ui <- renderUI({
+    status <- local_state$native_download_status
+    if (!is.list(status)) return(NULL)
+
+    state <- trimws(as.character(status$state %||% "starting")[1])
+    stage <- trimws(as.character(status$stage %||% state)[1])
+    filename <- trimws(as.character(status$filename %||% "")[1])
+    received <- suppressWarnings(as.numeric(status$bytes_received)[1])
+    total <- suppressWarnings(as.numeric(status$bytes_total)[1])
+    proportion <- suppressWarnings(as.numeric(status$proportion)[1])
+    if (!is.finite(proportion) &&
+        is.finite(received) &&
+        is.finite(total) &&
+        total > 0) {
+      proportion <- received / total
+    }
+    if (!is.finite(proportion)) {
+      proportion <- if (identical(state, "complete")) 1 else 0.02
+    }
+    proportion <- min(1, max(0, proportion))
+
+    detail <- trimws(as.character(status$message %||% "")[1])
+    if (identical(stage, "downloading") &&
+        is.finite(received) &&
+        is.finite(total) &&
+        total > 0) {
+      detail <- paste0(
+        if (nzchar(filename)) paste0(filename, ": ") else "",
+        .local_native_format_bytes(received),
+        " / ",
+        .local_native_format_bytes(total)
+      )
+    }
+    if (!nzchar(detail)) detail <- "Preparing model..."
+
+    div(
+      class = "gf-native-download-progress",
+      div(
+        class = "progress",
+        div(
+          class = "progress-bar",
+          role = "progressbar",
+          style = paste0("width: ", round(proportion * 100, 1), "%;"),
+          `aria-valuenow` = round(proportion * 100, 1),
+          `aria-valuemin` = "0",
+          `aria-valuemax` = "100"
+        )
+      ),
+      div(
+        class = "gf-native-download-detail",
+        detail,
+        if (state %in% c("queued", "starting", "running")) {
+          tagList(
+            " ",
+            actionButton(
+              "local_stt_model_download_cancel",
+              "Cancel",
+              icon = icon("xmark"),
+              class = "btn btn-sm btn-outline-secondary"
+            )
+          )
+        }
+      )
+    )
+  })
+
+  observeEvent(input$local_stt_model_download, {
+    existing_job <- native_download_holder$job
+    if (!is.null(existing_job) &&
+        .genflow_native_download_job_alive(existing_job)) {
+      showNotification(
+        "A Native STT model download is already running.",
+        type = "warning"
+      )
+      return()
+    }
+    if (!is.null(existing_job)) {
+      existing_status <- .genflow_native_download_job_read(existing_job)
+      existing_state <- trimws(as.character(
+        existing_status$state %||% ""
+      )[1])
+      if (identical(existing_state, "complete") &&
+          is.list(existing_status$result)) {
+        select_native_download_result(existing_status$result)
+      } else if (identical(existing_state, "error")) {
+        detail <- trimws(as.character(
+          existing_status$message %||%
+            "The previous background download failed."
+        )[1])
+        local_state$native_model_status <- paste(
+          "Model download failed:",
+          detail
+        )
+        showNotification(detail, type = "error")
+      }
+      try(.genflow_native_download_job_cleanup(existing_job), silent = TRUE)
+      native_download_holder$job <- NULL
+      updateActionButton(
+        session,
+        "local_stt_model_download",
+        label = "Download current model",
+        icon = icon("download")
+      )
+      # Process the previous terminal result first. A second click starts a
+      # new transfer, so a completed download can never be skipped silently.
+      return()
+    }
+
+    engine <- input$local_stt_native_engine %||% "auto"
+    if (identical(engine, "moss-transcribe")) {
+      message <- paste0(
+        "The in-app model manager uses the CrispASR cache. ",
+        "Select CrispASR or Detect automatically first."
+      )
+      local_state$native_model_status <- message
+      showNotification(message, type = "warning")
+      return()
+    }
+
+    selector <- trimws(input$local_stt_native_model %||% "auto")
+    if (!nzchar(selector)) selector <- "auto"
+    job <- tryCatch(
+      .genflow_native_download_job_start(
+        selector = selector,
+        backend = trimws(input$local_stt_native_backend %||% ""),
+        quant = trimws(input$local_stt_native_quant %||% ""),
+        executable = trimws(input$local_stt_native_executable %||% "")
+      ),
+      error = function(e) e
+    )
+    if (inherits(job, "error")) {
+      message <- paste("Could not start model download:", conditionMessage(job))
+      local_state$native_model_status <- message
+      local_state$native_download_status <- list(
+        state = "error",
+        stage = "error",
+        message = conditionMessage(job)
+      )
+      showNotification(conditionMessage(job), type = "error")
+      return()
+    }
+    native_download_holder$job <- job
+    local_state$native_download_status <-
+      .genflow_native_download_job_read(job)
+    updateActionButton(
+      session,
+      "local_stt_model_download",
+      label = "Download running\u2026",
+      icon = icon("spinner")
+    )
+  })
+
+  observe({
+    local_state$native_download_status
+    job <- native_download_holder$job
+    if (is.null(job)) return()
+    invalidateLater(250, session)
+
+    status <- .genflow_native_download_job_read(job)
+    local_state$native_download_status <- status
+    if (.genflow_native_download_job_alive(job)) return()
+
+    state <- trimws(as.character(status$state %||% "")[1])
+    if (identical(state, "complete") && is.list(status$result)) {
+      select_native_download_result(status$result)
+    } else if (!identical(state, "cancelled")) {
+      detail <- trimws(as.character(status$message %||% "")[1])
+      if (!nzchar(detail) && file.exists(job$stderr_path)) {
+        detail <- trimws(paste(
+          utils::tail(readLines(job$stderr_path, warn = FALSE), 8L),
+          collapse = "\n"
+        ))
+      }
+      if (!nzchar(detail)) detail <- "The background download stopped unexpectedly."
+      local_state$native_model_status <- paste("Model download failed:", detail)
+      showNotification(detail, type = "error")
+    }
+
+    try(.genflow_native_download_job_cleanup(job), silent = TRUE)
+    native_download_holder$job <- NULL
+    updateActionButton(
+      session,
+      "local_stt_model_download",
+      label = "Download current model",
+      icon = icon("download")
+    )
+  })
+
+  observeEvent(input$local_stt_model_download_cancel, {
+    job <- native_download_holder$job
+    if (is.null(job)) return()
+    cancelled <- tryCatch(
+      .genflow_native_download_job_cancel(job),
+      error = function(e) e
+    )
+    if (inherits(cancelled, "error")) {
+      showNotification(conditionMessage(cancelled), type = "error")
+      return()
+    }
+    local_state$native_download_status <- cancelled
+    cancelled_state <- trimws(as.character(
+      cancelled$state %||% "cancelled"
+    )[1])
+    if (identical(cancelled_state, "complete") &&
+        is.list(cancelled$result)) {
+      select_native_download_result(cancelled$result)
+    } else if (identical(cancelled_state, "error")) {
+      detail <- trimws(as.character(cancelled$message %||% "")[1])
+      if (!nzchar(detail)) detail <- "The background download failed."
+      local_state$native_model_status <- paste("Model download failed:", detail)
+      showNotification(detail, type = "error")
+    } else {
+      local_state$native_model_status <- "Native STT model download cancelled."
+    }
+    try(.genflow_native_download_job_cleanup(job), silent = TRUE)
+    native_download_holder$job <- NULL
+    updateActionButton(
+      session,
+      "local_stt_model_download",
+      label = "Download current model",
+      icon = icon("download")
+    )
+  })
+
+  session$onSessionEnded(function() {
+    job <- native_download_holder$job
+    if (is.null(job)) return(invisible(NULL))
+    try(.genflow_native_download_job_cancel(job), silent = TRUE)
+    try(.genflow_native_download_job_cleanup(job), silent = TRUE)
+    native_download_holder$job <- NULL
+    invisible(NULL)
+  })
+
+  observeEvent(input$local_stt_model_delete, {
+    selected <- native_model_selected_row()
+    if (is.null(selected)) {
+      local_state$native_model_status <- "Select one downloaded model first."
+      showNotification("Select one downloaded model first.", type = "warning")
+      return()
+    }
+    if (!isTRUE(selected$managed[[1]])) {
+      message <- paste0(
+        selected$filename[[1]],
+        " is outside the managed CrispASR cache and cannot be deleted here."
+      )
+      local_state$native_model_status <- message
+      showNotification(message, type = "warning")
+      return()
+    }
+
+    local_state$native_delete_path <- selected$path[[1]]
+    showModal(modalDialog(
+      title = "Delete downloaded model?",
+      tags$p(
+        "This removes the model and its source sidecar from the managed ",
+        "CrispASR cache."
+      ),
+      tags$p(
+        tags$strong(selected$filename[[1]]),
+        " \u00b7 ",
+        selected$size[[1]]
+      ),
+      tags$code(selected$path[[1]]),
+      footer = tagList(
+        actionButton("local_stt_model_delete_cancel", "Cancel"),
+        actionButton(
+          "local_stt_model_delete_confirm",
+          "Delete model",
+          icon = icon("trash"),
+          class = "btn-danger"
+        )
+      ),
+      easyClose = FALSE
+    ))
+  })
+
+  observeEvent(input$local_stt_model_delete_cancel, {
+    local_state$native_delete_path <- NULL
+    removeModal()
+  })
+
+  observeEvent(input$local_stt_model_delete_confirm, {
+    path <- isolate(local_state$native_delete_path)
+    if (is.null(path) || !length(path) || !nzchar(path[[1]])) {
+      removeModal()
+      return()
+    }
+    active_model <- isolate(
+      input$local_stt_native_model %||%
+        local_state$config$stt_native_model %||%
+        ""
+    )
+    removed <- tryCatch(
+      .genflow_crispasr_remove_model(
+        path = path[[1]],
+        active_model = active_model
+      ),
+      error = function(e) e
+    )
+    removeModal()
+    local_state$native_delete_path <- NULL
+    if (inherits(removed, "error")) {
+      message <- paste("Could not delete model:", conditionMessage(removed))
+      local_state$native_model_status <- message
+      showNotification(conditionMessage(removed), type = "error")
+      return()
+    }
+
+    message <- paste("Deleted", basename(path[[1]]), "from the CrispASR cache.")
+    preview <- tryCatch(
+      .genflow_validate_local_config(local_config_from_inputs()),
+      error = function(e) local_state$config
+    )
+    refresh_native_models(
+      preview,
+      selected = active_model,
+      status = message
+    )
+    showNotification(message, type = "message")
+  })
 
   observeEvent(input$local_diagnostics_run, {
     adapter <- isolate(input$local_adapter_tabs %||% "ollama")

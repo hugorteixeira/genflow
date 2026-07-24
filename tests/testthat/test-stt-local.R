@@ -621,6 +621,16 @@ test_that("gen_stt canonicalizes native services and preserves MOSS aliases", {
   expect_identical(seen$max_new_tokens, 4096L)
   expect_true(seen$legacy_service)
   expect_true(seen$convert)
+  expect_error(
+    gen_stt(
+      audio,
+      service = "moss-cpp",
+      model = model,
+      native_engine = "crispasr",
+      save_txt = FALSE
+    ),
+    "compatibility alias"
+  )
   expect_identical(
     genflow:::.stt_normalize_service("mosscpp"),
     "local-native"
@@ -1214,4 +1224,203 @@ test_that("native MOSS C++ failures identify model binary JSON and timeout cause
     ),
     "timed out after 10 seconds"
   )
+})
+
+test_that("native STT quant configuration round-trips and validates env overrides", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+
+  config <- gen_local_config(
+    stt_native_quant = " Q8_0 ",
+    path = path
+  )
+  expect_identical(config$stt_native_quant, "q8_0")
+  expect_identical(
+    gen_local_config(path = path)$stt_native_quant,
+    "q8_0"
+  )
+
+  withr::local_envvar(GENFLOW_STT_NATIVE_QUANT = "Q5_K_M")
+  effective <- genflow:::.genflow_local_effective_config(config)
+  expect_identical(effective$stt_native_quant, "q5_k_m")
+
+  expect_error(
+    gen_local_config(
+      stt_native_quant = "../q8_0",
+      path = path,
+      save = FALSE
+    ),
+    "`native_quant`"
+  )
+})
+
+test_that("gen_stt forwards the public native quant argument", {
+  audio <- local_stt_audio()
+  on.exit(unlink(audio), add = TRUE)
+  seen <- NULL
+  testthat::local_mocked_bindings(
+    .stt_local_native = function(...) {
+      seen <<- list(...)
+      list(text = "quant plumbing", metadata = list(model = "auto"))
+    },
+    .package = "genflow"
+  )
+
+  capture.output(result <- gen_stt(
+    audio,
+    service = "local-native",
+    model = "auto",
+    native_quant = "q8_0",
+    save_txt = FALSE
+  ))
+
+  expect_identical(result$status_api, "SUCCESS")
+  expect_identical(seen$native_quant, "q8_0")
+})
+
+test_that("local-native auto engine honors a configured MOSS model", {
+  audio <- local_stt_audio()
+  model <- tempfile("moss-configured-", fileext = ".gguf")
+  config_path <- tempfile(fileext = ".json")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model, config_path)), add = TRUE)
+  old_config_path <- getOption("genflow.local_config_path")
+  options(genflow.local_config_path = config_path)
+  on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
+
+  gen_local_config(
+    stt_native_engine = "auto",
+    stt_native_executable = "",
+    stt_native_model = model,
+    stt_native_backend = "moss-diarize",
+    stt_native_quant = "q8_0",
+    stt_native_device = "cpu",
+    path = config_path
+  )
+
+  seen <- NULL
+  testthat::local_mocked_bindings(
+    .genflow_resolve_executable = function(value,
+                                            alternatives = character()) {
+      candidates <- c(value, alternatives)
+      r_executable <- file.path(R.home("bin"), "R")
+      if ("moss-transcribe" %in% candidates ||
+          identical(value, r_executable)) {
+        r_executable
+      } else {
+        ""
+      }
+    },
+    .package = "genflow"
+  )
+
+  result <- genflow:::.stt_local_native(
+    audio_path = audio,
+    model = "auto",
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    runner = function(command, args, timeout_secs, environment) {
+      seen <<- list(
+        command = command,
+        args = args,
+        timeout_secs = timeout_secs,
+        environment = environment
+      )
+      list(
+        status = 0L,
+        output = paste0(
+          '{"segments":[{"start":0,"end":1,',
+          '"speaker":"S01","text":"configured MOSS"}]}'
+        )
+      )
+    }
+  )
+
+  expected_model <- normalizePath(model, winslash = "/", mustWork = TRUE)
+  expect_identical(result$text, "configured MOSS")
+  expect_identical(result$metadata$engine, "moss-transcribe")
+  expect_identical(result$metadata$model, expected_model)
+  expect_identical(result$metadata$requested_model, "auto")
+  expect_identical(result$metadata$resolution_source, "configured")
+  expect_identical(seen$args[[1]], "transcribe")
+  expect_identical(seen$args[[2]], expected_model)
+})
+
+test_that("local-native auto honors a configured model before registry quant", {
+  audio <- local_stt_audio()
+  config_path <- tempfile(fileext = ".json")
+  on.exit(unlink(c(audio, config_path)), add = TRUE)
+  old_config_path <- getOption("genflow.local_config_path")
+  options(genflow.local_config_path = config_path)
+  on.exit(options(genflow.local_config_path = old_config_path), add = TRUE)
+
+  selected_model <- paste0(
+    "hf://owner/repository:",
+    "selected-Q8_0.gguf"
+  )
+  gen_local_config(
+    stt_native_engine = "crispasr",
+    stt_native_executable = file.path(R.home("bin"), "R"),
+    stt_native_model = selected_model,
+    stt_native_backend = "granite-4.1",
+    stt_native_quant = "q8_0",
+    stt_native_device = "cpu",
+    path = config_path
+  )
+
+  seen <- list()
+  fake_runner <- function(command, args, ...) {
+    seen[[length(seen) + 1L]] <<- args
+    output_base <- args[[match("-of", args) + 1L]]
+    jsonlite::write_json(
+      list(
+        crispasr = list(
+          backend = "granite",
+          model = "selected-Q8_0.gguf"
+        ),
+        transcription = list(list(
+          offsets = list(from = 0L, to = 1000L),
+          text = "configured model"
+        ))
+      ),
+      paste0(output_base, ".json"),
+      auto_unbox = TRUE
+    )
+    list(status = 0L, output = character())
+  }
+
+  configured <- genflow:::.stt_local_native(
+    audio_path = audio,
+    model = "auto",
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    runner = fake_runner
+  )
+  expect_true("--hf-repo" %in% seen[[1]])
+  expect_false("--model-quant" %in% seen[[1]])
+  expect_identical(configured$metadata$model, selected_model)
+  expect_identical(configured$metadata$requested_model, "auto")
+  expect_identical(configured$metadata$resolution_source, "configured")
+  expect_null(configured$metadata$requested_quant)
+
+  gen_local_config(
+    stt_native_model = "auto",
+    path = config_path
+  )
+  registry <- genflow:::.stt_local_native(
+    audio_path = audio,
+    model = "auto",
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    runner = fake_runner
+  )
+  quant_position <- match("--model-quant", seen[[2]])
+  expect_false(is.na(quant_position))
+  expect_identical(seen[[2]][[quant_position + 1L]], "q8_0")
+  expect_identical(registry$metadata$requested_model, "auto")
+  expect_identical(registry$metadata$resolution_source, "registry")
+  expect_identical(registry$metadata$requested_quant, "q8_0")
 })

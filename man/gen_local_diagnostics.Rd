@@ -14,7 +14,8 @@ gen_local_diagnostics(
 \arguments{
 \item{config}{Optional configuration returned by \code{\link[=gen_local_config]{gen_local_config()}}.}
 
-\item{check_endpoints}{Logical; probe configured local HTTP services.}
+\item{check_endpoints}{Logical; probe configured local HTTP services and
+verify that a selected remote CrispASR artifact is actually published.}
 
 \item{timeout}{Numeric timeout in seconds for each subprocess or HTTP probe.}
 

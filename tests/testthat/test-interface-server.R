@@ -184,6 +184,7 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
   config$stt_native_executable <- "/custom/crispasr"
   config$stt_native_model <- "/models/whisper.gguf"
   config$stt_native_backend <- "whisper"
+  config$stt_native_quant <- "q8_0"
   config$stt_native_device <- "vulkan"
   genflow:::.genflow_write_local_config(config, config_path)
 
@@ -215,6 +216,7 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     expect_identical(saved$stt_native_executable, config$stt_native_executable)
     expect_identical(saved$stt_native_model, config$stt_native_model)
     expect_identical(saved$stt_native_backend, config$stt_native_backend)
+    expect_identical(saved$stt_native_quant, config$stt_native_quant)
     expect_identical(saved$stt_native_device, config$stt_native_device)
 
     session$setInputs(
@@ -230,6 +232,7 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
       local_stt_native_executable = "/custom/moss-transcribe",
       local_stt_native_model = "/models/moss.gguf",
       local_stt_native_backend = "",
+      local_stt_native_quant = "",
       local_stt_native_device = "cpu",
       local_config_save = 3
     )
@@ -239,6 +242,7 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     expect_identical(saved$stt_native_executable, "/custom/moss-transcribe")
     expect_identical(saved$stt_native_model, "/models/moss.gguf")
     expect_identical(saved$stt_native_backend, "")
+    expect_identical(saved$stt_native_quant, "")
     expect_identical(saved$stt_native_device, "cpu")
 
     session$setInputs(local_diagnostics_run = 1)
@@ -248,6 +252,251 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     expect_match(state$status, "Ollama check completed", fixed = TRUE)
     expect_identical(diagnostics_args$timeout, 10)
     expect_identical(diagnostics_args$adapters, "ollama")
+  })
+})
+
+test_that("Native STT model manager refreshes, selects, downloads, and deletes safely", {
+  restore <- interface_test_scope()
+  on.exit(restore(), add = TRUE)
+
+  inventory_calls <- 0L
+  download_args <- NULL
+  download_status_reads <- 0L
+  removed_args <- NULL
+  downloaded <- FALSE
+  inventory <- data.frame(
+    path = c("/cache/granite-q4_k.gguf", "/models/granite-q8_0.gguf"),
+    filename = c("granite-q4_k.gguf", "granite-q8_0.gguf"),
+    quant = c("q4_k", "q8_0"),
+    size_bytes = c(1024, 2048),
+    size = c("1 KB", "2 KB"),
+    source_url = c(
+      "https://huggingface.co/owner/repo/q4",
+      "https://huggingface.co/owner/repo/q8"
+    ),
+    managed = c(TRUE, FALSE),
+    selected = c(FALSE, FALSE),
+    stringsAsFactors = FALSE
+  )
+
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_inventory = function(config = NULL) {
+      inventory_calls <<- inventory_calls + 1L
+      rows <- inventory
+      if (isTRUE(downloaded)) {
+        rows <- rbind(
+          rows,
+          data.frame(
+            path = "/cache/granite-q8_0.gguf",
+            filename = "granite-q8_0.gguf",
+            quant = "q8_0",
+            size_bytes = 2048,
+            size = "2 KB",
+            source_url = "https://huggingface.co/owner/repo/q8",
+            managed = TRUE,
+            selected = FALSE,
+            stringsAsFactors = FALSE
+          )
+        )
+      }
+      configured <- as.character(config$stt_native_model %||% "")[1]
+      rows$selected <- rows$path == configured
+      rows
+    },
+    .genflow_native_download_job_start = function(selector,
+                                                  backend = "",
+                                                  quant = "",
+                                                  executable = "") {
+      download_args <<- list(
+        selector = selector,
+        backend = backend,
+        quant = quant,
+        executable = executable
+      )
+      downloaded <<- TRUE
+      structure(
+        list(
+          id = "mock-download",
+          stderr_path = tempfile(),
+          process = structure(list(), class = "process")
+        ),
+        class = "genflow_native_download_job"
+      )
+    },
+    .genflow_native_download_job_read = function(job) {
+      download_status_reads <<- download_status_reads + 1L
+      if (download_status_reads == 1L) {
+        return(list(
+          state = "queued",
+          stage = "queued",
+          message = "queued"
+        ))
+      }
+      list(
+        state = "complete",
+        stage = "complete",
+        message = "ready",
+        proportion = 1,
+        result = list(
+          path = "/cache/granite-q8_0.gguf",
+          filename = "granite-q8_0.gguf",
+          source_url = "https://huggingface.co/owner/repo/q8",
+          cached = FALSE,
+          size_bytes = 2048
+        )
+      )
+    },
+    .genflow_native_download_job_alive = function(job) FALSE,
+    .genflow_native_download_job_cleanup = function(job) TRUE,
+    .genflow_crispasr_remove_model = function(path, active_model = "") {
+      removed_args <<- list(path = path, active_model = active_model)
+      TRUE
+    },
+    .package = "genflow"
+  )
+
+  shiny::testServer(genflow:::server, {
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_equal(nrow(state$native_models), 2L)
+    expect_gte(inventory_calls, 1L)
+    expect_identical(
+      state$native_models$filename,
+      c("granite-q4_k.gguf", "granite-q8_0.gguf")
+    )
+    expect_match(output$local_stt_models_summary, "2 files", fixed = TRUE)
+
+    session$setInputs(
+      local_stt_models_table_rows_selected = 1L,
+      local_stt_model_use = 1L
+    )
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_match(state$native_model_status, "Click Save", fixed = TRUE)
+    expect_true(state$native_models$selected[[1]])
+
+    session$setInputs(
+      local_stt_native_engine = "crispasr",
+      local_stt_native_model = "auto",
+      local_stt_native_backend = "granite-4.1",
+      local_stt_native_quant = "q8_0",
+      local_stt_native_executable = "/opt/crispasr",
+      local_stt_model_download = 1L
+    )
+    session$flushReact()
+    expect_identical(download_args$selector, "auto")
+    expect_identical(download_args$backend, "granite-4.1")
+    expect_identical(download_args$quant, "q8_0")
+    expect_identical(download_args$executable, "/opt/crispasr")
+    state <- reactiveValuesToList(local_state)
+    expect_match(state$native_model_status, "Downloaded:", fixed = TRUE)
+    expect_match(state$native_model_status, "Click Save", fixed = TRUE)
+    expect_identical(
+      state$native_models$path[state$native_models$selected],
+      "/cache/granite-q8_0.gguf"
+    )
+
+    session$setInputs(
+      local_stt_models_table_rows_selected = 1L,
+      local_stt_model_delete = 1L
+    )
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_identical(
+      state$native_delete_path,
+      "/cache/granite-q4_k.gguf"
+    )
+
+    session$setInputs(local_stt_model_delete_confirm = 1L)
+    session$flushReact()
+    expect_identical(removed_args$path, "/cache/granite-q4_k.gguf")
+    expect_identical(removed_args$active_model, "auto")
+    state <- reactiveValuesToList(local_state)
+    expect_null(state$native_delete_path)
+    expect_match(state$native_model_status, "Deleted", fixed = TRUE)
+
+    session$setInputs(
+      local_stt_models_table_rows_selected = 2L,
+      local_stt_model_delete = 2L
+    )
+    session$flushReact()
+    state <- reactiveValuesToList(local_state)
+    expect_match(state$native_model_status, "outside the managed", fixed = TRUE)
+  })
+})
+
+test_that("Native STT processes a completed job before starting another", {
+  restore <- interface_test_scope()
+  on.exit(restore(), add = TRUE)
+
+  alive <- TRUE
+  starts <- 0L
+  cleanups <- 0L
+  result_path <- "/cache/completed-before-next.gguf"
+
+  testthat::local_mocked_bindings(
+    .genflow_crispasr_inventory = function(config = NULL) {
+      genflow:::.genflow_crispasr_empty_inventory()
+    },
+    .genflow_native_download_job_start = function(selector,
+                                                  backend = "",
+                                                  quant = "",
+                                                  executable = "") {
+      starts <<- starts + 1L
+      structure(
+        list(
+          id = "completed-before-next",
+          stderr_path = tempfile(),
+          process = structure(list(), class = "process")
+        ),
+        class = "genflow_native_download_job"
+      )
+    },
+    .genflow_native_download_job_read = function(job) {
+      list(
+        state = "complete",
+        stage = "complete",
+        message = "ready",
+        result = list(
+          path = result_path,
+          filename = basename(result_path),
+          source_url = "",
+          cached = FALSE,
+          size_bytes = 4096
+        )
+      )
+    },
+    .genflow_native_download_job_alive = function(job) alive,
+    .genflow_native_download_job_cleanup = function(job) {
+      cleanups <<- cleanups + 1L
+      TRUE
+    },
+    .package = "genflow"
+  )
+
+  shiny::testServer(genflow:::server, {
+    session$flushReact()
+    session$setInputs(
+      local_stt_native_engine = "crispasr",
+      local_stt_native_model = "auto",
+      local_stt_native_backend = "granite-4.1",
+      local_stt_model_download = 1L
+    )
+    session$flushReact()
+    expect_identical(starts, 1L)
+
+    alive <<- FALSE
+    session$setInputs(local_stt_model_download = 2L)
+    session$flushReact()
+
+    state <- reactiveValuesToList(local_state)
+    expect_identical(starts, 1L)
+    expect_identical(cleanups, 1L)
+    expect_match(state$native_model_status, "Downloaded:", fixed = TRUE)
+    expect_identical(
+      state$native_models$path[state$native_models$selected],
+      result_path
+    )
   })
 })
 

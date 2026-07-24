@@ -238,6 +238,18 @@ The native model selector may be a local model path, `auto`, or a supported
 `hf://OWNER/REPO/FILE` is also accepted and normalized; a filename is
 required. This is not universal Hugging Face compatibility: the selected
 engine must implement the architecture and the exact model packaging.
+In the app, the Native STT panel inventories the CrispASR cache, lets you use
+or remove a downloaded model, and can download an exact `hf://` selection
+in a cancellable background process with byte progress. Before downloading,
+genflow verifies that the named file is actually published by that repository;
+it never invents a quantized filename or silently substitutes another
+quantization. The transfer uses the repository's immutable revision and
+verifies the Hugging Face LFS SHA-256 before installing the file.
+
+For `service = "local-native"`, an omitted model or `model = "auto"` uses the
+model selected in the saved local configuration. Select `auto` in that
+configuration to delegate to CrispASR's registry, together with a model
+architecture and optional preferred quantization.
 
 For example, the IBM llama.cpp
 [Granite Speech GGUF repository](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-GGUF/tree/main)
@@ -246,11 +258,13 @@ uses a model GGUF plus a separate `mmproj` file. CrispASR instead needs its
 Models downloaded by CrispASR normally live under `~/.cache/crispasr`, or the
 directory selected by `CRISPASR_CACHE_DIR`/`CRISPASR_MODELS_DIR`;
 `gen_local_diagnostics()` reports when the configured filename is already
-cached and ignores a conflicting CrispASR `.src` origin sidecar. This native
+cached and refuses to reuse an entry whose CrispASR `.src` sidecar identifies
+a different artifact. This native
 cache is independent of the Python `hf_cache_dir`/`HF_HOME` setting. An
-`hf://` reference follows the repository's mutable `main` revision; for an
-auditable model artifact, download a reviewed revision yourself and configure
-its local file path.
+`hf://` reference is resolved against the repository's current metadata, then
+the transfer is pinned to that exact commit and checked against its LFS
+SHA-256. For a permanently user-pinned revision, download the reviewed
+artifact yourself and configure its local file path.
 
 CrispASR is currently experimental/beta despite its broader model coverage.
 The pre-release `moss-cpp` service name is retained only as a compatibility
