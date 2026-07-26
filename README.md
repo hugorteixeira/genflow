@@ -201,6 +201,25 @@ line, or `diarize = FALSE` to save and return only the plain transcript. When
 `save_txt = TRUE`, a same-name `.json` sidecar returned as
 `saved_metadata_file` preserves the complete structured result.
 
+For Granite Speech 4.1 Plus models, `diarize = TRUE` also activates the
+model's native speaker-attributed ASR mode through CrispASR. Genflow recognizes
+the standard Plus filename or recorded Hugging Face source; an explicitly
+selected `native_backend = "granite-4.1-plus"` provides the same signal for a
+renamed or registry-resolved model. Granite base models and unrelated CrispASR
+backends do not receive this model-specific switch.
+
+```r
+granite_meeting <- gen_stt(
+  "meeting.wav",
+  service = "local-native",
+  model = "granite-speech-4.1-2b-plus-f16.gguf",
+  diarize = TRUE,
+  timestamps = FALSE
+)
+
+granite_meeting$diarized_transcript
+```
+
 ```r
 meeting <- gen_stt(
   "meeting.wav",

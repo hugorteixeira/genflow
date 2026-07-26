@@ -73,9 +73,11 @@ auto-detection is used when supported.}
 \item{convert}{Logical; if TRUE, attempt ffmpeg conversion for unsupported
 audio formats.}
 
-\item{diarize}{Logical; when \code{TRUE}, expose and save speaker-attributed text
-if the selected model/provider returns speaker metadata. This does not add
-diarization capability to a model that lacks it.}
+\item{diarize}{Logical; when \code{TRUE}, request speaker attribution from native
+adapters that expose an opt-in mode (currently CrispASR Granite Speech 4.1
+Plus), then expose and save speaker-attributed text when the selected
+model/provider returns speaker metadata. This does not add diarization
+capability to a model that lacks it.}
 
 \item{timestamps}{Logical; when \code{TRUE}, include the time range of every
 diarized segment. Defaults to \code{FALSE}, which merges consecutive segments

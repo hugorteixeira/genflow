@@ -31,9 +31,11 @@
 #' @param save_txt Logical; save transcript to disk if TRUE.
 #' @param convert Logical; if TRUE, attempt ffmpeg conversion for unsupported
 #'   audio formats.
-#' @param diarize Logical; when `TRUE`, expose and save speaker-attributed text
-#'   if the selected model/provider returns speaker metadata. This does not add
-#'   diarization capability to a model that lacks it.
+#' @param diarize Logical; when `TRUE`, request speaker attribution from native
+#'   adapters that expose an opt-in mode (currently CrispASR Granite Speech 4.1
+#'   Plus), then expose and save speaker-attributed text when the selected
+#'   model/provider returns speaker metadata. This does not add diarization
+#'   capability to a model that lacks it.
 #' @param timestamps Logical; when `TRUE`, include the time range of every
 #'   diarized segment. Defaults to `FALSE`, which merges consecutive segments
 #'   from the same speaker into readable turns while retaining labels such as
@@ -288,6 +290,7 @@ gen_stt.default <- function(
         native_quant = native_quant,
         native_device = native_device,
         convert = convert,
+        diarize = diarize,
         max_new_tokens = max_new_tokens,
         legacy_service = legacy_moss_service
       ),
@@ -1457,6 +1460,44 @@ gen_stt.genflow_agent <- function(audio, ...) {
   ""
 }
 
+#' Detect CrispASR models with prompt-activated native speaker attribution
+#'
+#' Granite Speech 4.1 Plus uses CrispASR's `--diarize` switch to select its
+#' speaker-attributed ASR prompt. Other CrispASR families may interpret that
+#' switch as generic audio post-processing, so genflow must not enable it just
+#' because the public `diarize` output preference defaults to `TRUE`.
+#'
+#' @keywords internal
+#' @noRd
+.stt_crispasr_has_native_speaker_attribution <- function(model,
+                                                          source = NULL,
+                                                          backend = NULL) {
+  backend <- tolower(trimws(as.character(backend %||% "")[1]))
+  if (!is.na(backend) && identical(backend, "granite-4.1-plus")) {
+    return(TRUE)
+  }
+
+  value <- trimws(as.character(model %||% "")[1])
+  if (is.na(value)) value <- ""
+  artifact_hint <- if (.stt_is_crispasr_hf_reference(value)) {
+    value
+  } else {
+    basename(value)
+  }
+  source_hint <- trimws(as.character(source %||% "")[1])
+  if (is.na(source_hint)) source_hint <- ""
+  hints <- tolower(paste(c(artifact_hint, source_hint), collapse = " "))
+
+  grepl(
+    paste0(
+      "granite(?:[-_.]?speech)?[-_.]?4[.]1",
+      "(?:[-_.]?2b)?[-_.]?plus"
+    ),
+    hints,
+    perl = TRUE
+  )
+}
+
 #' @keywords internal
 #' @noRd
 .stt_validate_native_quant <- function(value) {
@@ -1828,6 +1869,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                               native_quant = NULL,
                               native_device = NULL,
                               convert = TRUE,
+                              diarize = TRUE,
                               max_new_tokens = NULL,
                               legacy_service = FALSE,
                               runner = .stt_run_process) {
@@ -1983,6 +2025,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       native_backend = backend,
       native_quant = effective_quant,
       native_device = device,
+      diarize = diarize,
       max_new_tokens = max_new_tokens,
       runner = runner
     ),
@@ -2036,6 +2079,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                                  native_backend = NULL,
                                  native_quant = NULL,
                                  native_device = "auto",
+                                 diarize = FALSE,
                                  max_new_tokens = NULL,
                                  runner = .stt_run_process) {
   if (!file.exists(audio_path) || dir.exists(audio_path)) {
@@ -2046,6 +2090,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   requested_backend <- .stt_validate_native_backend(native_backend)
   quant <- .stt_validate_native_quant(native_quant)
   device <- .stt_validate_native_device(native_device)
+  diarize <- .stt_validate_logical_scalar(diarize, "diarize")
   max_new_tokens <- .stt_validate_max_new_tokens(max_new_tokens)
 
   model_value <- trimws(as.character(model %||% "")[1])
@@ -2135,6 +2180,12 @@ gen_stt.genflow_agent <- function(audio, ...) {
     )
   }
   if (nzchar(inferred_backend)) backend <- inferred_backend
+  native_speaker_attribution <- isTRUE(diarize) &&
+    .stt_crispasr_has_native_speaker_attribution(
+      model_value,
+      source = source_hint,
+      backend = backend
+    )
 
   if (identical(device, "hip")) {
     stop(
@@ -2171,6 +2222,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     model_args,
     if (nzchar(backend)) c("--backend", backend),
     if (identical(backend, "moss-diarize")) c("--chunk-seconds", "0"),
+    if (isTRUE(native_speaker_attribution)) "--diarize",
     "-f", audio_path,
     "-of", output_base,
     "-ojf",
@@ -2294,6 +2346,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
   )
   if (identical(backend, "moss-diarize")) {
     metadata$external_chunk_seconds <- 0L
+  }
+  if (isTRUE(native_speaker_attribution)) {
+    metadata$native_speaker_attribution <- TRUE
   }
   if (length(ignored_arguments)) {
     metadata$ignored_arguments <- ignored_arguments
@@ -2808,6 +2863,43 @@ gen_stt.genflow_agent <- function(audio, ...) {
   Filter(Negate(is.null), lapply(value, .stt_native_normalize_segment))
 }
 
+#' Rebase zero-based native speaker ids to the public one-based Sxx contract
+#'
+#' Some native adapters emit `(speaker 0)`, `(speaker 1)`, while others start
+#' at one. Rebase only when the complete segment set contains `S00`; one-based
+#' providers therefore keep their existing labels unchanged.
+#'
+#' @keywords internal
+#' @noRd
+.stt_native_rebase_zero_based_speakers <- function(segments) {
+  if (!is.list(segments) || !length(segments)) return(segments)
+  labels <- vapply(
+    segments,
+    function(segment) {
+      if (!is.list(segment)) return("")
+      .stt_native_scalar_text(segment$speaker)
+    },
+    character(1)
+  )
+  ids <- vapply(
+    labels,
+    function(label) {
+      if (!grepl("^S[0-9]+$", label, perl = TRUE)) return(NA_integer_)
+      suppressWarnings(as.integer(sub("^S", "", label)))
+    },
+    integer(1)
+  )
+  if (!any(ids == 0L, na.rm = TRUE)) return(segments)
+
+  for (index in which(!is.na(ids))) {
+    if (is.null(segments[[index]]$speaker_raw)) {
+      segments[[index]]$speaker_raw <- labels[[index]]
+    }
+    segments[[index]]$speaker <- sprintf("S%02d", ids[[index]] + 1L)
+  }
+  segments
+}
+
 #' @keywords internal
 #' @noRd
 .stt_native_segments <- function(payload) {
@@ -2828,7 +2920,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
   )
   for (candidate in candidates) {
     segments <- .stt_native_as_segments(candidate)
-    if (length(segments)) return(segments)
+    if (length(segments)) {
+      return(.stt_native_rebase_zero_based_speakers(segments))
+    }
   }
   list()
 }

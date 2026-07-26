@@ -186,6 +186,13 @@ An explicit local path and an explicit `hf://...:FILE` reference are also
 accepted. `model = "auto"` is a CrispASR registry selector and requires an
 unambiguous `native_backend`; it is not replaced by a hidden app selection.
 
+`gen_stt(diarize = TRUE)` activates CrispASR's native speaker-attributed ASR
+mode for Granite Speech 4.1 Plus models. Genflow detects the standard Plus
+artifact name or its recorded Hugging Face source; use
+`native_backend = "granite-4.1-plus"` when a Plus artifact has been renamed or
+is selected through the registry. Other model families do not receive this
+model-specific `--diarize` switch automatically.
+
 ### AMD and Vulkan
 
 For an AMD GPU, use a CrispASR build compiled with Vulkan and select

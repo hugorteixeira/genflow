@@ -43,6 +43,14 @@ stt_plain_segment_fixture <- function() {
   )
 }
 
+stt_zero_based_diarized_segments_fixture <- function() {
+  segments <- stt_diarized_segments_fixture()
+  segments[[1]]$speaker <- "(speaker 0) "
+  segments[[2]]$speaker <- "(speaker 1) "
+  segments[[3]]$speaker <- "(speaker 0) "
+  segments
+}
+
 stt_diarization_audio_fixture <- function() {
   path <- tempfile("genflow-diarization-", fileext = ".wav")
   writeBin(as.raw(c(82, 73, 70, 70, rep(0, 40))), path)
@@ -84,6 +92,21 @@ test_that("CrispASR speaker labels normalize to stable Sxx labels", {
   )
 })
 
+test_that("zero-based native speaker sets rebase to public one-based labels", {
+  normalized <- genflow:::.stt_normalize_native_payload(list(
+    transcription = stt_zero_based_diarized_segments_fixture()
+  ))
+
+  expect_identical(
+    vapply(normalized$metadata$segments, `[[`, character(1), "speaker"),
+    c("S01", "S02", "S01")
+  )
+  expect_identical(
+    vapply(normalized$metadata$segments, `[[`, character(1), "speaker_raw"),
+    c("(speaker 0)", "(speaker 1)", "(speaker 0)")
+  )
+})
+
 test_that("MOSS backend inference uses artifacts and recorded sources, not folders", {
   expect_identical(
     genflow:::.stt_crispasr_backend_from_model(
@@ -101,6 +124,31 @@ test_that("MOSS backend inference uses artifacts and recorded sources, not folde
     ),
     "moss-diarize"
   )
+})
+
+test_that("Granite Plus native speaker attribution is identified narrowly", {
+  expect_true(genflow:::.stt_crispasr_has_native_speaker_attribution(
+    "granite-speech-4.1-2b-plus-f16.gguf"
+  ))
+  expect_true(genflow:::.stt_crispasr_has_native_speaker_attribution(
+    "auto",
+    backend = "granite-4.1-plus"
+  ))
+  expect_true(genflow:::.stt_crispasr_has_native_speaker_attribution(
+    "renamed-model.gguf",
+    source = paste0(
+      "https://huggingface.co/cstr/",
+      "granite-speech-4.1-2b-plus-GGUF/resolve/main/renamed-model.gguf"
+    )
+  ))
+  expect_false(genflow:::.stt_crispasr_has_native_speaker_attribution(
+    "granite-speech-4.1-2b-f16.gguf",
+    backend = "granite-4.1"
+  ))
+  expect_false(genflow:::.stt_crispasr_has_native_speaker_attribution(
+    "whisper-large-v3.gguf",
+    backend = "whisper"
+  ))
 })
 
 test_that("diarized transcripts render one timed speaker turn per line", {
@@ -282,6 +330,97 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   )
   expect_identical(conflicted$metadata$backend, "moss-diarize")
   expect_identical(conflicted$metadata$requested_backend, "granite-4.1")
+})
+
+test_that("CrispASR activates Granite Plus speaker attribution on request", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile(
+    "granite-speech-4.1-2b-plus-f16-",
+    fileext = ".gguf"
+  )
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+
+  run_probe <- function(diarize) {
+    seen <- NULL
+    result <- genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      model = model,
+      language = "en",
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_backend = "granite-4.1",
+      native_device = "cpu",
+      diarize = diarize,
+      runner = function(command, args, timeout_secs, environment) {
+        seen <<- args
+        output_base <- args[[match("-of", args) + 1L]]
+        jsonlite::write_json(
+          list(
+            crispasr = list(
+              backend = "granite",
+              model = basename(model)
+            ),
+            transcription = stt_zero_based_diarized_segments_fixture()
+          ),
+          paste0(output_base, ".json"),
+          auto_unbox = TRUE
+        )
+        list(status = 0L, output = character())
+      }
+    )
+    list(args = seen, result = result)
+  }
+
+  enabled <- run_probe(TRUE)
+  disabled <- run_probe(FALSE)
+
+  expect_true("--diarize" %in% enabled$args)
+  expect_false("--diarize" %in% disabled$args)
+  expect_true(enabled$result$metadata$native_speaker_attribution)
+  expect_null(disabled$result$metadata$native_speaker_attribution)
+  expect_identical(
+    vapply(
+      enabled$result$metadata$segments,
+      `[[`,
+      character(1),
+      "speaker"
+    ),
+    c("S01", "S02", "S01")
+  )
+})
+
+test_that("gen_stt forwards its diarize control to the native adapter", {
+  audio <- stt_diarization_audio_fixture()
+  on.exit(unlink(audio), add = TRUE)
+  seen <- logical()
+
+  testthat::local_mocked_bindings(
+    .stt_local_native = function(diarize, ...) {
+      seen <<- c(seen, diarize)
+      list(text = "Plain transcript.", metadata = list())
+    },
+    .package = "genflow"
+  )
+
+  capture.output(result <- gen_stt(
+    audio,
+    service = "local-native",
+    model = "granite-speech-4.1-2b-plus-f16.gguf",
+    save_txt = FALSE,
+    diarize = FALSE
+  ))
+  capture.output(gen_stt(
+    audio,
+    service = "local-native",
+    model = "granite-speech-4.1-2b-plus-f16.gguf",
+    save_txt = FALSE,
+    diarize = TRUE
+  ))
+
+  expect_identical(seen, c(FALSE, TRUE))
+  expect_identical(result$response_value, "Plain transcript.")
 })
 
 test_that("gen_stt saves readable diarization and a structured JSON sidecar", {
