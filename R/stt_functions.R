@@ -3,7 +3,9 @@
 #' High-level speech-to-text (STT) wrapper that dispatches to provider-specific
 #' implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging
 #' Face, registered native engines, and local OpenAI-compatible servers).
-#' Returns the transcribed text and optionally saves a `.txt` file.
+#' Returns the transcribed text and optionally saves a `.txt` file. When the
+#' provider returns speaker-attributed segments, the text file preserves the
+#' timed speaker turns and a JSON sidecar preserves the structured metadata.
 #'
 #' @param audio Character path or URL to an audio file (e.g., .mp3, .ogg, .wav).
 #' @param service Provider identifier (e.g., "openai", "groq", "assemblyai",
@@ -64,11 +66,13 @@
 #'   OpenAI-compatible server, typically `"json"` or `"verbose_json"`.
 #' @param ... Reserved for future provider-specific arguments.
 #'
-#' @return Invisibly returns a plain list with `response_value` (transcribed
-#'   text), `status_api`, `status_msg`, `service`, `model`, `duration`,
-#'   `saved_file`, and metadata such as `audio`. As with the other generators,
-#'   the call writes a concise status summary to the console while the returned
-#'   object keeps the regular list representation.
+#' @return Invisibly returns a plain list with `response_value` (plain
+#'   transcribed text), `status_api`, `status_msg`, `service`, `model`,
+#'   `duration`, `saved_file`, and metadata such as `audio`. Diarized results
+#'   additionally include `diarized_transcript`, with timed speaker turns, and
+#'   `saved_metadata_file` when saving is enabled. As with the other
+#'   generators, the call writes a concise status summary to the console while
+#'   the returned object keeps the regular list representation.
 #'
 #' @examples
 #' # Minimal example (requires a provider API key)
@@ -242,7 +246,9 @@ gen_stt.default <- function(
   normalized <- .stt_normalize_result(raw_transcription)
   transcribed_text <- normalized$text
   provider_metadata <- normalized$metadata
-  effective_model <- provider_metadata$model %||% model %||%
+  # Match the other generators: the public `model` field reflects what the
+  # caller selected. Runtime-resolved paths remain available in metadata.
+  effective_model <- model %||% provider_metadata$model %||%
     .stt_default_model(service)
   if (length(effective_model) == 0L || is.null(effective_model) ||
       is.na(effective_model[[1]]) || !nzchar(as.character(effective_model[[1]]))) {
@@ -260,21 +266,65 @@ gen_stt.default <- function(
     final_msg <- if (!is.null(error_message)) error_message else "Empty transcription."
   }
 
+  segments <- provider_metadata$segments %||% list()
+  diarization <- .stt_diarization_summary(segments)
+  diarized_transcript <- if (isTRUE(diarization$has_diarization)) {
+    .stt_render_diarized_transcript(
+      segments,
+      fallback_text = transcribed_text %||% ""
+    )
+  } else {
+    NULL
+  }
+  duration_response <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+
   saved_file <- NA_character_
+  saved_metadata_file <- NA_character_
   if (isTRUE(save_txt) && final_status == "SUCCESS") {
     if (is.null(directory) || is.na(directory)) {
       directory <- .genflow_default_dir("transcripts")
     }
     if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
     dt <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    model_tag <- .sanitize_filename(effective_model)
+    model_tag <- .sanitize_filename(basename(effective_model))
     filename <- sprintf("%s_%s_%s_%s.txt", label_sanitized, service, model_tag, dt)
     saved_file <- file.path(directory, filename)
-    try(writeLines(transcribed_text, saved_file, useBytes = TRUE), silent = TRUE)
-    if (!file.exists(saved_file)) saved_file <- NA_character_
-  }
+    transcript_to_save <- diarized_transcript %||% transcribed_text
+    write_result <- try(
+      .stt_atomic_write_lines(transcript_to_save, saved_file),
+      silent = TRUE
+    )
+    if (inherits(write_result, "try-error") || !file.exists(saved_file)) {
+      saved_file <- NA_character_
+    }
 
-  duration_response <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    if (isTRUE(diarization$has_diarization) && !is.na(saved_file)) {
+      saved_metadata_file <- sub("\\.txt$", ".json", saved_file)
+      sidecar <- list(
+        schema_version = 1L,
+        service = service,
+        model = effective_model,
+        audio = prep$path,
+        duration = duration_response,
+        response_value = transcribed_text,
+        diarized_transcript = diarized_transcript,
+        metadata = provider_metadata
+      )
+      sidecar_result <- try(
+        .stt_atomic_write_json(sidecar, saved_metadata_file),
+        silent = TRUE
+      )
+      if (inherits(sidecar_result, "try-error") ||
+          !file.exists(saved_metadata_file)) {
+        warning(
+          "The diarized transcript was saved, but its structured JSON ",
+          "metadata sidecar could not be written.",
+          call. = FALSE
+        )
+        saved_metadata_file <- NA_character_
+      }
+    }
+  }
 
   result <- list(
     response_value = transcribed_text,
@@ -290,6 +340,18 @@ gen_stt.default <- function(
     content_type = "text",
     metadata = provider_metadata
   )
+  if (isTRUE(diarization$has_diarization)) {
+    result <- append(
+      result,
+      list(diarized_transcript = diarized_transcript),
+      after = 1L
+    )
+    result <- append(
+      result,
+      list(saved_metadata_file = saved_metadata_file),
+      after = match("saved_file", names(result))
+    )
+  }
 
   .stt_report_result(result)
   return(invisible(result))
@@ -359,6 +421,28 @@ gen_stt.genflow_agent <- function(audio, ...) {
   saved_file <- scalar_text(result$saved_file, "")
   if (nzchar(saved_file)) {
     cat("   -> File: ", basename(saved_file), "\n", sep = "")
+  }
+  diarization <- .stt_diarization_summary(
+    result$metadata$segments %||% list()
+  )
+  if (isTRUE(diarization$has_diarization)) {
+    cat(sprintf(
+      "   -> Diarization: %d speaker%s (%s) | %d segment%s\n",
+      diarization$speaker_count,
+      if (identical(diarization$speaker_count, 1L)) "" else "s",
+      paste(diarization$speakers, collapse = ", "),
+      diarization$segment_count,
+      if (identical(diarization$segment_count, 1L)) "" else "s"
+    ))
+    saved_metadata_file <- scalar_text(result$saved_metadata_file, "")
+    if (nzchar(saved_metadata_file)) {
+      cat(
+        "   -> Metadata: ",
+        basename(saved_metadata_file),
+        "\n",
+        sep = ""
+      )
+    }
   }
   cat("   -> Response: ", response, "...\n", sep = "")
   invisible(result)
@@ -454,6 +538,252 @@ gen_stt.genflow_agent <- function(audio, ...) {
   }
 
   list(text = NULL, metadata = list())
+}
+
+#' Normalize a provider speaker label without losing unknown labels
+#'
+#' @keywords internal
+#' @noRd
+.stt_normalize_speaker_label <- function(value) {
+  if (is.null(value) || length(value) == 0L || is.na(value[[1]])) return("")
+  label <- trimws(as.character(value[[1]]))
+  if (!nzchar(label)) return("")
+
+  match <- regmatches(
+    label,
+    regexec(
+      "^\\(?\\s*(?:speaker|spk|s)?\\s*[-_: #]*0*([0-9]+)\\s*\\)?\\s*:?[[:space:]]*$",
+      label,
+      ignore.case = TRUE,
+      perl = TRUE
+    )
+  )[[1]]
+  if (length(match) == 2L) {
+    speaker_id <- suppressWarnings(as.integer(match[[2]]))
+    if (!is.na(speaker_id) && speaker_id >= 0L) {
+      return(sprintf("S%02d", speaker_id))
+    }
+  }
+  label
+}
+
+#' @keywords internal
+#' @noRd
+.stt_format_timestamp_seconds <- function(value) {
+  seconds <- tryCatch(
+    suppressWarnings(as.numeric(value %||% NA_real_)[1]),
+    error = function(e) NA_real_
+  )
+  if (!is.finite(seconds) || seconds < 0) return("")
+  total_ms <- as.numeric(round(seconds * 1000))
+  hours <- floor(total_ms / 3600000)
+  total_ms <- total_ms - (hours * 3600000)
+  minutes <- floor(total_ms / 60000)
+  total_ms <- total_ms - (minutes * 60000)
+  whole_seconds <- floor(total_ms / 1000)
+  milliseconds <- round(total_ms - (whole_seconds * 1000))
+  sprintf(
+    "%02d:%02d:%02d.%03d",
+    as.integer(hours),
+    as.integer(minutes),
+    as.integer(whole_seconds),
+    as.integer(milliseconds)
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.stt_normalize_timestamp <- function(value) {
+  if (is.null(value) || length(value) == 0L || is.na(value[[1]])) return("")
+  value <- trimws(as.character(value[[1]]))
+  if (!nzchar(value)) return("")
+
+  matched <- regmatches(
+    value,
+    regexec(
+      "^([0-9]+):([0-9]{1,2}):([0-9]{1,2})(?:[,.]([0-9]+))?$",
+      value,
+      perl = TRUE
+    )
+  )[[1]]
+  if (length(matched) == 5L) {
+    fraction <- matched[[5]]
+    fraction_seconds <- if (nzchar(fraction)) {
+      suppressWarnings(as.numeric(paste0("0.", fraction)))
+    } else {
+      0
+    }
+    seconds <- suppressWarnings(
+      (as.numeric(matched[[2]]) * 3600) +
+        (as.numeric(matched[[3]]) * 60) +
+        as.numeric(matched[[4]]) +
+        fraction_seconds
+    )
+    return(.stt_format_timestamp_seconds(seconds))
+  }
+  .stt_format_timestamp_seconds(value)
+}
+
+#' @keywords internal
+#' @noRd
+.stt_segment_time_bounds <- function(segment) {
+  if (!is.list(segment)) return(c(from = "", to = ""))
+
+  timestamps <- if (is.list(segment$timestamps)) {
+    segment$timestamps
+  } else {
+    list()
+  }
+  from <- .stt_normalize_timestamp(timestamps$from)
+  to <- .stt_normalize_timestamp(timestamps$to)
+  if (nzchar(from) && nzchar(to)) return(c(from = from, to = to))
+
+  start <- .stt_native_numeric_scalar(
+    segment$start %||% segment$start_time
+  )
+  end <- .stt_native_numeric_scalar(segment$end %||% segment$end_time)
+  if (!.stt_native_valid_interval(start, end)) {
+    offsets <- if (is.list(segment$offsets)) segment$offsets else list()
+    offset_start <- .stt_native_numeric_scalar(offsets$from)
+    offset_end <- .stt_native_numeric_scalar(offsets$to)
+    if (.stt_native_valid_interval(offset_start, offset_end)) {
+      start <- offset_start / 1000
+      end <- offset_end / 1000
+    }
+  }
+  if (!.stt_native_valid_interval(start, end)) {
+    return(c(from = "", to = ""))
+  }
+  c(
+    from = .stt_format_timestamp_seconds(start),
+    to = .stt_format_timestamp_seconds(end)
+  )
+}
+
+#' Summarize the speaker attribution in normalized STT segments
+#'
+#' @keywords internal
+#' @noRd
+.stt_diarization_summary <- function(segments) {
+  if (!is.list(segments) || inherits(segments, "data.frame")) {
+    segments <- list()
+  }
+  speakers <- if (length(segments)) {
+    vapply(
+      segments,
+      function(segment) {
+        if (!is.list(segment)) return("")
+        .stt_normalize_speaker_label(
+          segment$speaker %||% segment$speaker_id %||%
+            segment$speaker_label
+        )
+      },
+      character(1)
+    )
+  } else {
+    character()
+  }
+  speakers <- unique(speakers[nzchar(speakers)])
+  list(
+    has_diarization = length(speakers) > 0L,
+    speaker_count = as.integer(length(speakers)),
+    segment_count = as.integer(length(segments)),
+    speakers = speakers
+  )
+}
+
+#' Render diarized STT segments without changing the plain response contract
+#'
+#' @keywords internal
+#' @noRd
+.stt_render_diarized_transcript <- function(segments, fallback_text = "") {
+  summary <- .stt_diarization_summary(segments)
+  fallback_text <- as.character(fallback_text %||% "")[1]
+  if (!isTRUE(summary$has_diarization)) return(fallback_text)
+
+  lines <- vapply(
+    segments,
+    function(segment) {
+      if (!is.list(segment)) return("")
+      text <- .stt_native_scalar_text(
+        segment$text %||% segment$transcript %||% segment$transcription
+      )
+      if (!nzchar(text)) return("")
+      speaker <- .stt_normalize_speaker_label(
+        segment$speaker %||% segment$speaker_id %||%
+          segment$speaker_label
+      )
+      bounds <- .stt_segment_time_bounds(segment)
+      time_prefix <- if (all(nzchar(bounds))) {
+        paste0("[", bounds[["from"]], " --> ", bounds[["to"]], "] ")
+      } else {
+        ""
+      }
+      speaker_prefix <- if (nzchar(speaker)) {
+        paste0("[", speaker, "] ")
+      } else {
+        ""
+      }
+      paste0(time_prefix, speaker_prefix, text)
+    },
+    character(1)
+  )
+  lines <- lines[nzchar(lines)]
+  if (length(lines)) paste(lines, collapse = "\n") else fallback_text
+}
+
+#' @keywords internal
+#' @noRd
+.stt_atomic_replace <- function(temp_path, target_path) {
+  replaced <- isTRUE(file.rename(temp_path, target_path))
+  if (!replaced) {
+    replaced <- isTRUE(file.copy(temp_path, target_path, overwrite = TRUE))
+    if (replaced) unlink(temp_path)
+  }
+  if (!replaced || !file.exists(target_path)) {
+    stop("Could not save STT output: ", target_path, call. = FALSE)
+  }
+  invisible(target_path)
+}
+
+#' @keywords internal
+#' @noRd
+.stt_atomic_write_lines <- function(text, path) {
+  path <- as.character(path %||% "")[1]
+  if (is.na(path) || !nzchar(path)) {
+    stop("A valid STT output path is required.", call. = FALSE)
+  }
+  temp_path <- tempfile(
+    pattern = paste0(".", basename(path), "-"),
+    tmpdir = dirname(path)
+  )
+  on.exit(unlink(temp_path), add = TRUE)
+  writeLines(enc2utf8(as.character(text)), temp_path, useBytes = TRUE)
+  .stt_atomic_replace(temp_path, path)
+}
+
+#' @keywords internal
+#' @noRd
+.stt_atomic_write_json <- function(value, path) {
+  path <- as.character(path %||% "")[1]
+  if (is.na(path) || !nzchar(path)) {
+    stop("A valid STT metadata path is required.", call. = FALSE)
+  }
+  temp_path <- tempfile(
+    pattern = paste0(".", basename(path), "-"),
+    tmpdir = dirname(path)
+  )
+  on.exit(unlink(temp_path), add = TRUE)
+  jsonlite::write_json(
+    value,
+    temp_path,
+    auto_unbox = TRUE,
+    pretty = TRUE,
+    null = "null",
+    na = "null",
+    digits = NA
+  )
+  .stt_atomic_replace(temp_path, path)
 }
 
 #' @keywords internal
@@ -935,6 +1265,36 @@ gen_stt.genflow_agent <- function(audio, ...) {
     )
   }
   backend
+}
+
+#' Infer architecture controls that are required before CrispASR runs
+#'
+#' CrispASR can inspect a GGUF file to select most backends. MOSS Diarize is
+#' special because its speaker identities must span the complete input, so
+#' genflow needs to disable the CLI's generic external chunking before the
+#' result JSON exists.
+#'
+#' @keywords internal
+#' @noRd
+.stt_crispasr_backend_from_model <- function(model, source = NULL) {
+  value <- trimws(as.character(model %||% "")[1])
+  if (is.na(value) || !nzchar(value)) return("")
+  artifact_hint <- if (.stt_is_crispasr_hf_reference(value)) {
+    value
+  } else {
+    basename(value)
+  }
+  source_hint <- trimws(as.character(source %||% "")[1])
+  if (is.na(source_hint)) source_hint <- ""
+  hints <- tolower(paste(c(artifact_hint, source_hint), collapse = " "))
+  if (grepl(
+    "moss[-_.]?transcribe[-_.]?diarize|moss[-_.]?diarize",
+    hints,
+    perl = TRUE
+  )) {
+    return("moss-diarize")
+  }
+  ""
 }
 
 #' @keywords internal
@@ -1484,11 +1844,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
     canonical_service = "local-native",
     transport = "process",
     engine = engine,
-    backend = if (nzchar(backend)) {
-      backend
-    } else {
-      result$metadata$backend %||% ""
-    },
+    backend = result$metadata$runtime_backend %||%
+      result$metadata$backend %||% backend,
     executable = executable_path,
     native_device = device,
     model = result$metadata$model %||% model_value
@@ -1526,7 +1883,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   }
   audio_path <- normalizePath(audio_path, winslash = "/", mustWork = TRUE)
   timeout_secs <- .stt_validate_positive_number(timeout_secs, "timeout_secs")
-  backend <- .stt_validate_native_backend(native_backend)
+  requested_backend <- .stt_validate_native_backend(native_backend)
   quant <- .stt_validate_native_quant(native_quant)
   device <- .stt_validate_native_device(native_device)
   max_new_tokens <- .stt_validate_max_new_tokens(max_new_tokens)
@@ -1539,6 +1896,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
       call. = FALSE
     )
   }
+  inferred_backend <- ""
+  backend <- requested_backend
 
   model_kind <- "file"
   model_args <- character()
@@ -1592,6 +1951,30 @@ gen_stt.genflow_agent <- function(audio, ...) {
     model_value <- normalizePath(model_path, winslash = "/", mustWork = TRUE)
     model_args <- c("-m", model_value)
   }
+  source_hint <- if (identical(model_kind, "file")) {
+    .genflow_crispasr_read_source(model_value)
+  } else if (identical(model_kind, "hf")) {
+    model_value
+  } else {
+    ""
+  }
+  inferred_backend <- .stt_crispasr_backend_from_model(
+    model_value,
+    source = source_hint
+  )
+  if (nzchar(inferred_backend) &&
+      nzchar(requested_backend) &&
+      !identical(inferred_backend, requested_backend)) {
+    warning(
+      "CrispASR model metadata identifies backend \"",
+      inferred_backend,
+      "\", which conflicts with requested backend \"",
+      requested_backend,
+      "\". Using the model backend.",
+      call. = FALSE
+    )
+  }
+  if (nzchar(inferred_backend)) backend <- inferred_backend
 
   if (identical(device, "hip")) {
     stop(
@@ -1627,6 +2010,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   args <- c(
     model_args,
     if (nzchar(backend)) c("--backend", backend),
+    if (identical(backend, "moss-diarize")) c("--chunk-seconds", "0"),
     "-f", audio_path,
     "-of", output_base,
     "-ojf",
@@ -1725,7 +2109,16 @@ gen_stt.genflow_agent <- function(audio, ...) {
     c(list(
       engine = "crispasr",
       backend = crisp_metadata$backend %||% backend,
-      requested_backend = if (nzchar(backend)) backend else NULL,
+      requested_backend = if (nzchar(requested_backend)) {
+        requested_backend
+      } else {
+        NULL
+      },
+      inferred_backend = if (nzchar(inferred_backend)) {
+        inferred_backend
+      } else {
+        NULL
+      },
       runtime_backend = crisp_metadata$backend %||% NULL,
       executable = executable,
       native_device = device,
@@ -1739,6 +2132,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
       resolved_model = crisp_metadata$model %||% NULL
     ), runtime_device)
   )
+  if (identical(backend, "moss-diarize")) {
+    metadata$external_chunk_seconds <- 0L
+  }
   if (length(ignored_arguments)) {
     metadata$ignored_arguments <- ignored_arguments
   }
@@ -2101,7 +2497,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   has_text <- any(c("text", "transcript", "transcription") %in% names(value))
   has_boundary <- any(c(
     "start", "end", "start_time", "end_time", "speaker", "speaker_id",
-    "offsets", "timestamps"
+    "speaker_label", "offsets", "timestamps"
   ) %in% names(value))
   has_text && has_boundary
 }
@@ -2211,8 +2607,23 @@ gen_stt.genflow_agent <- function(audio, ...) {
     if (is.finite(offset_start)) offset_start / 1000 else NULL
   value$end <- value$end %||% value$end_time %||%
     if (is.finite(offset_end)) offset_end / 1000 else NULL
-  value$speaker <- value$speaker %||% value$speaker_id %||%
+  speaker_raw <- value$speaker %||% value$speaker_id %||%
     value$speaker_label
+  speaker <- .stt_normalize_speaker_label(speaker_raw)
+  if (nzchar(speaker)) {
+    raw_label <- if (is.null(speaker_raw) || !length(speaker_raw) ||
+        is.na(speaker_raw[[1]])) {
+      ""
+    } else {
+      trimws(as.character(speaker_raw[[1]]))
+    }
+    if (nzchar(raw_label) && !identical(raw_label, speaker)) {
+      value$speaker_raw <- value$speaker_raw %||% raw_label
+    }
+    value$speaker <- speaker
+  } else {
+    value$speaker <- NULL
+  }
   if (!is.null(value$tokens)) {
     tokens <- .stt_native_normalize_tokens(value$tokens)
     if (is.list(tokens) && !length(tokens)) {

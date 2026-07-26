@@ -117,17 +117,21 @@ both are empty.}
 OpenAI-compatible server, typically \code{"json"} or \code{"verbose_json"}.}
 }
 \value{
-Invisibly returns a plain list with \code{response_value} (transcribed
-text), \code{status_api}, \code{status_msg}, \code{service}, \code{model}, \code{duration},
-\code{saved_file}, and metadata such as \code{audio}. As with the other generators,
-the call writes a concise status summary to the console while the returned
-object keeps the regular list representation.
+Invisibly returns a plain list with \code{response_value} (plain
+transcribed text), \code{status_api}, \code{status_msg}, \code{service}, \code{model},
+\code{duration}, \code{saved_file}, and metadata such as \code{audio}. Diarized results
+additionally include \code{diarized_transcript}, with timed speaker turns, and
+\code{saved_metadata_file} when saving is enabled. As with the other
+generators, the call writes a concise status summary to the console while
+the returned object keeps the regular list representation.
 }
 \description{
 High-level speech-to-text (STT) wrapper that dispatches to provider-specific
 implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging
 Face, registered native engines, and local OpenAI-compatible servers).
-Returns the transcribed text and optionally saves a \code{.txt} file.
+Returns the transcribed text and optionally saves a \code{.txt} file. When the
+provider returns speaker-attributed segments, the text file preserves the
+timed speaker turns and a JSON sidecar preserves the structured metadata.
 }
 \details{
 For a \code{genflow_agent}, supply \code{audio_override} through \code{...} to

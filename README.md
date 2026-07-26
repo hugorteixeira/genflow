@@ -193,6 +193,32 @@ Printing `native_transcript` therefore uses R's normal list representation;
 the transcript and complete structured provider/runtime data remain available
 through `response_value` and `metadata`.
 
+Speaker-aware models keep that same contract: `response_value` remains the
+plain transcript, while `diarized_transcript` contains one timestamped speaker
+turn per line. When `save_txt = TRUE`, the `.txt` file uses that readable
+speaker format and a same-name `.json` sidecar, returned as
+`saved_metadata_file`, preserves the complete structured result.
+
+```r
+meeting <- gen_stt(
+  "meeting.wav",
+  service = "local-native",
+  model = "moss-transcribe-diarize-0.9b-q8_0.gguf"
+)
+
+meeting$response_value
+meeting$diarized_transcript
+meeting$saved_file
+meeting$saved_metadata_file
+```
+
+For MOSS Diarize, genflow runs the CrispASR input as one continuous stream
+instead of using its generic 30-second external chunks. This preserves speaker
+identity across the recording; the model still emits its own timestamped
+turns. CrispASR speaker labels are normalized to stable `S01`, `S02`, and so
+on, while its original label remains in each segment's `speaker_raw` field when
+it differs.
+
 The native model selector may be a local model path, `auto`, or a supported
 `hf://OWNER/REPO:FILE` reference. The copy-and-paste forms
 `hf://OWNER/REPO/FILE` and
