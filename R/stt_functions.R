@@ -4,8 +4,9 @@
 #' implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging
 #' Face, registered native engines, and local OpenAI-compatible servers).
 #' Returns the transcribed text and optionally saves a `.txt` file. When the
-#' provider returns speaker-attributed segments, the text file preserves the
-#' timed speaker turns and a JSON sidecar preserves the structured metadata.
+#' provider returns speaker-attributed segments and `diarize = TRUE`, the text
+#' file preserves readable speaker turns and a JSON sidecar preserves the
+#' structured metadata.
 #'
 #' @param audio Character path or URL to an audio file (e.g., .mp3, .ogg, .wav).
 #' @param service Provider identifier (e.g., "openai", "groq", "assemblyai",
@@ -30,7 +31,18 @@
 #' @param save_txt Logical; save transcript to disk if TRUE.
 #' @param convert Logical; if TRUE, attempt ffmpeg conversion for unsupported
 #'   audio formats.
-#' @param timeout_api Numeric; request timeout in seconds.
+#' @param diarize Logical; when `TRUE`, expose and save speaker-attributed text
+#'   if the selected model/provider returns speaker metadata. This does not add
+#'   diarization capability to a model that lacks it.
+#' @param timestamps Logical; when `TRUE`, include the time range of every
+#'   diarized segment. Defaults to `FALSE`, which merges consecutive segments
+#'   from the same speaker into readable turns while retaining labels such as
+#'   `[S01]` and `[S02]`.
+#' @param timeout_api Numeric; base request timeout in seconds.
+#' @param timeout_per_audio_minute Non-negative numeric; additional timeout
+#'   seconds for every minute (or partial minute) of the input file. The
+#'   default `60` adds one processing minute per minute of audio. Set to `0`
+#'   for a fixed `timeout_api`.
 #' @param poll_interval Numeric; polling interval (seconds) for async providers.
 #' @param max_poll_seconds Numeric; max polling time for async providers.
 #' @param executable Optional executable for `service = "local-native"`.
@@ -68,9 +80,10 @@
 #'
 #' @return Invisibly returns a plain list with `response_value` (plain
 #'   transcribed text), `status_api`, `status_msg`, `service`, `model`,
-#'   `duration`, `saved_file`, and metadata such as `audio`. Diarized results
-#'   additionally include `diarized_transcript`, with timed speaker turns, and
-#'   `saved_metadata_file` when saving is enabled. As with the other
+#'   `duration`, `saved_file`, and metadata such as `audio`. When
+#'   `diarize = TRUE`, diarized results additionally include
+#'   `diarized_transcript` and `saved_metadata_file` when saving is enabled.
+#'   Timestamps are optional and disabled by default. As with the other
 #'   generators, the call writes a concise status summary to the console while
 #'   the returned object keeps the regular list representation.
 #'
@@ -82,6 +95,32 @@
 #' @export
 gen_stt <- function(audio, ...) {
   UseMethod("gen_stt")
+}
+
+#' Inspect STT provider input capabilities
+#'
+#' Returns stable transport constraints that orchestration clients may need
+#' before calling [gen_stt()]. Provider-specific limits remain owned by
+#' genflow instead of being duplicated in downstream packages.
+#'
+#' @param service STT provider identifier accepted by [gen_stt()].
+#'
+#' @return A named list with the normalized `service` and
+#'   `max_local_file_bytes`. The latter is `Inf` when genflow does not impose a
+#'   smaller local-file transport limit. It describes genflow's adapter, not
+#'   every possible upstream model or account limit.
+#'
+#' @examples
+#' gen_stt_capabilities("replicate")$max_local_file_bytes
+#' gen_stt_capabilities("openai")$max_local_file_bytes
+#'
+#' @export
+gen_stt_capabilities <- function(service) {
+  service <- .stt_normalize_service(service)
+  list(
+    service = service,
+    max_local_file_bytes = .stt_max_local_file_bytes(service)
+  )
 }
 
 #' @rdname gen_stt
@@ -97,7 +136,10 @@ gen_stt.default <- function(
   label = NULL,
   save_txt = TRUE,
   convert = TRUE,
+  diarize = TRUE,
+  timestamps = FALSE,
   timeout_api = 240,
+  timeout_per_audio_minute = 60,
   poll_interval = 5,
   max_poll_seconds = 600,
   executable = NULL,
@@ -114,7 +156,13 @@ gen_stt.default <- function(
   start_time <- Sys.time()
   save_txt <- .stt_validate_logical_scalar(save_txt, "save_txt")
   convert <- .stt_validate_logical_scalar(convert, "convert")
+  diarize <- .stt_validate_logical_scalar(diarize, "diarize")
+  timestamps <- .stt_validate_logical_scalar(timestamps, "timestamps")
   timeout_api <- .stt_validate_positive_number(timeout_api, "timeout_api")
+  timeout_per_audio_minute <- .stt_validate_nonnegative_number(
+    timeout_per_audio_minute,
+    "timeout_per_audio_minute"
+  )
   poll_interval <- .stt_validate_positive_number(
     poll_interval,
     "poll_interval"
@@ -182,6 +230,13 @@ gen_stt.default <- function(
     }
     prep <- downloaded
   }
+
+  input_duration_seconds <- .stt_audio_duration_seconds(prep$path)
+  timeout_api <- .stt_effective_timeout_seconds(
+    base_seconds = timeout_api,
+    per_audio_minute = timeout_per_audio_minute,
+    duration_seconds = input_duration_seconds
+  )
 
   label_base <- label
   if (is.null(label_base) || length(label_base) == 0) {
@@ -268,10 +323,12 @@ gen_stt.default <- function(
 
   segments <- provider_metadata$segments %||% list()
   diarization <- .stt_diarization_summary(segments)
-  diarized_transcript <- if (isTRUE(diarization$has_diarization)) {
+  diarized_transcript <- if (isTRUE(diarize) &&
+      isTRUE(diarization$has_diarization)) {
     .stt_render_diarized_transcript(
       segments,
-      fallback_text = transcribed_text %||% ""
+      fallback_text = transcribed_text %||% "",
+      include_timestamps = timestamps
     )
   } else {
     NULL
@@ -298,7 +355,7 @@ gen_stt.default <- function(
       saved_file <- NA_character_
     }
 
-    if (isTRUE(diarization$has_diarization) && !is.na(saved_file)) {
+    if (!is.null(diarized_transcript) && !is.na(saved_file)) {
       saved_metadata_file <- sub("\\.txt$", ".json", saved_file)
       sidecar <- list(
         schema_version = 1L,
@@ -340,7 +397,7 @@ gen_stt.default <- function(
     content_type = "text",
     metadata = provider_metadata
   )
-  if (isTRUE(diarization$has_diarization)) {
+  if (!is.null(diarized_transcript)) {
     result <- append(
       result,
       list(diarized_transcript = diarized_transcript),
@@ -471,6 +528,86 @@ gen_stt.genflow_agent <- function(audio, ...) {
     stop("`", arg, "` must be a positive finite number.", call. = FALSE)
   }
   number
+}
+
+#' @keywords internal
+#' @noRd
+.stt_validate_nonnegative_number <- function(value, arg) {
+  compatible_type <- (is.numeric(value) && !is.complex(value)) ||
+    is.character(value)
+  if (!compatible_type || length(value) != 1L || is.na(value)) {
+    stop("`", arg, "` must be a non-negative finite number.", call. = FALSE)
+  }
+  number <- suppressWarnings(as.numeric(value))
+  if (length(number) != 1L || is.na(number) || !is.finite(number) ||
+      number < 0) {
+    stop("`", arg, "` must be a non-negative finite number.", call. = FALSE)
+  }
+  number
+}
+
+#' @keywords internal
+#' @noRd
+.stt_audio_duration_seconds <- function(path) {
+  if (is.null(path) || length(path) == 0L) return(NA_real_)
+  path <- as.character(path)[1]
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) return(NA_real_)
+  ffprobe <- Sys.which("ffprobe")
+  if (!nzchar(ffprobe)) return(NA_real_)
+  output <- tryCatch(
+    suppressWarnings(system2(
+      ffprobe,
+      c(
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path
+      ),
+      stdout = TRUE,
+      stderr = TRUE
+    )),
+    error = function(e) character()
+  )
+  output <- trimws(output)
+  output <- output[nzchar(output)]
+  if (!length(output)) return(NA_real_)
+  duration <- suppressWarnings(as.numeric(output[1]))
+  if (is.na(duration) || !is.finite(duration) || duration < 0) {
+    NA_real_
+  } else {
+    duration
+  }
+}
+
+#' @keywords internal
+#' @noRd
+.stt_effective_timeout_seconds <- function(base_seconds = 240,
+                                           per_audio_minute = 60,
+                                           duration_seconds = NA_real_) {
+  base_seconds <- .stt_validate_positive_number(base_seconds, "base_seconds")
+  per_audio_minute <- .stt_validate_nonnegative_number(
+    per_audio_minute,
+    "per_audio_minute"
+  )
+  duration_seconds <- suppressWarnings(as.numeric(duration_seconds)[1])
+  if (is.na(duration_seconds) || !is.finite(duration_seconds) ||
+      duration_seconds <= 0) {
+    duration_seconds <- 0
+  }
+  ceiling(
+    base_seconds +
+      ceiling(duration_seconds / 60) * per_audio_minute
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.stt_max_local_file_bytes <- function(service) {
+  service <- .stt_normalize_service(service)
+  if (identical(service, "replicate")) {
+    return(as.integer(256 * 1024))
+  }
+  Inf
 }
 
 #' @keywords internal
@@ -696,39 +833,62 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #'
 #' @keywords internal
 #' @noRd
-.stt_render_diarized_transcript <- function(segments, fallback_text = "") {
+.stt_render_diarized_transcript <- function(segments,
+                                             fallback_text = "",
+                                             include_timestamps = TRUE) {
   summary <- .stt_diarization_summary(segments)
   fallback_text <- as.character(fallback_text %||% "")[1]
   if (!isTRUE(summary$has_diarization)) return(fallback_text)
 
-  lines <- vapply(
+  rows <- lapply(
     segments,
     function(segment) {
-      if (!is.list(segment)) return("")
+      if (!is.list(segment)) return(NULL)
       text <- .stt_native_scalar_text(
         segment$text %||% segment$transcript %||% segment$transcription
       )
-      if (!nzchar(text)) return("")
+      if (!nzchar(text)) return(NULL)
       speaker <- .stt_normalize_speaker_label(
         segment$speaker %||% segment$speaker_id %||%
           segment$speaker_label
       )
       bounds <- .stt_segment_time_bounds(segment)
-      time_prefix <- if (all(nzchar(bounds))) {
-        paste0("[", bounds[["from"]], " --> ", bounds[["to"]], "] ")
-      } else {
-        ""
-      }
-      speaker_prefix <- if (nzchar(speaker)) {
-        paste0("[", speaker, "] ")
-      } else {
-        ""
-      }
-      paste0(time_prefix, speaker_prefix, text)
-    },
-    character(1)
+      list(text = text, speaker = speaker, bounds = bounds)
+    }
   )
-  lines <- lines[nzchar(lines)]
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) return(fallback_text)
+
+  if (!isTRUE(include_timestamps)) {
+    merged <- list()
+    for (row in rows) {
+      last <- length(merged)
+      same_speaker <- last > 0L &&
+        nzchar(row$speaker) &&
+        identical(merged[[last]]$speaker, row$speaker)
+      if (isTRUE(same_speaker)) {
+        merged[[last]]$text <- paste(merged[[last]]$text, row$text)
+      } else {
+        merged[[last + 1L]] <- row
+      }
+    }
+    rows <- merged
+  }
+
+  lines <- vapply(rows, function(row) {
+    time_prefix <- if (isTRUE(include_timestamps) &&
+        all(nzchar(row$bounds))) {
+      paste0("[", row$bounds[["from"]], " --> ", row$bounds[["to"]], "] ")
+    } else {
+      ""
+    }
+    speaker_prefix <- if (nzchar(row$speaker)) {
+      paste0("[", row$speaker, "] ")
+    } else {
+      ""
+    }
+    paste0(time_prefix, speaker_prefix, row$text)
+  }, character(1))
   if (length(lines)) paste(lines, collapse = "\n") else fallback_text
 }
 
@@ -3093,7 +3253,10 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
 #' @keywords internal
 #' @noRd
-.stt_replicate_prepare_input <- function(audio_path, max_data_url_bytes = 256 * 1024) {
+.stt_replicate_prepare_input <- function(
+  audio_path,
+  max_data_url_bytes = .stt_max_local_file_bytes("replicate")
+) {
   if (.stt_is_url(audio_path)) {
     return(audio_path)
   }

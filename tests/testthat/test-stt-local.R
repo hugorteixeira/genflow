@@ -4,6 +4,24 @@ local_stt_audio <- function() {
   path
 }
 
+test_that("STT capabilities own provider-specific local input limits", {
+  replicate <- gen_stt_capabilities("replicate")
+  openai <- gen_stt_capabilities("openai")
+  alias <- gen_stt_capabilities("openai-compatible")
+
+  expect_identical(replicate$service, "replicate")
+  expect_identical(replicate$max_local_file_bytes, 256L * 1024L)
+  expect_identical(openai$service, "openai")
+  expect_identical(openai$max_local_file_bytes, Inf)
+  expect_identical(alias$service, "local-openai")
+  expect_identical(alias$max_local_file_bytes, Inf)
+  expect_error(gen_stt_capabilities(""), "non-empty provider identifier")
+  expect_identical(
+    formals(genflow:::.stt_replicate_prepare_input)$max_data_url_bytes,
+    quote(.stt_max_local_file_bytes("replicate"))
+  )
+})
+
 test_that("native token normalization removes only unusable time sentinels", {
   segment <- genflow:::.stt_native_normalize_segment(list(
     offsets = list(from = 0L, to = 1000L),
@@ -162,7 +180,9 @@ test_that("gen_stt validates public scalar controls before dispatch", {
     save_txt_vector = list(save_txt = c(TRUE, FALSE)),
     save_txt_number = list(save_txt = 1),
     convert = list(convert = NA),
-    convert_vector = list(convert = c(TRUE, FALSE))
+    convert_vector = list(convert = c(TRUE, FALSE)),
+    diarize = list(diarize = NA),
+    timestamps = list(timestamps = 1)
   )
   for (case in logical_cases) {
     expect_error(
@@ -199,6 +219,21 @@ test_that("gen_stt validates public scalar controls before dispatch", {
       "positive finite number"
     )
   }
+  for (case in list(
+    list(timeout_per_audio_minute = -1),
+    list(timeout_per_audio_minute = Inf)
+  )) {
+    expect_error(
+      do.call(
+        gen_stt,
+        c(
+          list(audio = audio, service = "local-openai", save_txt = FALSE),
+          case
+        )
+      ),
+      "non-negative finite number"
+    )
+  }
   expect_identical(dispatches, 0L)
 
   result <- gen_stt(
@@ -213,6 +248,38 @@ test_that("gen_stt validates public scalar controls before dispatch", {
   expect_identical(result$status_api, "SUCCESS")
   expect_identical(result$metadata$timeout_secs, 30)
   expect_identical(dispatches, 1L)
+})
+
+test_that("gen_stt scales timeout for each input file duration", {
+  audio <- local_stt_audio()
+  on.exit(unlink(audio), add = TRUE)
+  timeout_seen <- NA_real_
+  testthat::local_mocked_bindings(
+    .stt_audio_duration_seconds = function(path) 3600,
+    .stt_local_openai = function(timeout_secs, ...) {
+      timeout_seen <<- timeout_secs
+      list(text = "ok", metadata = list())
+    },
+    .package = "genflow"
+  )
+
+  capture.output(result <- gen_stt(
+    audio,
+    service = "local-openai",
+    save_txt = FALSE,
+    timeout_api = 240,
+    timeout_per_audio_minute = 60
+  ))
+  expect_identical(result$status_api, "SUCCESS")
+  expect_identical(timeout_seen, 3840)
+  expect_identical(
+    genflow:::.stt_effective_timeout_seconds(
+      base_seconds = 600,
+      per_audio_minute = 0,
+      duration_seconds = 3600
+    ),
+    600
+  )
 })
 
 test_that("an unsupported STT service is a structured error when model is NULL", {

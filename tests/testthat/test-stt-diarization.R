@@ -120,6 +120,32 @@ test_that("diarized transcripts render one timed speaker turn per line", {
   )
 })
 
+test_that("diarized transcripts merge adjacent speaker segments without timestamps", {
+  segments <- append(
+    stt_diarized_segments_fixture(),
+    list(list(
+      offsets = list(from = 1250L, to = 1750L),
+      speaker = "(Speaker 1) ",
+      text = "Still speaking."
+    )),
+    after = 1L
+  )
+  rendered <- genflow:::.stt_render_diarized_transcript(
+    segments,
+    include_timestamps = FALSE
+  )
+
+  expect_identical(
+    rendered,
+    paste(
+      "[S01] Welcome everyone. Still speaking.",
+      "[S02] Thanks. Let us begin.",
+      "[S01] The first item is ready.",
+      sep = "\n"
+    )
+  )
+})
+
 test_that("non-diarized transcripts retain their plain-text fallback", {
   fallback <- "A transcript without speaker information."
 
@@ -286,7 +312,8 @@ test_that("gen_stt saves readable diarization and a structured JSON sidecar", {
 
   expected_diarized <- genflow:::.stt_render_diarized_transcript(
     normalized$metadata$segments,
-    normalized$text
+    normalized$text,
+    include_timestamps = FALSE
   )
   expect_identical(
     result$response_value,
@@ -327,6 +354,38 @@ test_that("gen_stt saves readable diarization and a structured JSON sidecar", {
     paste0("Metadata: ", basename(result$saved_metadata_file)),
     fixed = TRUE
   )
+})
+
+test_that("diarize FALSE keeps plain output even when speaker metadata exists", {
+  audio <- stt_diarization_audio_fixture()
+  directory <- tempfile("genflow-disabled-diarization-output-")
+  dir.create(directory)
+  on.exit(unlink(c(audio, directory), recursive = TRUE), add = TRUE)
+  normalized <- genflow:::.stt_normalize_native_payload(list(
+    crispasr = list(backend = "moss-diarize"),
+    transcription = stt_diarized_segments_fixture()
+  ))
+
+  testthat::local_mocked_bindings(
+    .stt_local_native = function(...) normalized,
+    .package = "genflow"
+  )
+
+  capture.output(result <- gen_stt(
+    audio,
+    service = "local-native",
+    model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
+    directory = directory,
+    diarize = FALSE
+  ))
+
+  expect_false("diarized_transcript" %in% names(result))
+  expect_false("saved_metadata_file" %in% names(result))
+  expect_identical(
+    paste(readLines(result$saved_file, warn = FALSE), collapse = "\n"),
+    result$response_value
+  )
+  expect_false(file.exists(sub("\\.txt$", ".json", result$saved_file)))
 })
 
 test_that("plain STT persistence keeps the existing one-file contract", {

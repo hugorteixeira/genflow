@@ -18,7 +18,10 @@ gen_stt(audio, ...)
   label = NULL,
   save_txt = TRUE,
   convert = TRUE,
+  diarize = TRUE,
+  timestamps = FALSE,
   timeout_api = 240,
+  timeout_per_audio_minute = 60,
   poll_interval = 5,
   max_poll_seconds = 600,
   executable = NULL,
@@ -70,7 +73,21 @@ auto-detection is used when supported.}
 \item{convert}{Logical; if TRUE, attempt ffmpeg conversion for unsupported
 audio formats.}
 
-\item{timeout_api}{Numeric; request timeout in seconds.}
+\item{diarize}{Logical; when \code{TRUE}, expose and save speaker-attributed text
+if the selected model/provider returns speaker metadata. This does not add
+diarization capability to a model that lacks it.}
+
+\item{timestamps}{Logical; when \code{TRUE}, include the time range of every
+diarized segment. Defaults to \code{FALSE}, which merges consecutive segments
+from the same speaker into readable turns while retaining labels such as
+\verb{[S01]} and \verb{[S02]}.}
+
+\item{timeout_api}{Numeric; base request timeout in seconds.}
+
+\item{timeout_per_audio_minute}{Non-negative numeric; additional timeout
+seconds for every minute (or partial minute) of the input file. The
+default \code{60} adds one processing minute per minute of audio. Set to \code{0}
+for a fixed \code{timeout_api}.}
 
 \item{poll_interval}{Numeric; polling interval (seconds) for async providers.}
 
@@ -119,9 +136,10 @@ OpenAI-compatible server, typically \code{"json"} or \code{"verbose_json"}.}
 \value{
 Invisibly returns a plain list with \code{response_value} (plain
 transcribed text), \code{status_api}, \code{status_msg}, \code{service}, \code{model},
-\code{duration}, \code{saved_file}, and metadata such as \code{audio}. Diarized results
-additionally include \code{diarized_transcript}, with timed speaker turns, and
-\code{saved_metadata_file} when saving is enabled. As with the other
+\code{duration}, \code{saved_file}, and metadata such as \code{audio}. When
+\code{diarize = TRUE}, diarized results additionally include
+\code{diarized_transcript} and \code{saved_metadata_file} when saving is enabled.
+Timestamps are optional and disabled by default. As with the other
 generators, the call writes a concise status summary to the console while
 the returned object keeps the regular list representation.
 }
@@ -130,8 +148,9 @@ High-level speech-to-text (STT) wrapper that dispatches to provider-specific
 implementations (OpenAI, Groq, AssemblyAI, Cloudflare, Voicegain, Hugging
 Face, registered native engines, and local OpenAI-compatible servers).
 Returns the transcribed text and optionally saves a \code{.txt} file. When the
-provider returns speaker-attributed segments, the text file preserves the
-timed speaker turns and a JSON sidecar preserves the structured metadata.
+provider returns speaker-attributed segments and \code{diarize = TRUE}, the text
+file preserves readable speaker turns and a JSON sidecar preserves the
+structured metadata.
 }
 \details{
 For a \code{genflow_agent}, supply \code{audio_override} through \code{...} to

@@ -194,16 +194,20 @@ the transcript and complete structured provider/runtime data remain available
 through `response_value` and `metadata`.
 
 Speaker-aware models keep that same contract: `response_value` remains the
-plain transcript, while `diarized_transcript` contains one timestamped speaker
-turn per line. When `save_txt = TRUE`, the `.txt` file uses that readable
-speaker format and a same-name `.json` sidecar, returned as
-`saved_metadata_file`, preserves the complete structured result.
+plain transcript, while `diarized_transcript` contains readable speaker turns.
+By default, consecutive segments from the same speaker are merged and time
+ranges are omitted. Set `timestamps = TRUE` to retain one timed segment per
+line, or `diarize = FALSE` to save and return only the plain transcript. When
+`save_txt = TRUE`, a same-name `.json` sidecar returned as
+`saved_metadata_file` preserves the complete structured result.
 
 ```r
 meeting <- gen_stt(
   "meeting.wav",
   service = "local-native",
-  model = "moss-transcribe-diarize-0.9b-q8_0.gguf"
+  model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
+  diarize = TRUE,
+  timestamps = FALSE
 )
 
 meeting$response_value
@@ -218,6 +222,16 @@ identity across the recording; the model still emits its own timestamped
 turns. CrispASR speaker labels are normalized to stable `S01`, `S02`, and so
 on, while its original label remains in each segment's `speaker_raw` field when
 it differs.
+
+STT timeouts are calculated per input file. The default budget is the
+`timeout_api` base plus one additional minute for every minute (or partial
+minute) of audio. Set `timeout_per_audio_minute = 0` for a fixed timeout, or
+increase it for models that run slower than real time.
+
+Orchestration clients can inspect genflow-owned local input constraints with
+`gen_stt_capabilities(service)`. For example, the Replicate adapter currently
+uses a 256 KB data-URL transport limit, while `Inf` means that genflow does not
+impose a smaller adapter-level local-file limit.
 
 The native model selector may be a local model path, `auto`, or a supported
 `hf://OWNER/REPO:FILE` reference. The copy-and-paste forms
