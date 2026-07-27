@@ -140,8 +140,13 @@ Native STT accepts either compact references or normal Hugging Face file links:
 ```text
 hf://OWNER/REPOSITORY:MODEL.gguf
 hf://OWNER/REPOSITORY/MODEL.gguf
+hf download hf://OWNER/REPOSITORY/MODEL.gguf
 https://huggingface.co/OWNER/REPOSITORY/blob/main/MODEL.gguf
 ```
+
+For command-style input, clicking either **Verify** or **Download** removes the
+leading `hf download` text from the field and uses the remaining `hf://`
+reference.
 
 **Verify** checks the repository, exact filename, immutable revision, file size,
 and LFS SHA-256 metadata without downloading. **Download** repeats validation,
@@ -191,7 +196,10 @@ mode for Granite Speech 4.1 Plus models. Genflow detects the standard Plus
 artifact name or its recorded Hugging Face source; use
 `native_backend = "granite-4.1-plus"` when a Plus artifact has been renamed or
 is selected through the registry. Other model families do not receive this
-model-specific `--diarize` switch automatically.
+model-specific `--diarize` switch automatically. In this mode genflow also
+disables CrispASR's generic 30-second chunking so speaker numbering spans the
+complete input passed to `gen_stt()`; orchestration clients should split long
+recordings into model-supported windows before calling it.
 
 ### AMD and Vulkan
 

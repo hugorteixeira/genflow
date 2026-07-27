@@ -59,7 +59,11 @@ test_that("app exposes the local inference configuration surface", {
   expect_false(grepl("local_stt_native_quant", html, fixed = TRUE))
   expect_match(html, "local_stt_new_model_reference", fixed = TRUE)
   expect_match(html, "local_stt_model_verify", fixed = TRUE)
-  expect_match(html, "hf://owner/repository:model.gguf", fixed = TRUE)
+  expect_match(
+    html,
+    "hf download hf://owner/repository/model.gguf",
+    fixed = TRUE
+  )
   expect_match(html, "/blob/main/model.gguf", fixed = TRUE)
   expect_match(html, "local_stt_native_device", fixed = TRUE)
   expect_match(html, "local_stt_models_table", fixed = TRUE)
@@ -152,6 +156,27 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
   expect_identical(
     genflow:::.local_native_hf_selector(
       "https://huggingface.co/owner/repo/blob/main/model-q8_0.gguf"
+    ),
+    "hf://owner/repo:model-q8_0.gguf"
+  )
+  command <- paste(
+    "hf download",
+    "hf://handy-computer/whisper-large-v3-gguf/whisper-large-v3-Q8_0.gguf"
+  )
+  expect_identical(
+    genflow:::.local_native_hf_reference_input(command),
+    "hf://handy-computer/whisper-large-v3-gguf/whisper-large-v3-Q8_0.gguf"
+  )
+  expect_identical(
+    genflow:::.local_native_hf_selector(command),
+    paste0(
+      "hf://handy-computer/whisper-large-v3-gguf:",
+      "whisper-large-v3-Q8_0.gguf"
+    )
+  )
+  expect_identical(
+    genflow:::.local_native_hf_selector(
+      "hf download 'hf://owner/repo/model-q8_0.gguf'"
     ),
     "hf://owner/repo:model-q8_0.gguf"
   )

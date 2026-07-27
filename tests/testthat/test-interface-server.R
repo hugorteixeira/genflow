@@ -554,9 +554,9 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
 
     session$setInputs(
       local_stt_native_engine = "crispasr",
-      local_stt_new_model_reference = paste0(
-        "https://huggingface.co/owner/repo/blob/main/",
-        "granite-q8_0.gguf"
+      local_stt_new_model_reference = paste(
+        "hf download",
+        "hf://owner/repo/granite-q8_0.gguf"
       ),
       local_stt_model_verify = 1L
     )
@@ -582,7 +582,7 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
 
     session$setInputs(
       local_stt_new_model_reference =
-        "hf://owner/repo:granite-q8_0.gguf"
+        "hf download hf://owner/repo/granite-q8_0.gguf"
     )
     session$flushReact()
     state <- reactiveValuesToList(local_state)

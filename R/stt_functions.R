@@ -2186,6 +2186,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
       source = source_hint,
       backend = backend
     )
+  continuous_model_window <- identical(backend, "moss-diarize") ||
+    isTRUE(native_speaker_attribution)
 
   if (identical(device, "hip")) {
     stop(
@@ -2221,7 +2223,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   args <- c(
     model_args,
     if (nzchar(backend)) c("--backend", backend),
-    if (identical(backend, "moss-diarize")) c("--chunk-seconds", "0"),
+    if (isTRUE(continuous_model_window)) c("--chunk-seconds", "0"),
     if (isTRUE(native_speaker_attribution)) "--diarize",
     "-f", audio_path,
     "-of", output_base,
@@ -2344,7 +2346,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       resolved_model = crisp_metadata$model %||% NULL
     ), runtime_device)
   )
-  if (identical(backend, "moss-diarize")) {
+  if (isTRUE(continuous_model_window)) {
     metadata$external_chunk_seconds <- 0L
   }
   if (isTRUE(native_speaker_attribution)) {

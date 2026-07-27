@@ -206,7 +206,10 @@ model's native speaker-attributed ASR mode through CrispASR. Genflow recognizes
 the standard Plus filename or recorded Hugging Face source; an explicitly
 selected `native_backend = "granite-4.1-plus"` provides the same signal for a
 renamed or registry-resolved model. Granite base models and unrelated CrispASR
-backends do not receive this model-specific switch.
+backends do not receive this model-specific switch. The selected input is kept
+as one continuous CrispASR model window so speaker numbering is not reset by
+the CLI's generic 30-second chunking; callers remain responsible for supplying
+an input duration supported by the model.
 
 ```r
 granite_meeting <- gen_stt(
@@ -256,9 +259,12 @@ The native model selector may be a local model path, `auto`, or a supported
 `hf://OWNER/REPO:FILE` reference. The copy-and-paste forms
 `hf://OWNER/REPO/FILE` and
 `https://huggingface.co/OWNER/REPO/blob/main/FILE` are also accepted and
-normalized; a filename is required. This is not universal Hugging Face
-compatibility: the selected engine must implement the architecture and the
-exact model packaging.
+normalized; a filename is required. In **Local > Native STT**, the field also
+accepts a copied `hf download hf://OWNER/REPO/FILE` command. Clicking either
+**Verify** or **Download** removes the `hf download` prefix from the field and
+uses the remaining reference. This is not universal Hugging Face compatibility:
+the selected engine must implement the architecture and the exact model
+packaging.
 
 In **Local > Native STT**, paste either reference style into the model search
 field. **Verify** confirms the exact remote file without downloading it;

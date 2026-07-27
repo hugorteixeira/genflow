@@ -376,10 +376,16 @@ test_that("CrispASR activates Granite Plus speaker attribution on request", {
   enabled <- run_probe(TRUE)
   disabled <- run_probe(FALSE)
 
+  enabled_chunk_position <- match("--chunk-seconds", enabled$args)
   expect_true("--diarize" %in% enabled$args)
+  expect_false(is.na(enabled_chunk_position))
+  expect_identical(enabled$args[[enabled_chunk_position + 1L]], "0")
   expect_false("--diarize" %in% disabled$args)
+  expect_false("--chunk-seconds" %in% disabled$args)
   expect_true(enabled$result$metadata$native_speaker_attribution)
+  expect_identical(enabled$result$metadata$external_chunk_seconds, 0L)
   expect_null(disabled$result$metadata$native_speaker_attribution)
+  expect_null(disabled$result$metadata$external_chunk_seconds)
   expect_identical(
     vapply(
       enabled$result$metadata$segments,

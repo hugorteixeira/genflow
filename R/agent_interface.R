@@ -1279,7 +1279,7 @@
                     "Hugging Face model link",
                     value = "",
                     placeholder = paste0(
-                      "hf://owner/repository:model.gguf or ",
+                      "hf download hf://owner/repository/model.gguf or ",
                       "https://huggingface.co/.../blob/main/model.gguf"
                     )
                   ),
@@ -1300,10 +1300,12 @@
                 ),
                 tags$p(
                   class = "gf-local-new-model-note",
-                  "Paste an hf:// reference or a model file URL copied from ",
-                  "Hugging Face. Verify checks the exact remote file without ",
-                  "downloading it. Download validates it again, verifies its ",
-                  "checksum, and publishes the downloaded model in Models."
+                  "Paste an hf:// reference, an `hf download hf://...` command, ",
+                  "or a model file URL copied from Hugging Face. Verify and ",
+                  "Download remove the optional command prefix from the field. ",
+                  "Verify checks the exact remote file without downloading it. ",
+                  "Download validates it again, verifies its checksum, and ",
+                  "publishes the downloaded model in Models."
                 ),
                 uiOutput("local_stt_new_model_status_ui"),
                 uiOutput("local_stt_download_progress_ui")
@@ -1923,8 +1925,28 @@
   rows[rows$managed, , drop = FALSE]
 }
 
-.local_native_hf_selector <- function(value) {
+.local_native_hf_reference_input <- function(value) {
   value <- trimws(as.character(value %||% "")[1])
+  if (is.na(value)) return("")
+  value <- sub(
+    "^hf[[:space:]]+download[[:space:]]+",
+    "",
+    value,
+    ignore.case = TRUE
+  )
+  value <- trimws(value)
+  if (nchar(value) >= 2L) {
+    first <- substr(value, 1L, 1L)
+    last <- substr(value, nchar(value), nchar(value))
+    if (first %in% c("\"", "'") && identical(first, last)) {
+      value <- trimws(substr(value, 2L, nchar(value) - 1L))
+    }
+  }
+  value
+}
+
+.local_native_hf_selector <- function(value) {
+  value <- .local_native_hf_reference_input(value)
   if (is.na(value) || !nzchar(value)) {
     stop("Enter a Hugging Face model reference first.", call. = FALSE)
   }
@@ -2146,6 +2168,7 @@ server <- function(input, output, session) {
   )
   native_download_holder <- new.env(parent = emptyenv())
   native_download_holder$job <- NULL
+  native_download_holder$normalized_reference <- ""
 
   local_state <- reactiveValues(
     config = initial_local_config,
@@ -4204,11 +4227,33 @@ server <- function(input, output, session) {
     invisible(TRUE)
   }
 
-  native_new_model_selector <- function() {
-    .local_native_hf_selector(input$local_stt_new_model_reference)
+  native_new_model_selector <- function(normalize_field = FALSE) {
+    raw <- trimws(as.character(
+      input$local_stt_new_model_reference %||% ""
+    )[1])
+    cleaned <- .local_native_hf_reference_input(raw)
+    selector <- .local_native_hf_selector(cleaned)
+    if (isTRUE(normalize_field) && !identical(raw, cleaned)) {
+      native_download_holder$normalized_reference <- cleaned
+      updateTextInput(
+        session,
+        "local_stt_new_model_reference",
+        value = cleaned
+      )
+    }
+    selector
   }
 
   observeEvent(input$local_stt_new_model_reference, {
+    current <- trimws(as.character(
+      input$local_stt_new_model_reference %||% ""
+    )[1])
+    expected <- native_download_holder$normalized_reference %||% ""
+    if (nzchar(expected) && identical(current, expected)) {
+      native_download_holder$normalized_reference <- ""
+      return()
+    }
+    native_download_holder$normalized_reference <- ""
     local_state$native_verified_reference <- ""
     local_state$native_verify_status <- NULL
   }, ignoreInit = TRUE)
@@ -4245,7 +4290,7 @@ server <- function(input, output, session) {
           call. = FALSE
         )
       }
-      selector <- native_new_model_selector()
+      selector <- native_new_model_selector(normalize_field = TRUE)
       artifact <- withProgress(
         message = "Verifying Hugging Face model...",
         value = 0.25,
@@ -4421,7 +4466,7 @@ server <- function(input, output, session) {
     }
 
     selector <- tryCatch(
-      native_new_model_selector(),
+      native_new_model_selector(normalize_field = TRUE),
       error = function(e) e
     )
     if (inherits(selector, "error")) {
