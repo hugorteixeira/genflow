@@ -698,7 +698,7 @@
   .gf-local-model-table table.dataTable { width: 100% !important; max-width: 100%; }
   .gf-local-model-table table.dataTable { table-layout: fixed; }
   .gf-local-model-table table.dataTable th,
-  .gf-local-model-table table.dataTable td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+  .gf-local-model-table table.dataTable td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; font-size: 0.78rem; line-height: 1.25; }
   .gf-local-new-model { margin-top: 10px; padding: 14px; border: 1px solid #c7d2fe; border-radius: 12px; background: #f8faff; }
   .gf-local-new-model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
   .gf-local-new-model-row .shiny-input-container { width: 100%; max-width: none; margin-bottom: 0; }
@@ -1923,6 +1923,47 @@
 .local_native_managed_inventory <- function(inventory = NULL) {
   rows <- .local_native_inventory_normalize(inventory)
   rows[rows$managed, , drop = FALSE]
+}
+
+.local_native_hf_repository <- function(source_url, filename) {
+  source_url <- as.character(source_url %||% character())
+  filename <- as.character(filename %||% character())
+  length_out <- max(length(source_url), length(filename))
+  if (!length_out) return(character())
+
+  source_url <- if (length(source_url)) {
+    rep_len(source_url, length_out)
+  } else {
+    rep("", length_out)
+  }
+  filename <- if (length(filename)) {
+    rep_len(filename, length_out)
+  } else {
+    rep("", length_out)
+  }
+
+  vapply(seq_len(length_out), function(index) {
+    source <- trimws(source_url[[index]])
+    expected_filename <- trimws(filename[[index]])
+    if (
+      is.na(source) || !nzchar(source) ||
+      is.na(expected_filename) || !nzchar(expected_filename)
+    ) {
+      return("\u2014")
+    }
+
+    parsed <- tryCatch(
+      .genflow_crispasr_parse_hf_url(source),
+      error = function(e) NULL
+    )
+    if (
+      is.null(parsed) ||
+      !identical(parsed$filename, expected_filename)
+    ) {
+      return("\u2014")
+    }
+    parsed$repository
+  }, character(1), USE.NAMES = FALSE)
 }
 
 .local_native_hf_reference_input <- function(value) {
@@ -4114,8 +4155,13 @@ server <- function(input, output, session) {
 
     display <- data.frame(
       Model = models$filename,
+      `Hugging Face` = .local_native_hf_repository(
+        models$source_url,
+        models$filename
+      ),
       Quant = ifelse(nzchar(models$quant), toupper(models$quant), "\u2014"),
       Size = models$size,
+      check.names = FALSE,
       stringsAsFactors = FALSE
     )
     datatable(
@@ -4132,9 +4178,10 @@ server <- function(input, output, session) {
         scrollCollapse = TRUE,
         autoWidth = FALSE,
         columnDefs = list(
-          list(width = "60%", targets = 0),
-          list(width = "16%", targets = 1),
-          list(width = "24%", targets = 2)
+          list(width = "42%", targets = 0),
+          list(width = "32%", targets = 1),
+          list(width = "11%", targets = 2),
+          list(width = "15%", targets = 3)
         )
       )
     )

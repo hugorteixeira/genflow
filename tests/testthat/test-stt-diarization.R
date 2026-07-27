@@ -235,6 +235,33 @@ test_that("diarization summaries distinguish segments without speakers", {
   expect_identical(summary$speakers, character())
 })
 
+test_that("MOSS Diarize generation budgets scale with duration", {
+  expect_identical(
+    genflow:::.stt_moss_diarize_generation_budget(60),
+    2048L
+  )
+  expect_identical(
+    genflow:::.stt_moss_diarize_generation_budget(321),
+    4096L
+  )
+  expect_identical(
+    genflow:::.stt_moss_diarize_generation_budget(3600),
+    36864L
+  )
+  expect_identical(
+    genflow:::.stt_moss_diarize_generation_budget(5400),
+    54272L
+  )
+  expect_identical(
+    genflow:::.stt_moss_diarize_generation_budget(7200),
+    65536L
+  )
+  expect_error(
+    genflow:::.stt_moss_diarize_generation_budget(NA_real_),
+    "Install ffprobe"
+  )
+})
+
 test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   audio <- stt_diarization_audio_fixture()
   model <- tempfile(
@@ -247,6 +274,7 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
 
   result <- genflow:::.stt_native_crispasr(
     audio_path = audio,
+    audio_duration_seconds = 321,
     model = model,
     language = NULL,
     prompt = NULL,
@@ -286,6 +314,15 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   expect_identical(result$metadata$inferred_backend, "moss-diarize")
   expect_null(result$metadata$requested_backend)
   expect_identical(result$metadata$external_chunk_seconds, 0L)
+  expect_identical(result$metadata$max_new_tokens, 4096L)
+  expect_identical(
+    result$metadata$max_new_tokens_source,
+    "automatic-duration"
+  )
+  expect_identical(result$metadata$input_duration_seconds, 321)
+  token_position <- match("--max-new-tokens", seen$args)
+  expect_false(is.na(token_position))
+  expect_identical(seen$args[[token_position + 1L]], "4096")
   expect_identical(
     vapply(
       result$metadata$segments,
@@ -303,6 +340,7 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   expect_warning(
     conflicted <- genflow:::.stt_native_crispasr(
       audio_path = audio,
+      audio_duration_seconds = 321,
       model = model,
       language = NULL,
       prompt = NULL,
@@ -330,6 +368,55 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   )
   expect_identical(conflicted$metadata$backend, "moss-diarize")
   expect_identical(conflicted$metadata$requested_backend, "granite-4.1")
+})
+
+test_that("MOSS Diarize preserves explicit limits beyond its supported window", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile(
+    "moss-transcribe-diarize-0.9b-q8_0-",
+    fileext = ".gguf"
+  )
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+  seen <- NULL
+
+  expect_warning(
+    result <- genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      audio_duration_seconds = 7200,
+      model = model,
+      language = NULL,
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_device = "cpu",
+      max_new_tokens = 12345L,
+      runner = function(command, args, timeout_secs, environment) {
+        seen <<- args
+        output_base <- args[[match("-of", args) + 1L]]
+        jsonlite::write_json(
+          list(
+            crispasr = list(
+              backend = "moss-diarize",
+              model = basename(model)
+            ),
+            transcription = stt_diarized_segments_fixture()
+          ),
+          paste0(output_base, ".json"),
+          auto_unbox = TRUE
+        )
+        list(status = 0L, output = character())
+      }
+    ),
+    "up to 90 minutes"
+  )
+
+  token_position <- match("--max-new-tokens", seen)
+  expect_false(is.na(token_position))
+  expect_identical(seen[[token_position + 1L]], "12345")
+  expect_identical(result$metadata$max_new_tokens, 12345L)
+  expect_identical(result$metadata$max_new_tokens_source, "explicit")
+  expect_identical(result$metadata$input_duration_seconds, 7200)
 })
 
 test_that("CrispASR activates Granite Plus speaker attribution on request", {

@@ -434,8 +434,14 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
     size_bytes = c(1024, 2048),
     size = c("1 KB", "2 KB"),
     source_url = c(
-      "https://huggingface.co/owner/repo/q4",
-      "https://huggingface.co/owner/repo/q8"
+      paste0(
+        "https://huggingface.co/owner/repo/resolve/main/",
+        "granite-q4_k.gguf"
+      ),
+      paste0(
+        "https://huggingface.co/owner/repo/resolve/main/",
+        "granite-q8_0.gguf"
+      )
     ),
     managed = c(TRUE, FALSE),
     selected = c(FALSE, FALSE),
@@ -455,7 +461,10 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
             quant = "q8_0",
             size_bytes = 2048,
             size = "2 KB",
-            source_url = "https://huggingface.co/owner/repo/q8",
+            source_url = paste0(
+              "https://huggingface.co/owner/repo/resolve/main/",
+              "granite-q8_0.gguf"
+            ),
             managed = TRUE,
             selected = FALSE,
             stringsAsFactors = FALSE
@@ -520,7 +529,10 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
         result = list(
           path = "/cache/granite-q8_0.gguf",
           filename = "granite-q8_0.gguf",
-          source_url = "https://huggingface.co/owner/repo/q8",
+          source_url = paste0(
+            "https://huggingface.co/owner/repo/resolve/main/",
+            "granite-q8_0.gguf"
+          ),
           cached = FALSE,
           size_bytes = 2048
         )
@@ -549,6 +561,15 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
     expect_identical(managed$filename, "granite-q4_k.gguf")
     expect_false("granite-q8_0.gguf" %in% managed$filename)
     expect_match(output$local_stt_models_table, "<th>Model", fixed = TRUE)
+    expect_match(
+      output$local_stt_models_table,
+      "<th>Hugging Face",
+      fixed = TRUE
+    )
+    expect_identical(
+      .local_native_hf_repository(managed$source_url, managed$filename),
+      "owner/repo"
+    )
     expect_false(grepl("<th>Location", output$local_stt_models_table, fixed = TRUE))
     expect_false(grepl("<th>State", output$local_stt_models_table, fixed = TRUE))
 

@@ -282,6 +282,36 @@ test_that("gen_stt scales timeout for each input file duration", {
   )
 })
 
+test_that("gen_stt probes duration once and forwards it to local native STT", {
+  audio <- local_stt_audio()
+  on.exit(unlink(audio), add = TRUE)
+  duration_probes <- 0L
+  duration_seen <- NA_real_
+
+  testthat::local_mocked_bindings(
+    .stt_audio_duration_seconds = function(path) {
+      duration_probes <<- duration_probes + 1L
+      321
+    },
+    .stt_local_native = function(audio_duration_seconds, ...) {
+      duration_seen <<- audio_duration_seconds
+      list(text = "ok", metadata = list())
+    },
+    .package = "genflow"
+  )
+
+  capture.output(result <- gen_stt(
+    audio,
+    service = "local-native",
+    model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
+    save_txt = FALSE
+  ))
+
+  expect_identical(result$status_api, "SUCCESS")
+  expect_identical(duration_probes, 1L)
+  expect_identical(duration_seen, 321)
+})
+
 test_that("an unsupported STT service is a structured error when model is NULL", {
   audio <- local_stt_audio()
   on.exit(unlink(audio), add = TRUE)
@@ -810,6 +840,7 @@ test_that("CrispASR remote model syntax is explicit and auto-download is bounded
     seen <- NULL
     result <- genflow:::.stt_native_crispasr(
       audio_path = audio,
+      audio_duration_seconds = 1,
       model = reference,
       language = NULL,
       prompt = NULL,

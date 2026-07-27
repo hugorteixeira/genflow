@@ -122,8 +122,11 @@ the corresponding remote artifact exists. Defaults to
 Support is engine-specific; CrispASR does not expose HIP and should use a
 Vulkan-enabled build on AMD hardware.}
 
-\item{max_new_tokens}{Optional generation limit. This is especially useful
-for compatible native engines and local servers.}
+\item{max_new_tokens}{Optional generation limit. For CrispASR MOSS Diarize,
+\code{NULL} derives a duration-aware budget between 2,048 and 65,536 tokens so
+long single-window transcriptions are not silently cut at the runtime's
+1,024-token default. An explicit positive integer always wins. This is an
+output budget; it does not extend the model's documented audio context.}
 
 \item{base_url}{Optional base URL for \code{service = "local-openai"}. Defaults
 to \code{GENFLOW_STT_BASE_URL}, then \verb{http://127.0.0.1:8000}.}

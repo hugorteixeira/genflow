@@ -69,8 +69,11 @@
 #'   `"auto"`, `"cpu"`, `"vulkan"`, `"hip"`, `"cuda"`, or `"metal"`.
 #'   Support is engine-specific; CrispASR does not expose HIP and should use a
 #'   Vulkan-enabled build on AMD hardware.
-#' @param max_new_tokens Optional generation limit. This is especially useful
-#'   for compatible native engines and local servers.
+#' @param max_new_tokens Optional generation limit. For CrispASR MOSS Diarize,
+#'   `NULL` derives a duration-aware budget between 2,048 and 65,536 tokens so
+#'   long single-window transcriptions are not silently cut at the runtime's
+#'   1,024-token default. An explicit positive integer always wins. This is an
+#'   output budget; it does not extend the model's documented audio context.
 #' @param base_url Optional base URL for `service = "local-openai"`. Defaults
 #'   to `GENFLOW_STT_BASE_URL`, then `http://127.0.0.1:8000`.
 #' @param api_key Optional bearer token for `service = "local-openai"`.
@@ -280,6 +283,7 @@ gen_stt.default <- function(
       ),
       "local-native" = .stt_local_native(
         audio_path = prep$path,
+        audio_duration_seconds = input_duration_seconds,
         model = model,
         language = language,
         prompt = prompt,
@@ -1693,6 +1697,34 @@ gen_stt.genflow_agent <- function(audio, ...) {
   as.integer(number)
 }
 
+#' Derive a safe MOSS Diarize generation budget from audio duration
+#'
+#' CrispASR's long-form decoder uses approximately eight output tokens per
+#' second as a generous baseline. MOSS diarization also emits speaker and time
+#' markup, so genflow reserves ten tokens per second and rounds to 1,024-token
+#' blocks. The 2,048 floor matches the upstream basic example; 65,536 is the
+#' documented long-recording ceiling. Explicit caller values bypass this
+#' helper.
+#'
+#' @keywords internal
+#' @noRd
+.stt_moss_diarize_generation_budget <- function(duration_seconds) {
+  duration <- suppressWarnings(as.numeric(duration_seconds)[1])
+  if (length(duration) == 0L || is.na(duration) ||
+      !is.finite(duration) || duration <= 0) {
+    stop(
+      "Genflow could not determine the audio duration required to size ",
+      "MOSS Diarize generation safely. Install ffprobe or pass ",
+      "`max_new_tokens` explicitly.",
+      call. = FALSE
+    )
+  }
+
+  target <- max(2048, ceiling(duration * 10))
+  rounded <- ceiling(target / 1024) * 1024
+  as.integer(min(65536, rounded))
+}
+
 #' @keywords internal
 #' @noRd
 .stt_native_setting <- function(value,
@@ -1859,6 +1891,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @keywords internal
 #' @noRd
 .stt_local_native <- function(audio_path,
+                              audio_duration_seconds = NULL,
                               model,
                               language,
                               prompt,
@@ -2017,6 +2050,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   result <- switch(engine,
     crispasr = .stt_native_crispasr(
       audio_path = audio_path,
+      audio_duration_seconds = audio_duration_seconds,
       model = model_value,
       language = language,
       prompt = prompt,
@@ -2071,6 +2105,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @keywords internal
 #' @noRd
 .stt_native_crispasr <- function(audio_path,
+                                 audio_duration_seconds = NULL,
                                  model,
                                  language,
                                  prompt,
@@ -2180,6 +2215,48 @@ gen_stt.genflow_agent <- function(audio, ...) {
     )
   }
   if (nzchar(inferred_backend)) backend <- inferred_backend
+  generation_limit_source <- if (!is.null(max_new_tokens)) {
+    "explicit"
+  } else {
+    ""
+  }
+  effective_audio_duration <- suppressWarnings(
+    as.numeric(audio_duration_seconds)[1]
+  )
+  if (is.null(audio_duration_seconds)) {
+    effective_audio_duration <- .stt_audio_duration_seconds(audio_path)
+  }
+  if (length(effective_audio_duration) == 0L ||
+      is.na(effective_audio_duration) ||
+      !is.finite(effective_audio_duration) ||
+      effective_audio_duration <= 0) {
+    effective_audio_duration <- NA_real_
+  }
+  if (identical(backend, "moss-diarize")) {
+    if (is.null(max_new_tokens)) {
+      max_new_tokens <- .stt_moss_diarize_generation_budget(
+        effective_audio_duration
+      )
+      generation_limit_source <- "automatic-duration"
+    }
+    if (!is.na(effective_audio_duration) &&
+        effective_audio_duration > 90 * 60) {
+      warning(
+        sprintf(
+          paste0(
+            "MOSS Diarize documents single-window inputs up to 90 minutes. ",
+            "This input is approximately %.1f minutes; genflow will keep the ",
+            "continuous window and attempt it with max_new_tokens = %d, but ",
+            "the runtime may fail or truncate. Split the recording into ",
+            "model-supported windows for reliable processing."
+          ),
+          effective_audio_duration / 60,
+          max_new_tokens
+        ),
+        call. = FALSE
+      )
+    }
+  }
   native_speaker_attribution <- isTRUE(diarize) &&
     .stt_crispasr_has_native_speaker_attribution(
       model_value,
@@ -2348,6 +2425,14 @@ gen_stt.genflow_agent <- function(audio, ...) {
   )
   if (isTRUE(continuous_model_window)) {
     metadata$external_chunk_seconds <- 0L
+  }
+  if (!is.null(max_new_tokens)) {
+    metadata$max_new_tokens <- as.integer(max_new_tokens)
+    metadata$max_new_tokens_source <- generation_limit_source
+  }
+  if (identical(backend, "moss-diarize") &&
+      !is.na(effective_audio_duration)) {
+    metadata$input_duration_seconds <- effective_audio_duration
   }
   if (isTRUE(native_speaker_attribution)) {
     metadata$native_speaker_attribution <- TRUE

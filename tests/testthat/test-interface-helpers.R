@@ -125,6 +125,17 @@ test_that("app exposes the local inference configuration surface", {
     ".gf-diagnostics-table table.dataTable { table-layout: fixed; }",
     fixed = TRUE
   )
+  expect_match(
+    genflow:::.theme_css,
+    paste0(
+      "\\.gf-local-model-table table\\.dataTable th,\\s*",
+      "\\.gf-local-model-table table\\.dataTable td\\s*\\{",
+      "[^}]*font-size:\\s*0\\.78rem;",
+      "[^}]*line-height:\\s*1\\.25;",
+      "[^}]*\\}"
+    ),
+    perl = TRUE
+  )
   expect_match(genflow:::.theme_css, "overflow-wrap: anywhere", fixed = TRUE)
 })
 
@@ -147,6 +158,52 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
   managed <- genflow:::.local_native_managed_inventory(normalized)
   expect_identical(managed$path, "/cache/granite-q4_k.gguf")
   expect_identical(managed$filename, "granite-q4_k.gguf")
+
+  filename <- "model-q8_0.gguf"
+  expect_identical(
+    genflow:::.local_native_hf_repository(
+      paste0(
+        "https://huggingface.co/owner/repository/resolve/main/",
+        filename
+      ),
+      filename
+    ),
+    "owner/repository"
+  )
+  expect_identical(
+    genflow:::.local_native_hf_repository(
+      paste0(
+        "https://huggingface.co/owner/repository/resolve/",
+        strrep("a", 40),
+        "/",
+        filename
+      ),
+      filename
+    ),
+    "owner/repository"
+  )
+  expect_identical(
+    genflow:::.local_native_hf_repository("", filename),
+    "\u2014"
+  )
+  expect_identical(
+    genflow:::.local_native_hf_repository(
+      paste0("https://example.com/owner/repository/", filename),
+      filename
+    ),
+    "\u2014"
+  )
+  expect_identical(
+    genflow:::.local_native_hf_repository(
+      paste0(
+        "https://huggingface.co/owner/repository/resolve/main/",
+        filename
+      ),
+      "different-model-q8_0.gguf"
+    ),
+    "\u2014"
+  )
+
   expect_identical(
     genflow:::.local_native_hf_selector(
       "hf://owner/repo:model-q8_0.gguf"

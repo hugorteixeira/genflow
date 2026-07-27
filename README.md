@@ -243,7 +243,12 @@ instead of using its generic 30-second external chunks. This preserves speaker
 identity across the recording; the model still emits its own timestamped
 turns. CrispASR speaker labels are normalized to stable `S01`, `S02`, and so
 on, while its original label remains in each segment's `speaker_raw` field when
-it differs.
+it differs. When `max_new_tokens = NULL`, genflow sizes the MOSS output budget
+from the audio duration (2,048 to 65,536 tokens) rather than accepting
+CrispASR's truncation-prone 1,024-token default. Pass an explicit value to
+override that policy. This controls generated output, not the model's audio
+context: inputs longer than MOSS's documented 90-minute single-window limit
+produce a warning and are still attempted without hidden chunking.
 
 STT timeouts are calculated per input file. The default budget is the
 `timeout_api` base plus one additional minute for every minute (or partial
@@ -271,7 +276,9 @@ field. **Verify** confirms the exact remote file without downloading it;
 **Download** repeats validation in a cancellable background worker with byte
 progress. The transfer uses the repository's immutable revision and verifies
 the Hugging Face LFS SHA-256 before publishing the file. The downloaded table
-only deletes managed cache entries.
+shows the recorded Hugging Face `OWNER/REPOSITORY` beside each model and only
+deletes managed cache entries. Models copied manually or downloaded before
+source tracking was introduced show `—` instead of an inferred owner.
 
 After download or deletion, genflow synchronizes `local-native.csv`. Model
 selection remains in **Models**, alongside every other provider. Catalog ids

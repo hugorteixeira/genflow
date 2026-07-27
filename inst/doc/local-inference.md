@@ -151,7 +151,10 @@ reference.
 **Verify** checks the repository, exact filename, immutable revision, file size,
 and LFS SHA-256 metadata without downloading. **Download** repeats validation,
 streams into a temporary file, verifies the SHA-256, and atomically publishes
-the model in the managed CrispASR cache.
+the model in the managed CrispASR cache. The downloaded-model table displays
+the validated Hugging Face `OWNER/REPOSITORY` recorded for each artifact.
+Manually copied and legacy artifacts without a valid source record display
+`—`; genflow does not infer provenance from filenames.
 
 The managed cache is:
 
@@ -200,6 +203,15 @@ model-specific `--diarize` switch automatically. In this mode genflow also
 disables CrispASR's generic 30-second chunking so speaker numbering spans the
 complete input passed to `gen_stt()`; orchestration clients should split long
 recordings into model-supported windows before calling it.
+
+For the CrispASR `moss-diarize` backend, `max_new_tokens = NULL` is
+duration-aware: genflow forwards an output budget between 2,048 and 65,536
+tokens instead of leaving CrispASR at its truncation-prone 1,024-token default.
+An explicit `max_new_tokens` value is always preserved. The budget does not
+increase MOSS's audio context and genflow does not split implicitly; recordings
+longer than the documented 90-minute single-window limit are attempted with a
+warning. Callers that need reliable processing beyond that limit should split
+the input into model-supported windows.
 
 ### AMD and Vulkan
 
