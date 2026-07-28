@@ -30,6 +30,7 @@ gen_stt(audio, ...)
   native_engine = NULL,
   native_backend = NULL,
   native_quant = NULL,
+  native_kv_quant = NULL,
   native_device = NULL,
   max_new_tokens = NULL,
   base_url = NULL,
@@ -136,16 +137,25 @@ selects a requested filename; neither genflow nor CrispASR guarantees that
 the corresponding remote artifact exists. Defaults to
 \code{GENFLOW_STT_NATIVE_QUANT}, then the saved \code{stt_native_quant} setting.}
 
+\item{native_kv_quant}{Optional CrispASR KV-cache quantization:
+\code{"f16"}, \code{"q8_0"}, or \code{"q4_0"}. The value is forwarded only to the
+CrispASR child process through \code{CRISPASR_KV_QUANT}. \code{NULL} keeps the F16
+cache for MOSS Diarize because it is the fastest tested option.
+Explicit \code{"q8_0"} reduces VRAM but was substantially slower with this
+backend on Vulkan. Explicit \code{"q4_0"} is supported but not recommended for
+MOSS Diarize because observed output quality degraded.}
+
 \item{native_device}{Native accelerator for \code{service = "local-native"}:
 \code{"auto"}, \code{"cpu"}, \code{"vulkan"}, \code{"hip"}, \code{"cuda"}, or \code{"metal"}.
 Support is engine-specific; CrispASR does not expose HIP and should use a
 Vulkan-enabled build on AMD hardware.}
 
 \item{max_new_tokens}{Optional generation limit. For CrispASR MOSS Diarize,
-\code{NULL} derives a duration-aware budget between 2,048 and 65,536 tokens so
-long single-window transcriptions are not silently cut at the runtime's
-1,024-token default. An explicit positive integer always wins. This is an
-output budget; it does not extend the model's documented audio context.}
+\code{NULL} derives a duration-aware budget at 20 output tokens per audio
+second, rounded to 1,024-token blocks. The automatic budget also reserves
+estimated audio-prompt space inside the model's documented 131,072-token
+total context. An explicit positive integer always wins. This is an output
+budget; it does not extend the model's documented audio context.}
 
 \item{base_url}{Optional base URL for \code{service = "local-openai"}. Defaults
 to \code{GENFLOW_STT_BASE_URL}, then \verb{http://127.0.0.1:8000}.}

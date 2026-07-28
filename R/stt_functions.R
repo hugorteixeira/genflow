@@ -80,15 +80,23 @@
 #'   selects a requested filename; neither genflow nor CrispASR guarantees that
 #'   the corresponding remote artifact exists. Defaults to
 #'   `GENFLOW_STT_NATIVE_QUANT`, then the saved `stt_native_quant` setting.
+#' @param native_kv_quant Optional CrispASR KV-cache quantization:
+#'   `"f16"`, `"q8_0"`, or `"q4_0"`. The value is forwarded only to the
+#'   CrispASR child process through `CRISPASR_KV_QUANT`. `NULL` keeps the F16
+#'   cache for MOSS Diarize because it is the fastest tested option.
+#'   Explicit `"q8_0"` reduces VRAM but was substantially slower with this
+#'   backend on Vulkan. Explicit `"q4_0"` is supported but not recommended for
+#'   MOSS Diarize because observed output quality degraded.
 #' @param native_device Native accelerator for `service = "local-native"`:
 #'   `"auto"`, `"cpu"`, `"vulkan"`, `"hip"`, `"cuda"`, or `"metal"`.
 #'   Support is engine-specific; CrispASR does not expose HIP and should use a
 #'   Vulkan-enabled build on AMD hardware.
 #' @param max_new_tokens Optional generation limit. For CrispASR MOSS Diarize,
-#'   `NULL` derives a duration-aware budget between 2,048 and 65,536 tokens so
-#'   long single-window transcriptions are not silently cut at the runtime's
-#'   1,024-token default. An explicit positive integer always wins. This is an
-#'   output budget; it does not extend the model's documented audio context.
+#'   `NULL` derives a duration-aware budget at 20 output tokens per audio
+#'   second, rounded to 1,024-token blocks. The automatic budget also reserves
+#'   estimated audio-prompt space inside the model's documented 131,072-token
+#'   total context. An explicit positive integer always wins. This is an output
+#'   budget; it does not extend the model's documented audio context.
 #' @param base_url Optional base URL for `service = "local-openai"`. Defaults
 #'   to `GENFLOW_STT_BASE_URL`, then `http://127.0.0.1:8000`.
 #' @param api_key Optional bearer token for `service = "local-openai"`.
@@ -168,6 +176,7 @@ gen_stt.default <- function(
   native_engine = NULL,
   native_backend = NULL,
   native_quant = NULL,
+  native_kv_quant = NULL,
   native_device = NULL,
   max_new_tokens = NULL,
   base_url = NULL,
@@ -331,6 +340,7 @@ gen_stt.default <- function(
         native_engine = native_engine,
         native_backend = native_backend,
         native_quant = native_quant,
+        native_kv_quant = native_kv_quant,
         native_device = native_device,
         convert = convert,
         diarize = diarize,
@@ -1815,18 +1825,33 @@ gen_stt.genflow_agent <- function(audio, ...) {
   as.integer(number)
 }
 
-#' Derive a safe MOSS Diarize generation budget from audio duration
+#' @keywords internal
+#' @noRd
+.stt_validate_native_kv_quant <- function(value) {
+  if (is.null(value)) return(NULL)
+  quant <- tolower(trimws(as.character(value)[1]))
+  if (length(quant) == 0L || is.na(quant) || !nzchar(quant) ||
+      !quant %in% c("f16", "q8_0", "q4_0")) {
+    stop(
+      "`native_kv_quant` must be NULL, \"f16\", \"q8_0\", or \"q4_0\".",
+      call. = FALSE
+    )
+  }
+  quant
+}
+
+#' Plan a MOSS Diarize generation budget inside its total context
 #'
-#' CrispASR's long-form decoder uses approximately eight output tokens per
-#' second as a generous baseline. MOSS diarization also emits speaker and time
-#' markup, so genflow reserves ten tokens per second and rounds to 1,024-token
-#' blocks. The 2,048 floor matches the upstream basic example; 65,536 is the
-#' documented long-recording ceiling. Explicit caller values bypass this
-#' helper.
+#' MOSS Diarize documents a 131,072-token total context. A real 68.5-minute
+#' recording used about 13.26 prompt tokens and 17.61 output tokens per audio
+#' second, including speaker/time markup. Genflow therefore reserves a
+#' conservative 13.5 prompt tokens per second plus 512 fixed tokens and targets
+#' 20 output tokens per second. Output is rounded to 1,024-token blocks without
+#' allowing the estimated prompt and output together to exceed total context.
 #'
 #' @keywords internal
 #' @noRd
-.stt_moss_diarize_generation_budget <- function(duration_seconds) {
+.stt_moss_diarize_generation_plan <- function(duration_seconds) {
   duration <- suppressWarnings(as.numeric(duration_seconds)[1])
   if (length(duration) == 0L || is.na(duration) ||
       !is.finite(duration) || duration <= 0) {
@@ -1838,9 +1863,46 @@ gen_stt.genflow_agent <- function(audio, ...) {
     )
   }
 
-  target <- max(2048, ceiling(duration * 10))
-  rounded <- ceiling(target / 1024) * 1024
-  as.integer(min(65536, rounded))
+  block_tokens <- 1024L
+  context_tokens <- 131072L
+  estimated_prompt_tokens <- as.integer(ceiling(duration * 13.5) + 512)
+  available_tokens <- context_tokens - estimated_prompt_tokens
+  context_output_ceiling <- as.integer(
+    floor(available_tokens / block_tokens) * block_tokens
+  )
+  if (context_output_ceiling < 2048L) {
+    stop(
+      "The estimated MOSS Diarize audio prompt leaves fewer than 2,048 ",
+      "output tokens inside the model's 131,072-token context. Split the ",
+      "recording or pass `max_new_tokens` explicitly if you accept the risk ",
+      "of a runtime context error.",
+      call. = FALSE
+    )
+  }
+
+  target_tokens <- as.integer(
+    ceiling(max(2048, duration * 20) / block_tokens) * block_tokens
+  )
+  effective_tokens <- min(target_tokens, context_output_ceiling)
+  list(
+    max_new_tokens = as.integer(effective_tokens),
+    target_output_tokens = target_tokens,
+    estimated_prompt_tokens = estimated_prompt_tokens,
+    context_output_ceiling = context_output_ceiling,
+    total_context_tokens = context_tokens,
+    context_limited = target_tokens > context_output_ceiling
+  )
+}
+
+#' Derive a safe MOSS Diarize generation budget from audio duration
+#'
+#' This compatibility helper returns the effective output limit from
+#' `.stt_moss_diarize_generation_plan()`. Explicit caller values bypass it.
+#'
+#' @keywords internal
+#' @noRd
+.stt_moss_diarize_generation_budget <- function(duration_seconds) {
+  .stt_moss_diarize_generation_plan(duration_seconds)$max_new_tokens
 }
 
 #' @keywords internal
@@ -2026,6 +2088,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                               native_engine = NULL,
                               native_backend = NULL,
                               native_quant = NULL,
+                              native_kv_quant = NULL,
                               native_device = NULL,
                               convert = TRUE,
                               diarize = TRUE,
@@ -2079,6 +2142,13 @@ gen_stt.genflow_agent <- function(audio, ...) {
     stop(
       "`diarize_speakers = TRUE` requires the CrispASR native engine; ",
       "the selected engine is \"", engine, "\".",
+      call. = FALSE
+    )
+  }
+  kv_quant <- .stt_validate_native_kv_quant(native_kv_quant)
+  if (!is.null(kv_quant) && !identical(engine, "crispasr")) {
+    stop(
+      "`native_kv_quant` is available only with the CrispASR native engine.",
       call. = FALSE
     )
   }
@@ -2156,6 +2226,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       executable = executable_path,
       native_backend = backend,
       native_quant = effective_quant,
+      native_kv_quant = kv_quant,
       native_device = device,
       diarize = diarize,
       diarize_speakers = diarize_speakers,
@@ -2213,6 +2284,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                                  executable,
                                  native_backend = NULL,
                                  native_quant = NULL,
+                                 native_kv_quant = NULL,
                                  native_device = "auto",
                                  diarize = FALSE,
                                  diarize_speakers = FALSE,
@@ -2226,6 +2298,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   timeout_secs <- .stt_validate_positive_number(timeout_secs, "timeout_secs")
   requested_backend <- .stt_validate_native_backend(native_backend)
   quant <- .stt_validate_native_quant(native_quant)
+  requested_kv_quant <- .stt_validate_native_kv_quant(native_kv_quant)
   device <- .stt_validate_native_device(native_device)
   diarize <- .stt_validate_logical_scalar(diarize, "diarize")
   diarize_speakers <- .stt_validate_logical_scalar(
@@ -2336,6 +2409,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
   } else {
     ""
   }
+  moss_generation_plan <- NULL
+  effective_kv_quant <- requested_kv_quant
+  kv_quant_source <- if (!is.null(requested_kv_quant)) "explicit" else ""
   effective_audio_duration <- suppressWarnings(
     as.numeric(audio_duration_seconds)[1]
   )
@@ -2349,11 +2425,45 @@ gen_stt.genflow_agent <- function(audio, ...) {
     effective_audio_duration <- NA_real_
   }
   if (identical(backend, "moss-diarize")) {
-    if (is.null(max_new_tokens)) {
-      max_new_tokens <- .stt_moss_diarize_generation_budget(
+    if (!is.na(effective_audio_duration)) {
+      moss_generation_plan <- .stt_moss_diarize_generation_plan(
         effective_audio_duration
       )
+    }
+    if (is.null(max_new_tokens)) {
+      if (is.null(moss_generation_plan)) {
+        # Keep the established error message when ffprobe could not provide a
+        # duration and no explicit output limit was supplied.
+        max_new_tokens <- .stt_moss_diarize_generation_budget(
+          effective_audio_duration
+        )
+      } else {
+        max_new_tokens <- moss_generation_plan$max_new_tokens
+      }
       generation_limit_source <- "automatic-duration"
+    }
+    if (is.null(effective_kv_quant)) {
+      effective_kv_quant <- "f16"
+      kv_quant_source <- "runtime-default"
+    }
+    if (identical(generation_limit_source, "automatic-duration") &&
+        isTRUE(moss_generation_plan$context_limited)) {
+      warning(
+        sprintf(
+          paste0(
+            "The automatic MOSS Diarize target was limited from %d to %d ",
+            "output tokens after reserving approximately %d prompt tokens ",
+            "inside the model's documented %d-token total context. Dense ",
+            "recordings may still truncate; the recording will remain one ",
+            "speaker-continuous input."
+          ),
+          moss_generation_plan$target_output_tokens,
+          max_new_tokens,
+          moss_generation_plan$estimated_prompt_tokens,
+          moss_generation_plan$total_context_tokens
+        ),
+        call. = FALSE
+      )
     }
     if (!is.na(effective_audio_duration) &&
         effective_audio_duration > 90 * 60) {
@@ -2443,7 +2553,11 @@ gen_stt.genflow_agent <- function(audio, ...) {
     command = executable,
     args = args,
     timeout_secs = timeout_secs,
-    environment = character()
+    environment = if (!is.null(effective_kv_quant)) {
+      c(CRISPASR_KV_QUANT = effective_kv_quant)
+    } else {
+      character()
+    }
   )
   status <- suppressWarnings(as.integer(process$status %||% 0L)[1])
   if (length(status) == 0L || is.na(status)) status <- -1L
@@ -2546,6 +2660,12 @@ gen_stt.genflow_agent <- function(audio, ...) {
       } else {
         NULL
       },
+      native_kv_quant = effective_kv_quant,
+      native_kv_quant_source = if (nzchar(kv_quant_source)) {
+        kv_quant_source
+      } else {
+        NULL
+      },
       resolved_model = crisp_metadata$model %||% NULL
     ), runtime_device)
   )
@@ -2555,6 +2675,19 @@ gen_stt.genflow_agent <- function(audio, ...) {
   if (!is.null(max_new_tokens)) {
     metadata$max_new_tokens <- as.integer(max_new_tokens)
     metadata$max_new_tokens_source <- generation_limit_source
+  }
+  if (!is.null(moss_generation_plan)) {
+    metadata$moss_total_context_tokens <-
+      moss_generation_plan$total_context_tokens
+    metadata$moss_estimated_prompt_tokens <-
+      moss_generation_plan$estimated_prompt_tokens
+    metadata$moss_target_output_tokens <-
+      moss_generation_plan$target_output_tokens
+    metadata$moss_context_output_ceiling <-
+      moss_generation_plan$context_output_ceiling
+    metadata$max_new_tokens_context_limited <-
+      identical(generation_limit_source, "automatic-duration") &&
+      isTRUE(moss_generation_plan$context_limited)
   }
   if (identical(backend, "moss-diarize") &&
       !is.na(effective_audio_duration)) {

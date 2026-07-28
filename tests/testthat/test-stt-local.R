@@ -1339,7 +1339,7 @@ test_that("native STT quant configuration round-trips and validates env override
   )
 })
 
-test_that("gen_stt forwards the public native quant argument", {
+test_that("gen_stt forwards public native model and KV quant arguments", {
   audio <- local_stt_audio()
   on.exit(unlink(audio), add = TRUE)
   seen <- NULL
@@ -1356,11 +1356,21 @@ test_that("gen_stt forwards the public native quant argument", {
     service = "local-native",
     model = "auto",
     native_quant = "q8_0",
+    native_kv_quant = "q4_0",
     save_txt = FALSE
   ))
 
   expect_identical(result$status_api, "SUCCESS")
   expect_identical(seen$native_quant, "q8_0")
+  expect_identical(seen$native_kv_quant, "q4_0")
+  expect_identical(
+    genflow:::.stt_validate_native_kv_quant(" Q8_0 "),
+    "q8_0"
+  )
+  expect_error(
+    genflow:::.stt_validate_native_kv_quant("q5_k_m"),
+    "`native_kv_quant`"
+  )
 })
 
 test_that("an explicit local-native auto model ignores a saved concrete model", {

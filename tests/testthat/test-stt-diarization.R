@@ -242,20 +242,26 @@ test_that("MOSS Diarize generation budgets scale with duration", {
   )
   expect_identical(
     genflow:::.stt_moss_diarize_generation_budget(321),
-    4096L
+    7168L
   )
   expect_identical(
     genflow:::.stt_moss_diarize_generation_budget(3600),
-    36864L
+    72704L
+  )
+  expect_identical(
+    genflow:::.stt_moss_diarize_generation_budget(4109.8),
+    74752L
   )
   expect_identical(
     genflow:::.stt_moss_diarize_generation_budget(5400),
-    54272L
+    57344L
   )
-  expect_identical(
-    genflow:::.stt_moss_diarize_generation_budget(7200),
-    65536L
-  )
+  plan <- genflow:::.stt_moss_diarize_generation_plan(4109.8)
+  expect_identical(plan$total_context_tokens, 131072L)
+  expect_identical(plan$estimated_prompt_tokens, 55995L)
+  expect_identical(plan$target_output_tokens, 82944L)
+  expect_identical(plan$context_output_ceiling, 74752L)
+  expect_true(plan$context_limited)
   expect_error(
     genflow:::.stt_moss_diarize_generation_budget(NA_real_),
     "Install ffprobe"
@@ -314,15 +320,25 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   expect_identical(result$metadata$inferred_backend, "moss-diarize")
   expect_null(result$metadata$requested_backend)
   expect_identical(result$metadata$external_chunk_seconds, 0L)
-  expect_identical(result$metadata$max_new_tokens, 4096L)
+  expect_identical(result$metadata$max_new_tokens, 7168L)
   expect_identical(
     result$metadata$max_new_tokens_source,
     "automatic-duration"
   )
+  expect_identical(result$metadata$native_kv_quant, "f16")
+  expect_identical(
+    result$metadata$native_kv_quant_source,
+    "runtime-default"
+  )
+  expect_identical(
+    seen$environment,
+    c(CRISPASR_KV_QUANT = "f16")
+  )
+  expect_false(result$metadata$max_new_tokens_context_limited)
   expect_identical(result$metadata$input_duration_seconds, 321)
   token_position <- match("--max-new-tokens", seen$args)
   expect_false(is.na(token_position))
-  expect_identical(seen$args[[token_position + 1L]], "4096")
+  expect_identical(seen$args[[token_position + 1L]], "7168")
   expect_identical(
     vapply(
       result$metadata$segments,
@@ -368,6 +384,111 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   )
   expect_identical(conflicted$metadata$backend, "moss-diarize")
   expect_identical(conflicted$metadata$requested_backend, "granite-4.1")
+})
+
+test_that("long MOSS Diarize runs keep F16 and expose context limits", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile(
+    "moss-transcribe-diarize-0.9b-q8_0-",
+    fileext = ".gguf"
+  )
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+  seen <- NULL
+
+  expect_warning(
+    result <- genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      audio_duration_seconds = 4109.8,
+      model = model,
+      language = NULL,
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_device = "vulkan",
+      runner = function(command, args, timeout_secs, environment) {
+        seen <<- list(args = args, environment = environment)
+        output_base <- args[[match("-of", args) + 1L]]
+        jsonlite::write_json(
+          list(
+            crispasr = list(
+              backend = "moss-diarize",
+              model = basename(model)
+            ),
+            transcription = stt_diarized_segments_fixture()
+          ),
+          paste0(output_base, ".json"),
+          auto_unbox = TRUE
+        )
+        list(status = 0L, output = character())
+      }
+    ),
+    "limited from 82944 to 74752"
+  )
+
+  token_position <- match("--max-new-tokens", seen$args)
+  expect_identical(seen$args[[token_position + 1L]], "74752")
+  expect_identical(
+    seen$environment,
+    c(CRISPASR_KV_QUANT = "f16")
+  )
+  expect_identical(result$metadata$native_kv_quant, "f16")
+  expect_identical(
+    result$metadata$native_kv_quant_source,
+    "runtime-default"
+  )
+  expect_true(result$metadata$max_new_tokens_context_limited)
+  expect_identical(result$metadata$moss_total_context_tokens, 131072L)
+  expect_identical(result$metadata$moss_estimated_prompt_tokens, 55995L)
+  expect_identical(result$metadata$moss_target_output_tokens, 82944L)
+  expect_identical(result$metadata$moss_context_output_ceiling, 74752L)
+})
+
+test_that("explicit CrispASR KV quantization wins over long-form policy", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile(
+    "moss-transcribe-diarize-0.9b-q8_0-",
+    fileext = ".gguf"
+  )
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+  seen_environment <- NULL
+
+  result <- genflow:::.stt_native_crispasr(
+    audio_path = audio,
+    audio_duration_seconds = 3600,
+    model = model,
+    language = NULL,
+    prompt = NULL,
+    timeout_secs = 10,
+    executable = file.path(R.home("bin"), "R"),
+    native_kv_quant = "q4_0",
+    native_device = "vulkan",
+    runner = function(command, args, timeout_secs, environment) {
+      seen_environment <<- environment
+      output_base <- args[[match("-of", args) + 1L]]
+      jsonlite::write_json(
+        list(
+          crispasr = list(
+            backend = "moss-diarize",
+            model = basename(model)
+          ),
+          transcription = stt_diarized_segments_fixture()
+        ),
+        paste0(output_base, ".json"),
+        auto_unbox = TRUE
+      )
+      list(status = 0L, output = character())
+    }
+  )
+
+  expect_identical(
+    seen_environment,
+    c(CRISPASR_KV_QUANT = "q4_0")
+  )
+  expect_identical(result$metadata$max_new_tokens, 72704L)
+  expect_identical(result$metadata$native_kv_quant, "q4_0")
+  expect_identical(result$metadata$native_kv_quant_source, "explicit")
 })
 
 test_that("MOSS Diarize preserves explicit limits beyond its supported window", {

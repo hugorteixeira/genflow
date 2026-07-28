@@ -286,11 +286,24 @@ identity across the recording; the model still emits its own timestamped
 turns. CrispASR speaker labels are normalized to stable `S01`, `S02`, and so
 on, while its original label remains in each segment's `speaker_raw` field when
 it differs. When `max_new_tokens = NULL`, genflow sizes the MOSS output budget
-from the audio duration (2,048 to 65,536 tokens) rather than accepting
-CrispASR's truncation-prone 1,024-token default. Pass an explicit value to
-override that policy. This controls generated output, not the model's audio
-context: inputs longer than MOSS's documented 90-minute single-window limit
-produce a warning and are still attempted without hidden chunking.
+from the audio duration at 20 output tokens per second rather than accepting
+CrispASR's truncation-prone 1,024-token default. It also estimates the encoded
+audio prompt and keeps both prompt and generated output inside MOSS's
+documented 131,072-token total context. If that context limits the desired
+output budget, genflow warns that a dense recording may still truncate and
+records the estimate in result metadata. Pass an explicit value to override
+the automatic output budget. Inputs longer than MOSS's documented 90-minute
+single-window limit produce a warning and are still attempted without hidden
+audio chunking.
+
+Long continuous MOSS runs also need a larger KV cache. With
+`native_kv_quant = NULL`, genflow always keeps CrispASR's F16 cache because it
+was the fastest tested option. Set `native_kv_quant = "q8_0"` explicitly when
+reducing VRAM matters more than speed; on the tested Vulkan backend it was
+substantially slower than F16. Explicit `"q4_0"` is also accepted, but it is
+not recommended for MOSS Diarize because output degradation was observed.
+The effective value and whether it was explicit or the runtime default are
+saved in `result$metadata`.
 
 STT timeouts are calculated per input file. The default budget is the
 `timeout_api` base plus one additional minute for every minute (or partial
