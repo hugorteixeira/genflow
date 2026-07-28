@@ -114,8 +114,9 @@ for a fixed \code{timeout_api}.}
 \item{max_poll_seconds}{Numeric; max polling time for async providers.}
 
 \item{executable}{Optional executable for \code{service = "local-native"}.
-Resolution uses \code{GENFLOW_STT_NATIVE_EXECUTABLE}, the saved local inference
-configuration, and finally the selected engine's executable on \code{PATH}.}
+Resolution uses the explicit argument, \code{GENFLOW_STT_NATIVE_EXECUTABLE},
+the selected engine's independently saved path in local inference
+configuration, and finally that engine's executable on \code{PATH}.}
 
 \item{native_engine}{Native runtime for \code{service = "local-native"}:
 \code{"auto"}, \code{"crispasr"}, or \code{"moss-transcribe"}. Engines support model

@@ -335,7 +335,9 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
   config <- genflow:::.genflow_local_config_defaults()
   config$ollama_base_url <- "http://127.0.0.1:22434"
   config$stt_native_engine <- "crispasr"
-  config$stt_native_executable <- "/custom/crispasr"
+  config$stt_native_crispasr_executable <- "/custom/crispasr"
+  config$stt_native_moss_transcribe_executable <-
+    "/custom/moss-transcribe"
   config$stt_native_model <- "/models/whisper.gguf"
   config$stt_native_backend <- "whisper"
   config$stt_native_quant <- "q8_0"
@@ -369,7 +371,14 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     ) %in% names(saved)))
     expect_identical(saved$ollama_base_url, config$ollama_base_url)
     expect_identical(saved$stt_native_engine, config$stt_native_engine)
-    expect_identical(saved$stt_native_executable, config$stt_native_executable)
+    expect_identical(
+      saved$stt_native_crispasr_executable,
+      config$stt_native_crispasr_executable
+    )
+    expect_identical(
+      saved$stt_native_moss_transcribe_executable,
+      config$stt_native_moss_transcribe_executable
+    )
     expect_identical(saved$stt_native_model, config$stt_native_model)
     expect_identical(saved$stt_native_backend, config$stt_native_backend)
     expect_identical(saved$stt_native_quant, config$stt_native_quant)
@@ -394,11 +403,35 @@ test_that("local inference save preserves uninitialized fields and diagnostics a
     session$flushReact()
     saved <- genflow:::.genflow_read_local_config(config_path)
     expect_identical(saved$stt_native_engine, "moss-transcribe")
-    expect_identical(saved$stt_native_executable, "")
+    expect_identical(
+      saved$stt_native_crispasr_executable,
+      config$stt_native_crispasr_executable
+    )
+    expect_identical(
+      saved$stt_native_moss_transcribe_executable,
+      config$stt_native_moss_transcribe_executable
+    )
     expect_identical(saved$stt_native_model, config$stt_native_model)
     expect_identical(saved$stt_native_backend, config$stt_native_backend)
     expect_identical(saved$stt_native_quant, config$stt_native_quant)
     expect_identical(saved$stt_native_device, "cpu")
+
+    session$setInputs(
+      local_stt_native_crispasr_executable = "/edited/crispasr",
+      local_stt_native_moss_transcribe_executable =
+        "/edited/moss-transcribe",
+      local_config_save = 4
+    )
+    session$flushReact()
+    saved <- genflow:::.genflow_read_local_config(config_path)
+    expect_identical(
+      saved$stt_native_crispasr_executable,
+      "/edited/crispasr"
+    )
+    expect_identical(
+      saved$stt_native_moss_transcribe_executable,
+      "/edited/moss-transcribe"
+    )
 
     session$setInputs(local_diagnostics_run = 1)
     session$flushReact()
@@ -422,7 +455,7 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
   downloaded <- FALSE
   starts <- 0L
   config <- genflow:::.genflow_local_config_defaults()
-  config$stt_native_executable <- "/opt/crispasr"
+  config$stt_native_crispasr_executable <- "/opt/crispasr"
   genflow:::.genflow_write_local_config(
     config,
     getOption("genflow.local_config_path")

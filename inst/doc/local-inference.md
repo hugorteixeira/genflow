@@ -76,7 +76,9 @@ variables, which win over saved configuration, which wins over defaults.
 | `stt_server_base_url` | `GENFLOW_STT_BASE_URL` | `http://127.0.0.1:8000` |
 | `stt_server_model` | `GENFLOW_STT_MODEL` | empty; runtime default `local-model` |
 | `stt_native_engine` | `GENFLOW_STT_NATIVE_ENGINE` | `auto` |
-| `stt_native_executable` | `GENFLOW_STT_NATIVE_EXECUTABLE` | find the engine on `PATH` |
+| `stt_native_crispasr_executable` | generic override: `GENFLOW_STT_NATIVE_EXECUTABLE` | find `crispasr` on `PATH` |
+| `stt_native_moss_transcribe_executable` | generic override: `GENFLOW_STT_NATIVE_EXECUTABLE` | find `moss-transcribe` on `PATH` |
+| `stt_native_executable` | `GENFLOW_STT_NATIVE_EXECUTABLE` | one-way compatibility alias for older callers |
 | `stt_native_model` | `GENFLOW_STT_NATIVE_MODEL` | empty |
 | `stt_native_backend` | `GENFLOW_STT_NATIVE_BACKEND` | empty |
 | `stt_native_quant` | `GENFLOW_STT_NATIVE_QUANT` | empty |
@@ -126,12 +128,22 @@ Configure only the runtime in **Local > Native STT**:
 ```r
 gen_local_config(
   stt_native_engine = "crispasr",
+  stt_native_crispasr_executable =
+    "/absolute/path/to/CrispASR/build/bin/crispasr",
+  stt_native_moss_transcribe_executable =
+    "/absolute/path/to/moss-transcribe.cpp/build/bin/moss-transcribe",
   stt_native_device = "vulkan"
 )
 ```
 
-For an executable outside `PATH`, use `GENFLOW_STT_NATIVE_EXECUTABLE`, the
-`executable` argument, or `gen_local_config(stt_native_executable = "...")`.
+Both executable paths are editable in **Local > Native STT** and are persisted
+independently. Changing the selected engine never clears the other engine's
+path. At runtime, the explicit `executable` argument and the generic
+`GENFLOW_STT_NATIVE_EXECUTABLE` environment variable override the saved path;
+otherwise genflow uses the selected engine's saved path and then `PATH`.
+`stt_native_executable` remains accepted for compatibility and is migrated to
+the selected engine's field when possible; new configuration files persist
+only the two engine-specific paths.
 
 ### Download manager
 

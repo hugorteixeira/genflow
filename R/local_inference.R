@@ -9,6 +9,8 @@
   "stt_server_model",
   "stt_native_engine",
   "stt_native_executable",
+  "stt_native_crispasr_executable",
+  "stt_native_moss_transcribe_executable",
   "stt_native_model",
   "stt_native_backend",
   "stt_native_quant",
@@ -20,7 +22,7 @@
 
 .genflow_local_config_defaults <- function() {
   list(
-    version = 4L,
+    version = 5L,
     ollama_base_url = "http://127.0.0.1:11434",
     ollama_model = "",
     llamacpp_base_url = "http://127.0.0.1:8080",
@@ -29,6 +31,8 @@
     stt_server_model = "",
     stt_native_engine = "auto",
     stt_native_executable = "",
+    stt_native_crispasr_executable = "",
+    stt_native_moss_transcribe_executable = "",
     stt_native_model = "",
     stt_native_backend = "",
     stt_native_quant = "",
@@ -41,6 +45,7 @@
 
 .genflow_migrate_legacy_native_config <- function(config) {
   if (!is.list(config)) return(config)
+  original_names <- names(config)
   canonical_fields <- c(
     "stt_native_engine",
     "stt_native_executable",
@@ -50,32 +55,76 @@
     "stt_native_device"
   )
   # A canonical key is an explicit source of truth, including an intentionally
-  # empty value. Legacy fields are copied only from a genuinely old object.
-  if (any(canonical_fields %in% names(config))) return(config)
+  # empty value. Legacy MOSS-only objects are migrated before the v4 generic
+  # executable is assigned to its engine-specific field.
+  if (!any(canonical_fields %in% original_names)) {
+    legacy_executable <- .genflow_local_scalar(
+      config$moss_cpp_executable %||% "",
+      "moss_cpp_executable"
+    )
+    legacy_model <- .genflow_local_scalar(
+      config$moss_cpp_model %||% "",
+      "moss_cpp_model"
+    )
+    legacy_device <- .genflow_local_scalar(
+      config$moss_cpp_device %||% "auto",
+      "moss_cpp_device"
+    )
+    config$stt_native_executable <- legacy_executable
+    config$stt_native_model <- legacy_model
+    config$stt_native_device <- legacy_device
+    config$stt_native_backend <- ""
+    legacy_configured <- nzchar(legacy_executable) ||
+      nzchar(legacy_model) ||
+      !identical(tolower(legacy_device), "auto")
+    config$stt_native_engine <- if (legacy_configured) {
+      "moss-transcribe"
+    } else {
+      "auto"
+    }
+  }
 
-  legacy_executable <- .genflow_local_scalar(
+  has_crispasr_path <- "stt_native_crispasr_executable" %in% original_names
+  has_moss_path <- "stt_native_moss_transcribe_executable" %in% original_names
+  if (!has_crispasr_path) config$stt_native_crispasr_executable <- ""
+  if (!has_moss_path) config$stt_native_moss_transcribe_executable <- ""
+
+  generic_executable <- .genflow_local_scalar(
+    config$stt_native_executable %||% "",
+    "stt_native_executable"
+  )
+  configured_engine <- tryCatch(
+    .stt_normalize_native_engine(config$stt_native_engine %||% "auto"),
+    error = function(e) "auto"
+  )
+  inferred_engine <- .stt_native_engine_from_executable(generic_executable)
+  target_engine <- if (!identical(configured_engine, "auto")) {
+    configured_engine
+  } else {
+    inferred_engine
+  }
+  if (nzchar(generic_executable) && identical(target_engine, "crispasr") &&
+      !nzchar(config$stt_native_crispasr_executable)) {
+    config$stt_native_crispasr_executable <- generic_executable
+  }
+  if (nzchar(generic_executable) && identical(target_engine, "moss-transcribe") &&
+      !nzchar(config$stt_native_moss_transcribe_executable)) {
+    config$stt_native_moss_transcribe_executable <- generic_executable
+  }
+  legacy_moss_executable <- .genflow_local_scalar(
     config$moss_cpp_executable %||% "",
     "moss_cpp_executable"
   )
-  legacy_model <- .genflow_local_scalar(
-    config$moss_cpp_model %||% "",
-    "moss_cpp_model"
-  )
-  legacy_device <- .genflow_local_scalar(
-    config$moss_cpp_device %||% "auto",
-    "moss_cpp_device"
-  )
-  config$stt_native_executable <- legacy_executable
-  config$stt_native_model <- legacy_model
-  config$stt_native_device <- legacy_device
-  config$stt_native_backend <- ""
-  legacy_configured <- nzchar(legacy_executable) ||
-    nzchar(legacy_model) ||
-    !identical(tolower(legacy_device), "auto")
-  config$stt_native_engine <- if (legacy_configured) {
-    "moss-transcribe"
-  } else {
-    "auto"
+  if (nzchar(legacy_moss_executable) &&
+      !nzchar(config$stt_native_moss_transcribe_executable)) {
+    config$stt_native_moss_transcribe_executable <- legacy_moss_executable
+  }
+  # The v4 generic field is a one-way migration alias once its owner is known.
+  # With engine=auto and a custom binary name, preserve it until the user picks
+  # an engine instead of discarding a path that cannot yet be classified.
+  if (!nzchar(generic_executable) ||
+      target_engine %in% c("crispasr", "moss-transcribe")) {
+    config$stt_native_executable <- ""
   }
   config
 }
@@ -216,6 +265,8 @@
 
   for (field in c(
     "stt_native_executable",
+    "stt_native_crispasr_executable",
+    "stt_native_moss_transcribe_executable",
     "stt_native_model",
     "moss_cpp_executable",
     "moss_cpp_model"
@@ -239,7 +290,7 @@
   validated$moss_cpp_executable <- ""
   validated$moss_cpp_model <- ""
   validated$moss_cpp_device <- "auto"
-  validated$version <- 4L
+  validated$version <- 5L
   validated
 }
 
@@ -276,10 +327,15 @@
 .genflow_write_local_config <- function(config, path = NULL) {
   config_path <- .genflow_local_config_path(path)
   config <- .genflow_validate_local_config(config)
-  serialized <- config[setdiff(
-    names(config),
-    c("moss_cpp_executable", "moss_cpp_model", "moss_cpp_device")
-  )]
+  omitted <- c(
+    "moss_cpp_executable",
+    "moss_cpp_model",
+    "moss_cpp_device"
+  )
+  if (!nzchar(config$stt_native_executable %||% "")) {
+    omitted <- c(omitted, "stt_native_executable")
+  }
+  serialized <- config[setdiff(names(config), omitted)]
   dir.create(dirname(config_path), recursive = TRUE, showWarnings = FALSE)
 
   temporary <- tempfile(
@@ -321,8 +377,14 @@
 #' @param ... Named settings to update. Supported names include
 #'   `ollama_base_url`, `ollama_model`, `llamacpp_base_url`,
 #'   `llamacpp_model`, `stt_server_base_url`, `stt_server_model`,
-#'   `stt_native_engine`, `stt_native_executable`, `stt_native_model`,
+#'   `stt_native_engine`, `stt_native_crispasr_executable`,
+#'   `stt_native_moss_transcribe_executable`, `stt_native_executable`,
+#'   `stt_native_model`,
 #'   `stt_native_backend`, `stt_native_quant`, and `stt_native_device`.
+#'   The two engine-specific executable fields are persisted independently, so
+#'   changing `stt_native_engine` never erases either path.
+#'   `stt_native_executable` remains an accepted one-way compatibility alias
+#'   for older code and is copied into the selected engine's field.
 #'   `stt_native_quant` is a CrispASR registry preference used only with
 #'   `model = "auto"`; it does not assert that a remote artifact exists. The
 #'   old `moss_cpp_*` names are accepted only as migration aliases.
@@ -367,25 +429,51 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
       call. = FALSE
     )
   }
-  previous_native_engine <- .stt_normalize_native_engine(
-    current$stt_native_engine %||% "auto"
-  )
   current[names(updates)] <- updates
-  if ("stt_native_engine" %in% names(updates) &&
-      !any(c(
-        "stt_native_executable",
-        "moss_cpp_executable"
-      ) %in% names(updates))) {
-    next_native_engine <- .stt_normalize_native_engine(
+  if ("stt_native_executable" %in% names(updates)) {
+    target_engine <- .stt_normalize_native_engine(
       current$stt_native_engine %||% "auto"
     )
-    if (!identical(previous_native_engine, next_native_engine)) {
+    if (identical(target_engine, "auto")) {
+      target_engine <- .stt_native_engine_from_executable(
+        updates$stt_native_executable
+      )
+    }
+    target_field <- switch(
+      target_engine,
+      crispasr = "stt_native_crispasr_executable",
+      `moss-transcribe` = "stt_native_moss_transcribe_executable",
+      NULL
+    )
+    if (!is.null(target_field)) {
+      supplied_target <- if (target_field %in% names(updates)) {
+        .genflow_local_scalar(updates[[target_field]], target_field)
+      } else {
+        ""
+      }
+      if (!target_field %in% names(updates) || !nzchar(supplied_target)) {
+        current[[target_field]] <- updates$stt_native_executable
+      }
       current$stt_native_executable <- ""
-      current$moss_cpp_executable <- ""
+    }
+  } else if ("stt_native_engine" %in% names(updates) &&
+             nzchar(current$stt_native_executable %||% "")) {
+    target_engine <- .stt_normalize_native_engine(
+      current$stt_native_engine %||% "auto"
+    )
+    target_field <- switch(
+      target_engine,
+      crispasr = "stt_native_crispasr_executable",
+      `moss-transcribe` = "stt_native_moss_transcribe_executable",
+      NULL
+    )
+    if (!is.null(target_field) && !nzchar(current[[target_field]] %||% "")) {
+      current[[target_field]] <- current$stt_native_executable
+      current$stt_native_executable <- ""
     }
   }
   legacy_to_native <- c(
-    moss_cpp_executable = "stt_native_executable",
+    moss_cpp_executable = "stt_native_moss_transcribe_executable",
     moss_cpp_model = "stt_native_model",
     moss_cpp_device = "stt_native_device"
   )
@@ -689,7 +777,7 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
   engine_result <- tryCatch(
     .stt_resolve_native_engine(
       native_engine = config$stt_native_engine,
-      executable = config$stt_native_executable,
+      executable = NULL,
       model = "",
       native_backend = "",
       config = config
@@ -701,11 +789,32 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
   } else {
     engine_result
   }
-  registry <- .stt_native_engine_registry()
-  configured_executable <- .genflow_local_scalar(
-    config$stt_native_executable,
-    "stt_native_executable"
+  engine_error_message <- if (inherits(engine_result, "error")) {
+    conditionMessage(engine_result)
+  } else {
+    ""
+  }
+  configured_engine_paths <- c(
+    config$stt_native_crispasr_executable %||% "",
+    config$stt_native_moss_transcribe_executable %||% ""
   )
+  blocking_engine_error <- nzchar(engine_error_message) && (
+    any(nzchar(trimws(as.character(configured_engine_paths)))) ||
+      grepl("More than one native STT engine", engine_error_message, fixed = TRUE)
+  )
+  registry <- .stt_native_engine_registry()
+  configured_executable <- if (!identical(engine, "auto")) {
+    .stt_native_executable_candidate(
+      engine,
+      executable = NULL,
+      config = config
+    )
+  } else {
+    .genflow_local_scalar(
+      config$stt_native_executable,
+      "stt_native_executable"
+    )
+  }
   alternatives <- if (identical(engine, "auto")) {
     unlist(lapply(registry, `[[`, "executables"), use.names = FALSE)
   } else {
@@ -722,17 +831,28 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     if (!nzchar(detected_engine)) detected_engine <- "auto"
   }
 
-  cli_row <- if (!nzchar(executable)) {
+  cli_row <- if (blocking_engine_error) {
+    .genflow_diagnostic_row(
+      "Native STT CLI",
+      "error",
+      engine_error_message
+    )
+  } else if (!nzchar(executable)) {
     configured_path <- path.expand(configured_executable)
     .genflow_diagnostic_row(
       "Native STT CLI",
       if (nzchar(configured_executable)) "error" else "info",
       if (nzchar(configured_executable)) {
         if (dir.exists(configured_path)) {
+          expected_binary <- if (identical(engine, "moss-transcribe")) {
+            "build/bin/moss-transcribe"
+          } else {
+            "build/bin/crispasr"
+          }
           paste0(
             "Configured executable points to a directory: ",
             configured_executable,
-            ". Select the CrispASR binary, normally build/bin/crispasr."
+            ". Select the executable file, normally ", expected_binary, "."
           )
         } else if (file.exists(configured_path)) {
           paste0(

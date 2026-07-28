@@ -184,6 +184,8 @@ STT:
   transport (`service`) from the selected engine and device;
   `native_engine = "crispasr"` is the experimental/beta multi-architecture
   route, while `native_engine = "moss-transcribe"` is MOSS-specific;
+- CrispASR and moss-transcribe.cpp executable paths are persisted separately;
+  switching the selected engine cannot erase or reuse the other engine's path;
 - `local-openai` calls a user-managed `/v1/audio/transcriptions` endpoint.
 
 For the standard app workflow, a Native STT model is downloaded and deleted in

@@ -54,6 +54,19 @@ test_that("app exposes the local inference configuration surface", {
   expect_false(grepl("local_hf_revision", html, fixed = TRUE))
   expect_match(html, "local_stt_native_engine", fixed = TRUE)
   expect_false(grepl("local_stt_native_executable", html, fixed = TRUE))
+  expect_match(
+    html,
+    "local_stt_native_crispasr_executable",
+    fixed = TRUE
+  )
+  expect_match(
+    html,
+    "local_stt_native_moss_transcribe_executable",
+    fixed = TRUE
+  )
+  expect_match(html, "CrispASR executable", fixed = TRUE)
+  expect_match(html, "moss-transcribe.cpp executable", fixed = TRUE)
+  expect_match(html, "does not erase either path", fixed = TRUE)
   expect_false(grepl("local_stt_native_model", html, fixed = TRUE))
   expect_false(grepl("local_stt_native_backend", html, fixed = TRUE))
   expect_false(grepl("local_stt_native_quant", html, fixed = TRUE))

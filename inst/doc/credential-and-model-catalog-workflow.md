@@ -116,7 +116,8 @@ catalog entries. Models are identified by their cache filename and use
 `type = "Audio"`. If the managed cache is empty, genflow publishes an empty
 catalog instead of retaining stale rows.
 
-Use **Local > Native STT** to choose the engine/device and to search, verify,
+Use **Local > Native STT** to choose the engine/device, edit the independently
+saved CrispASR and moss-transcribe.cpp executable paths, and search, verify,
 download, monitor, or delete CrispASR cache files. Use **Models**, setup, or
 agent configuration to select which downloaded model is executed. The
 OpenAI-compatible STT server remains available under Local for a server

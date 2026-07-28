@@ -62,8 +62,9 @@
 #' @param poll_interval Numeric; polling interval (seconds) for async providers.
 #' @param max_poll_seconds Numeric; max polling time for async providers.
 #' @param executable Optional executable for `service = "local-native"`.
-#'   Resolution uses `GENFLOW_STT_NATIVE_EXECUTABLE`, the saved local inference
-#'   configuration, and finally the selected engine's executable on `PATH`.
+#'   Resolution uses the explicit argument, `GENFLOW_STT_NATIVE_EXECUTABLE`,
+#'   the selected engine's independently saved path in local inference
+#'   configuration, and finally that engine's executable on `PATH`.
 #' @param native_engine Native runtime for `service = "local-native"`:
 #'   `"auto"`, `"crispasr"`, or `"moss-transcribe"`. Engines support model
 #'   architectures explicitly; no native runtime can execute every model in
@@ -1458,6 +1459,83 @@ gen_stt.genflow_agent <- function(audio, ...) {
   value
 }
 
+#' Return the saved executable field owned by one native engine
+#'
+#' @keywords internal
+#' @noRd
+.stt_native_executable_config_field <- function(engine) {
+  engine <- .stt_normalize_native_engine(engine, allow_auto = FALSE)
+  switch(
+    engine,
+    crispasr = "stt_native_crispasr_executable",
+    `moss-transcribe` = "stt_native_moss_transcribe_executable"
+  )
+}
+
+#' Resolve a saved executable without borrowing another engine's path
+#'
+#' @keywords internal
+#' @noRd
+.stt_saved_native_executable <- function(engine, config) {
+  engine <- .stt_normalize_native_engine(engine, allow_auto = FALSE)
+  config <- config %||% .genflow_read_local_config()
+  field <- .stt_native_executable_config_field(engine)
+  specific <- .genflow_local_scalar(config[[field]] %||% "", field)
+  if (nzchar(specific)) return(specific)
+
+  generic <- .genflow_local_scalar(
+    config$stt_native_executable %||% "",
+    "stt_native_executable"
+  )
+  generic_engine <- .stt_native_engine_from_executable(generic)
+  saved_engine <- tryCatch(
+    .stt_normalize_native_engine(config$stt_native_engine %||% "auto"),
+    error = function(e) "auto"
+  )
+  generic_belongs_to_engine <- nzchar(generic) && (
+    identical(generic_engine, engine) ||
+      (!nzchar(generic_engine) && identical(saved_engine, engine))
+  )
+  if (generic_belongs_to_engine) return(generic)
+
+  if (identical(engine, "moss-transcribe")) {
+    legacy <- .genflow_local_scalar(
+      config$moss_cpp_executable %||% "",
+      "moss_cpp_executable"
+    )
+    if (nzchar(legacy)) return(legacy)
+  }
+  ""
+}
+
+#' Apply explicit and environment overrides to an engine-specific path
+#'
+#' @keywords internal
+#' @noRd
+.stt_native_executable_candidate <- function(engine,
+                                             executable = NULL,
+                                             config = NULL) {
+  engine <- .stt_normalize_native_engine(engine, allow_auto = FALSE)
+  config <- config %||% .genflow_read_local_config()
+  if (!is.null(executable) && length(executable) > 0L) {
+    candidate <- as.character(executable)[1]
+    return(if (is.na(candidate)) "" else trimws(candidate))
+  }
+  generic_env <- trimws(Sys.getenv(
+    "GENFLOW_STT_NATIVE_EXECUTABLE",
+    unset = ""
+  ))
+  if (nzchar(generic_env)) return(generic_env)
+  if (identical(engine, "moss-transcribe")) {
+    legacy_env <- trimws(Sys.getenv(
+      "GENFLOW_MOSS_CPP_EXECUTABLE",
+      unset = ""
+    ))
+    if (nzchar(legacy_env)) return(legacy_env)
+  }
+  .stt_saved_native_executable(engine, config)
+}
+
 #' @keywords internal
 #' @noRd
 .stt_validate_native_backend <- function(value) {
@@ -1846,16 +1924,34 @@ gen_stt.genflow_agent <- function(audio, ...) {
     return("moss-transcribe")
   }
 
-  executable_value <- .stt_native_setting(
-    executable,
-    field = "stt_native_executable",
-    env = "GENFLOW_STT_NATIVE_EXECUTABLE",
-    config = config
-  )
+  explicit_executable <- !is.null(executable) && length(executable) > 0L
+  executable_value <- if (explicit_executable) {
+    candidate <- as.character(executable)[1]
+    if (is.na(candidate)) "" else trimws(candidate)
+  } else {
+    trimws(Sys.getenv("GENFLOW_STT_NATIVE_EXECUTABLE", unset = ""))
+  }
   executable_engine <- .stt_native_engine_from_executable(executable_value)
   if (nzchar(executable_engine)) return(executable_engine)
 
   registry <- .stt_native_engine_registry()
+  configured <- Filter(function(engine) {
+    candidate <- .stt_native_executable_candidate(
+      engine,
+      executable = if (explicit_executable) executable_value else NULL,
+      config = config
+    )
+    nzchar(candidate)
+  }, names(registry))
+  if (length(configured) == 1L) return(configured[[1]])
+  if (length(configured) > 1L) {
+    stop(
+      "More than one native STT engine has a configured executable (",
+      paste(configured, collapse = ", "),
+      "). Set `native_engine` explicitly.",
+      call. = FALSE
+    )
+  }
   installed <- names(Filter(function(spec) {
     nzchar(.genflow_resolve_executable("", spec$executables))
   }, registry))
@@ -1887,21 +1983,10 @@ gen_stt.genflow_agent <- function(audio, ...) {
   if (is.null(spec)) {
     stop("Unsupported native STT engine: ", engine, call. = FALSE)
   }
-  candidate <- .stt_native_setting(
-    executable,
-    field = "stt_native_executable",
-    env = "GENFLOW_STT_NATIVE_EXECUTABLE",
-    config = config,
-    legacy_field = if (identical(engine, "moss-transcribe")) {
-      "moss_cpp_executable"
-    } else {
-      NULL
-    },
-    legacy_env = if (identical(engine, "moss-transcribe")) {
-      "GENFLOW_MOSS_CPP_EXECUTABLE"
-    } else {
-      character()
-    }
+  candidate <- .stt_native_executable_candidate(
+    engine,
+    executable = executable,
+    config = config
   )
   resolved <- if (nzchar(candidate)) {
     .genflow_resolve_executable(candidate)
@@ -1913,7 +1998,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
       spec$label,
       " executable not found",
       if (nzchar(candidate)) paste0(": ", candidate) else "",
-      ". Pass `executable`, set GENFLOW_STT_NATIVE_EXECUTABLE, or install ",
+      ". Configure its path in Local > Native STT, pass `executable`, set ",
+      "GENFLOW_STT_NATIVE_EXECUTABLE, or install ",
       spec$executables[[1]],
       " on PATH.",
       call. = FALSE
@@ -2053,46 +2139,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
       character()
     }
   ))
-  saved_engine <- .stt_normalize_native_engine(
-    config$stt_native_engine %||% "auto"
-  )
-  engine_override_value <- if (!is.null(native_engine) &&
-                               length(native_engine) > 0L) {
-    trimws(as.character(native_engine)[1])
-  } else {
-    trimws(Sys.getenv("GENFLOW_STT_NATIVE_ENGINE", unset = ""))
-  }
-  engine_override_present <- !is.na(engine_override_value) &&
-    nzchar(engine_override_value)
-  engine_override <- if (engine_override_present) {
-    .stt_normalize_native_engine(engine_override_value)
-  } else {
-    saved_engine
-  }
-  explicit_executable <- !is.null(executable) && length(executable) > 0L
-  executable_env <- trimws(
-    Sys.getenv("GENFLOW_STT_NATIVE_EXECUTABLE", unset = "")
-  )
-  configured_executable_engine <- .stt_native_engine_from_executable(
-    config$stt_native_executable %||% ""
-  )
-  saved_executable_mismatch <- nzchar(configured_executable_engine) &&
-    !identical(configured_executable_engine, engine)
-  executable_input <- executable
-  if (!explicit_executable &&
-      !nzchar(executable_env) &&
-      (saved_executable_mismatch ||
-        (engine_override_present &&
-          !identical(engine_override, saved_engine) &&
-          !identical(engine, saved_engine)))) {
-    # A saved executable belongs to the saved engine. Do not carry it across
-    # a per-call or environment engine override; discover the new engine on
-    # PATH (or use its legacy engine-specific environment variable) instead.
-    executable_input <- ""
-  }
   executable_path <- .stt_resolve_native_executable(
     engine,
-    executable = executable_input,
+    executable = executable,
     config = config
   )
 

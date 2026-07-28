@@ -1261,11 +1261,31 @@
                   ),
                   selected = "auto",
                   selectize = FALSE
+                ),
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_stt_native_crispasr_executable",
+                    "CrispASR executable",
+                    value = "",
+                    placeholder = "/absolute/path/to/crispasr"
+                  )
+                ),
+                div(
+                  class = "gf-local-field-wide",
+                  textInput(
+                    "local_stt_native_moss_transcribe_executable",
+                    "moss-transcribe.cpp executable",
+                    value = "",
+                    placeholder = "/absolute/path/to/moss-transcribe"
+                  )
                 )
               ),
               tags$p(
                 class = "gf-local-note",
-                "Engine and device apply to Native STT execution. Models are ",
+                "Executable paths are saved independently; changing Engine ",
+                "does not erase either path. Engine and device apply to Native ",
+                "STT execution. Models are ",
                 "selected for setups and agents from the Models catalog. Use this ",
                 "page only to verify, download, and remove model files. For ",
                 "AMD GPUs, prefer a Vulkan-enabled CrispASR build."
@@ -2090,6 +2110,16 @@
     "local_stt_native_device",
     selected = config$stt_native_device
   )
+  updateTextInput(
+    session,
+    "local_stt_native_crispasr_executable",
+    value = config$stt_native_crispasr_executable
+  )
+  updateTextInput(
+    session,
+    "local_stt_native_moss_transcribe_executable",
+    value = config$stt_native_moss_transcribe_executable
+  )
 
   invisible(config)
 }
@@ -2245,15 +2275,6 @@ server <- function(input, output, session) {
       "local_stt_native_engine",
       "stt_native_engine"
     )
-    current_engine <- .stt_normalize_native_engine(
-      current$stt_native_engine %||% "auto"
-    )
-    selected_engine <- .stt_normalize_native_engine(native_engine)
-    native_executable <- if (!identical(selected_engine, current_engine)) {
-      ""
-    } else {
-      current$stt_native_executable %||% ""
-    }
     list(
       ollama_base_url = input_or_current("local_ollama_base_url", "ollama_base_url"),
       ollama_model = input_or_current("local_ollama_model", "ollama_model"),
@@ -2262,7 +2283,15 @@ server <- function(input, output, session) {
       stt_server_base_url = input_or_current("local_stt_server_base_url", "stt_server_base_url"),
       stt_server_model = current$stt_server_model %||% "",
       stt_native_engine = native_engine,
-      stt_native_executable = native_executable,
+      stt_native_executable = current$stt_native_executable %||% "",
+      stt_native_crispasr_executable = input_or_current(
+        "local_stt_native_crispasr_executable",
+        "stt_native_crispasr_executable"
+      ),
+      stt_native_moss_transcribe_executable = input_or_current(
+        "local_stt_native_moss_transcribe_executable",
+        "stt_native_moss_transcribe_executable"
+      ),
       stt_native_model = current$stt_native_model %||% "",
       stt_native_backend = current$stt_native_backend %||% "",
       stt_native_quant = current$stt_native_quant %||% "",
@@ -4530,7 +4559,8 @@ server <- function(input, output, session) {
         backend = "",
         quant = "",
         executable = trimws(
-          local_state$config$stt_native_executable %||% ""
+          input$local_stt_native_crispasr_executable %||%
+            local_state$config$stt_native_crispasr_executable %||% ""
         )
       ),
       error = function(e) e

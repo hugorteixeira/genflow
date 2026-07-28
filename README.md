@@ -166,8 +166,10 @@ remains available as a MOSS-specific engine. Configure engine/device in
 ```r
 gen_local_config(
   stt_native_engine = "crispasr",
-  stt_native_executable =
+  stt_native_crispasr_executable =
     "/absolute/path/to/CrispASR/build-vulkan/bin/crispasr",
+  stt_native_moss_transcribe_executable =
+    "/absolute/path/to/moss-transcribe.cpp/build/bin/moss-transcribe",
   stt_native_device = "vulkan"
 )
 
@@ -186,6 +188,11 @@ native_transcript <- gen_stt(
 native_transcript$response_value
 native_transcript$metadata
 ```
+
+The app exposes both executable paths in **Local > Native STT** and saves them
+independently. Switching between CrispASR and moss-transcribe.cpp changes the
+active engine without clearing either path. The generic `executable` argument
+and `GENFLOW_STT_NATIVE_EXECUTABLE` remain explicit per-call/session overrides.
 
 Like the other generators, `gen_stt()` writes a concise `[SUCCESS]` or
 `[ERROR]` summary while the call runs and invisibly returns a regular list.

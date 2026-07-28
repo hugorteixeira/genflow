@@ -527,6 +527,54 @@ test_that("native engine registry and auto-selection are deterministic", {
   )
 })
 
+test_that("native executable candidates remain engine-specific", {
+  withr::local_envvar(c(
+    GENFLOW_STT_NATIVE_EXECUTABLE = NA,
+    GENFLOW_MOSS_CPP_EXECUTABLE = NA
+  ))
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "crispasr"
+  config$stt_native_crispasr_executable <- "/saved/crispasr"
+  config$stt_native_moss_transcribe_executable <-
+    "/saved/moss-transcribe"
+
+  expect_identical(
+    genflow:::.stt_native_executable_candidate("crispasr", config = config),
+    "/saved/crispasr"
+  )
+  expect_identical(
+    genflow:::.stt_native_executable_candidate(
+      "moss-transcribe",
+      config = config
+    ),
+    "/saved/moss-transcribe"
+  )
+  expect_identical(
+    genflow:::.stt_native_executable_candidate(
+      "moss-transcribe",
+      executable = "/explicit/moss-transcribe",
+      config = config
+    ),
+    "/explicit/moss-transcribe"
+  )
+  expect_identical(
+    genflow:::.stt_native_executable_candidate(
+      "moss-transcribe",
+      executable = "",
+      config = config
+    ),
+    ""
+  )
+
+  withr::local_envvar(
+    GENFLOW_STT_NATIVE_EXECUTABLE = "/env/native-stt"
+  )
+  expect_identical(
+    genflow:::.stt_native_executable_candidate("crispasr", config = config),
+    "/env/native-stt"
+  )
+})
+
 test_that("native engine overrides do not inherit another engine executable", {
   audio <- local_stt_audio()
   model <- tempfile("moss-model-", fileext = ".gguf")
@@ -542,14 +590,23 @@ test_that("native engine overrides do not inherit another engine executable", {
 
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "crispasr"
-  config$stt_native_executable <- "/saved/crispasr"
+  config$stt_native_crispasr_executable <- "/saved/crispasr"
+  config$stt_native_moss_transcribe_executable <-
+    "/saved/moss-transcribe"
   seen <- character()
   testthat::local_mocked_bindings(
     .genflow_read_local_config = function(...) config,
     .stt_resolve_native_executable = function(engine,
                                               executable = NULL,
                                               config = NULL) {
-      seen <<- c(seen, executable)
+      seen <<- c(
+        seen,
+        genflow:::.stt_native_executable_candidate(
+          engine,
+          executable = executable,
+          config = config
+        )
+      )
       file.path(R.home("bin"), "R")
     },
     .stt_local_moss_cpp = function(...) {
@@ -573,7 +630,7 @@ test_that("native engine overrides do not inherit another engine executable", {
     timeout_secs = 10,
     native_engine = "moss-transcribe"
   )
-  expect_identical(seen[[1]], "")
+  expect_identical(seen[[1]], "/saved/moss-transcribe")
 
   withr::local_envvar(GENFLOW_STT_NATIVE_ENGINE = "moss-transcribe")
   genflow:::.stt_local_native(
@@ -583,7 +640,7 @@ test_that("native engine overrides do not inherit another engine executable", {
     prompt = NULL,
     timeout_secs = 10
   )
-  expect_identical(seen[[2]], "")
+  expect_identical(seen[[2]], "/saved/moss-transcribe")
 
   genflow:::.stt_local_native(
     audio_path = audio,
@@ -666,7 +723,14 @@ test_that("a catalog model does not reuse an auto engine's stale executable", {
     .stt_resolve_native_executable = function(engine,
                                               executable = NULL,
                                               config = NULL) {
-      seen <<- list(engine = engine, executable = executable)
+      seen <<- list(
+        engine = engine,
+        executable = genflow:::.stt_native_executable_candidate(
+          engine,
+          executable = executable,
+          config = config
+        )
+      )
       file.path(R.home("bin"), "R")
     },
     .stt_native_crispasr = function(...) {

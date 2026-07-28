@@ -7,6 +7,8 @@ test_that("local inference config round-trips and normalizes values", {
       ollama_base_url = "http://127.0.0.1:11434/",
       stt_native_engine = "CRISP-ASR",
       stt_native_executable = "/opt/crisp/bin/crispasr",
+      stt_native_moss_transcribe_executable =
+        "/opt/moss/bin/moss-transcribe",
       stt_native_model = "/models/parakeet-q4_k.gguf",
       stt_native_backend = "PARAKEET",
       stt_native_device = "VULKAN"
@@ -16,15 +18,25 @@ test_that("local inference config round-trips and normalizes values", {
 
   expect_true(file.exists(path))
   expect_equal(config$ollama_base_url, "http://127.0.0.1:11434")
-  expect_equal(config$version, 4L)
+  expect_equal(config$version, 5L)
   expect_equal(config$stt_native_engine, "crispasr")
   expect_equal(config$stt_native_device, "vulkan")
   expect_equal(config$stt_native_model, "/models/parakeet-q4_k.gguf")
   expect_equal(config$stt_native_backend, "parakeet")
+  expect_identical(config$stt_native_executable, "")
+  expect_equal(
+    config$stt_native_crispasr_executable,
+    "/opt/crisp/bin/crispasr"
+  )
+  expect_equal(
+    config$stt_native_moss_transcribe_executable,
+    "/opt/moss/bin/moss-transcribe"
+  )
   expect_equal(config$moss_cpp_model, "")
   expect_equal(gen_local_config(path = path), config)
   persisted <- jsonlite::fromJSON(path, simplifyVector = FALSE)
   expect_false(any(startsWith(names(persisted), "moss_cpp_")))
+  expect_false("stt_native_executable" %in% names(persisted))
 })
 
 test_that("version 3 config migration ignores removed Python and HF settings", {
@@ -61,7 +73,7 @@ test_that("version 3 config migration ignores removed Python and HF settings", {
 
   migrated <- gen_local_config(path = path)
 
-  expect_identical(migrated$version, 4L)
+  expect_identical(migrated$version, 5L)
   expect_identical(migrated$ollama_base_url, "http://127.0.0.1:22434")
   expect_identical(migrated$stt_native_engine, "crispasr")
   expect_identical(migrated$stt_native_model, "auto")
@@ -111,10 +123,14 @@ test_that("legacy MOSS config migrates once and canonical values can be cleared"
   )
 
   migrated <- gen_local_config(path = path)
-  expect_identical(migrated$version, 4L)
+  expect_identical(migrated$version, 5L)
   expect_identical(migrated$stt_native_engine, "moss-transcribe")
   expect_identical(
     migrated$stt_native_executable,
+    ""
+  )
+  expect_identical(
+    migrated$stt_native_moss_transcribe_executable,
     "/old/moss-transcribe"
   )
   expect_identical(migrated$stt_native_model, "/old/moss.gguf")
@@ -126,12 +142,14 @@ test_that("legacy MOSS config migrates once and canonical values can be cleared"
   cleared <- gen_local_config(
     stt_native_engine = "auto",
     stt_native_executable = "",
+    stt_native_moss_transcribe_executable = "",
     stt_native_model = "",
     stt_native_device = "auto",
     path = path
   )
   expect_identical(cleared$stt_native_engine, "auto")
   expect_identical(cleared$stt_native_executable, "")
+  expect_identical(cleared$stt_native_moss_transcribe_executable, "")
   expect_identical(cleared$stt_native_model, "")
   expect_identical(gen_local_config(path = path), cleared)
 })
@@ -158,24 +176,106 @@ test_that("local inference config rejects unknown or invalid settings", {
   )
 })
 
-test_that("changing the native engine clears an engine-specific executable", {
+test_that("changing the native engine preserves both executable paths", {
   path <- tempfile(fileext = ".json")
   on.exit(unlink(path), add = TRUE)
 
   configured <- gen_local_config(
     stt_native_engine = "crispasr",
-    stt_native_executable = "/opt/crispasr",
+    stt_native_crispasr_executable = "/opt/crispasr",
+    stt_native_moss_transcribe_executable = "/opt/moss-transcribe",
     path = path
   )
-  expect_identical(configured$stt_native_executable, "/opt/crispasr")
+  expect_identical(
+    configured$stt_native_crispasr_executable,
+    "/opt/crispasr"
+  )
 
   changed <- gen_local_config(
     stt_native_engine = "moss-transcribe",
     path = path
   )
   expect_identical(changed$stt_native_engine, "moss-transcribe")
-  expect_identical(changed$stt_native_executable, "")
-  expect_identical(changed$moss_cpp_executable, "")
+  expect_identical(
+    changed$stt_native_crispasr_executable,
+    "/opt/crispasr"
+  )
+  expect_identical(
+    changed$stt_native_moss_transcribe_executable,
+    "/opt/moss-transcribe"
+  )
+
+  restored <- gen_local_config(stt_native_engine = "crispasr", path = path)
+  expect_identical(
+    restored$stt_native_crispasr_executable,
+    "/opt/crispasr"
+  )
+  expect_identical(
+    restored$stt_native_moss_transcribe_executable,
+    "/opt/moss-transcribe"
+  )
+
+  cleared_crisp <- gen_local_config(
+    stt_native_crispasr_executable = "",
+    path = path
+  )
+  expect_identical(cleared_crisp$stt_native_crispasr_executable, "")
+  expect_identical(
+    gen_local_config(path = path)$stt_native_crispasr_executable,
+    ""
+  )
+})
+
+test_that("version 4 native executable migrates to its saved engine", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  jsonlite::write_json(
+    list(
+      version = 4L,
+      stt_native_engine = "crispasr",
+      stt_native_executable = "/legacy/build/bin/crispasr",
+      stt_native_device = "vulkan"
+    ),
+    path,
+    auto_unbox = TRUE
+  )
+
+  migrated <- gen_local_config(path = path)
+  expect_identical(migrated$version, 5L)
+  expect_identical(
+    migrated$stt_native_crispasr_executable,
+    "/legacy/build/bin/crispasr"
+  )
+  expect_identical(migrated$stt_native_moss_transcribe_executable, "")
+})
+
+test_that("an unclassified version 4 executable waits for an engine choice", {
+  path <- tempfile(fileext = ".json")
+  on.exit(unlink(path), add = TRUE)
+  jsonlite::write_json(
+    list(
+      version = 4L,
+      stt_native_engine = "auto",
+      stt_native_executable = "/legacy/bin/custom-speech-cli"
+    ),
+    path,
+    auto_unbox = TRUE
+  )
+
+  pending <- gen_local_config(path = path)
+  expect_identical(
+    pending$stt_native_executable,
+    "/legacy/bin/custom-speech-cli"
+  )
+  expect_identical(pending$stt_native_crispasr_executable, "")
+  expect_identical(pending$stt_native_moss_transcribe_executable, "")
+
+  selected <- gen_local_config(stt_native_engine = "moss-transcribe", path = path)
+  expect_identical(selected$stt_native_executable, "")
+  expect_identical(
+    selected$stt_native_moss_transcribe_executable,
+    "/legacy/bin/custom-speech-cli"
+  )
 })
 
 test_that("environment values take precedence in effective local config", {
@@ -373,7 +473,7 @@ test_that("native STT diagnostics report the configured CLI and model cache", {
 
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "moss-transcribe"
-  config$stt_native_executable <- executable
+  config$stt_native_moss_transcribe_executable <- executable
   rows <- genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
   rows <- do.call(rbind, rows)
 
@@ -408,7 +508,7 @@ test_that("native STT diagnostics reject a CLI from the wrong engine", {
 
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "moss-transcribe"
-  config$stt_native_executable <- executable
+  config$stt_native_moss_transcribe_executable <- executable
   rows <- do.call(
     rbind,
     genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
@@ -430,7 +530,7 @@ test_that("native STT diagnostics summarize managed CrispASR models", {
 
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "crispasr"
-  config$stt_native_executable <- file.path(R.home("bin"), "R")
+  config$stt_native_crispasr_executable <- file.path(R.home("bin"), "R")
   filename <- "granite-speech-4.1-2b-q8_0.gguf"
   writeBin(as.raw(1:8), file.path(cache_dir, filename))
   rows <- do.call(
@@ -451,7 +551,7 @@ test_that("native STT diagnostics reject a directory used as the executable", {
 
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_engine <- "crispasr"
-  config$stt_native_executable <- directory
+  config$stt_native_crispasr_executable <- directory
   rows <- do.call(
     rbind,
     genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
@@ -460,6 +560,26 @@ test_that("native STT diagnostics reject a directory used as the executable", {
   expect_identical(rows$status[[1]], "error")
   expect_match(rows$detail[[1]], "points to a directory", fixed = TRUE)
   expect_match(rows$detail[[1]], "build/bin/crispasr", fixed = TRUE)
+})
+
+test_that("native STT diagnostics expose ambiguous saved engine paths", {
+  config <- genflow:::.genflow_local_config_defaults()
+  config$stt_native_engine <- "auto"
+  config$stt_native_crispasr_executable <- "/configured/crispasr"
+  config$stt_native_moss_transcribe_executable <-
+    "/configured/moss-transcribe"
+
+  rows <- do.call(
+    rbind,
+    genflow:::.genflow_native_stt_diagnostics(config, timeout = 2)
+  )
+
+  expect_identical(rows$status[[1]], "error")
+  expect_match(
+    rows$detail[[1]],
+    "More than one native STT engine has a configured executable",
+    fixed = TRUE
+  )
 })
 
 test_that("local endpoint diagnostics do not duplicate API path prefixes", {

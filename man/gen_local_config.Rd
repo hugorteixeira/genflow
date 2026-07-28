@@ -12,8 +12,14 @@ gen_local_config(config = NULL, ..., path = NULL, save = TRUE)
 \item{...}{Named settings to update. Supported names include
 \code{ollama_base_url}, \code{ollama_model}, \code{llamacpp_base_url},
 \code{llamacpp_model}, \code{stt_server_base_url}, \code{stt_server_model},
-\code{stt_native_engine}, \code{stt_native_executable}, \code{stt_native_model},
+\code{stt_native_engine}, \code{stt_native_crispasr_executable},
+\code{stt_native_moss_transcribe_executable}, \code{stt_native_executable},
+\code{stt_native_model},
 \code{stt_native_backend}, \code{stt_native_quant}, and \code{stt_native_device}.
+The two engine-specific executable fields are persisted independently, so
+changing \code{stt_native_engine} never erases either path.
+\code{stt_native_executable} remains an accepted one-way compatibility alias
+for older code and is copied into the selected engine's field.
 \code{stt_native_quant} is a CrispASR registry preference used only with
 \code{model = "auto"}; it does not assert that a remote artifact exists. The
 old \verb{moss_cpp_*} names are accepted only as migration aliases.}

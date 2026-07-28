@@ -599,9 +599,7 @@
   executable <- trimws(as.character(executable %||% "")[1])
   if (!nzchar(executable)) {
     config <- .genflow_read_local_config()
-    executable <- trimws(as.character(
-      config$stt_native_executable %||% ""
-    )[1])
+    executable <- .stt_saved_native_executable("crispasr", config)
   }
   if (!nzchar(executable)) {
     executable <- unname(Sys.which("crispasr"))
