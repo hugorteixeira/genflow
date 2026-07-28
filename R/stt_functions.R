@@ -39,11 +39,17 @@
 #'   `diarize_speakers` for CrispASR's generic speaker pipeline.
 #' @param diarize_speakers Logical; explicit opt-in to CrispASR's
 #'   session-scoped speaker diarization for `service = "local-native"`.
-#'   `TRUE` passes `--diarize-speakers`, which uses native GGUF Pyannote
-#'   segmentation plus TitaNet clustering to add anonymous speaker labels
-#'   that remain stable within one input recording. It requires
-#'   `diarize = TRUE` and the CrispASR engine. The default `FALSE` avoids
-#'   model downloads and CPU overhead for callers that do not request it.
+#'   It requires `diarize = TRUE` and the CrispASR engine. The default `FALSE`
+#'   avoids auxiliary model downloads and CPU overhead for callers that do not
+#'   request it.
+#' @param diarize_embedder Logical; controls embedding-based speaker clustering
+#'   when `diarize_speakers = TRUE`. The default `TRUE` uses CrispASR's
+#'   `--diarize-speakers` shortcut: native GGUF Pyannote segmentation plus its
+#'   automatic speaker embedder (currently TitaNet), producing anonymous
+#'   labels that are stable within one input recording. Set `FALSE` to run
+#'   Pyannote segmentation without TitaNet. This avoids the CPU-heavy embedding
+#'   pass, but speaker numbers are best-effort and may swap over a long
+#'   recording. The argument has no effect when `diarize_speakers = FALSE`.
 #' @param timestamps Logical; when `TRUE`, include the time range of every
 #'   diarized segment. Defaults to `FALSE`, which merges consecutive segments
 #'   from the same speaker into readable turns while retaining labels such as
@@ -151,6 +157,7 @@ gen_stt.default <- function(
   convert = TRUE,
   diarize = TRUE,
   diarize_speakers = FALSE,
+  diarize_embedder = TRUE,
   timestamps = FALSE,
   timeout_api = 240,
   timeout_per_audio_minute = 60,
@@ -174,6 +181,10 @@ gen_stt.default <- function(
   diarize_speakers <- .stt_validate_logical_scalar(
     diarize_speakers,
     "diarize_speakers"
+  )
+  diarize_embedder <- .stt_validate_logical_scalar(
+    diarize_embedder,
+    "diarize_embedder"
   )
   timestamps <- .stt_validate_logical_scalar(timestamps, "timestamps")
   timeout_api <- .stt_validate_positive_number(timeout_api, "timeout_api")
@@ -323,6 +334,7 @@ gen_stt.default <- function(
         convert = convert,
         diarize = diarize,
         diarize_speakers = diarize_speakers,
+        diarize_embedder = diarize_embedder,
         max_new_tokens = max_new_tokens,
         legacy_service = legacy_moss_service
       ),
@@ -1932,6 +1944,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                               convert = TRUE,
                               diarize = TRUE,
                               diarize_speakers = FALSE,
+                              diarize_embedder = TRUE,
                               max_new_tokens = NULL,
                               legacy_service = FALSE,
                               runner = .stt_run_process) {
@@ -2097,6 +2110,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       native_device = device,
       diarize = diarize,
       diarize_speakers = diarize_speakers,
+      diarize_embedder = diarize_embedder,
       max_new_tokens = max_new_tokens,
       runner = runner
     ),
@@ -2153,6 +2167,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
                                  native_device = "auto",
                                  diarize = FALSE,
                                  diarize_speakers = FALSE,
+                                 diarize_embedder = TRUE,
                                  max_new_tokens = NULL,
                                  runner = .stt_run_process) {
   if (!file.exists(audio_path) || dir.exists(audio_path)) {
@@ -2167,6 +2182,10 @@ gen_stt.genflow_agent <- function(audio, ...) {
   diarize_speakers <- .stt_validate_logical_scalar(
     diarize_speakers,
     "diarize_speakers"
+  )
+  diarize_embedder <- .stt_validate_logical_scalar(
+    diarize_embedder,
+    "diarize_embedder"
   )
   if (isTRUE(diarize_speakers) && !isTRUE(diarize)) {
     stop(
@@ -2349,8 +2368,14 @@ gen_stt.genflow_agent <- function(audio, ...) {
     model_args,
     if (nzchar(backend)) c("--backend", backend),
     if (isTRUE(continuous_model_window)) c("--chunk-seconds", "0"),
-    if (isTRUE(diarize_speakers)) {
+    if (isTRUE(diarize_speakers) && isTRUE(diarize_embedder)) {
       "--diarize-speakers"
+    } else if (isTRUE(diarize_speakers)) {
+      c(
+        "--diarize",
+        "--diarize-method", "pyannote",
+        "--sherpa-segment-model", "auto"
+      )
     } else if (isTRUE(native_speaker_attribution)) {
       "--diarize"
     },
@@ -2491,9 +2516,14 @@ gen_stt.genflow_agent <- function(audio, ...) {
   }
   if (isTRUE(diarize_speakers)) {
     metadata$diarize_speakers <- TRUE
+    metadata$diarize_embedder <- diarize_embedder
     metadata$speaker_diarization_scope <- "recording"
     metadata$speaker_diarization_method <- "pyannote"
-    metadata$speaker_diarization_embedder <- "auto"
+    metadata$speaker_diarization_embedder <- if (isTRUE(diarize_embedder)) {
+      "auto"
+    } else {
+      "none"
+    }
   }
   if (length(ignored_arguments)) {
     metadata$ignored_arguments <- ignored_arguments

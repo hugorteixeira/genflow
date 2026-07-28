@@ -73,12 +73,16 @@ test_that("TTS agents reuse context and STT uses only current runtime fields", {
                                service = "openai",
                                native_engine = NULL,
                                native_backend = NULL,
+                               diarize_speakers = FALSE,
+                               diarize_embedder = TRUE,
                                ...) {
       list(
         audio = audio,
         service = service,
         native_engine = native_engine,
-        native_backend = native_backend
+        native_backend = native_backend,
+        diarize_speakers = diarize_speakers,
+        diarize_embedder = diarize_embedder
       )
     },
     .package = "genflow"
@@ -127,19 +131,30 @@ test_that("TTS agents reuse context and STT uses only current runtime fields", {
       audio = "meeting.wav",
       service = "local-native",
       native_engine = "crispasr",
-      native_backend = "parakeet"
+      native_backend = "parakeet",
+      diarize_speakers = TRUE,
+      diarize_embedder = TRUE
     ),
     class = "genflow_agent"
   )
   expect_identical(
     genflow:::gen_stt.genflow_agent(
       native_agent,
-      native_backend = "whisper"
-    )[c("service", "native_engine", "native_backend")],
+      native_backend = "whisper",
+      diarize_embedder = FALSE
+    )[c(
+      "service",
+      "native_engine",
+      "native_backend",
+      "diarize_speakers",
+      "diarize_embedder"
+    )],
     list(
       service = "local-native",
       native_engine = "crispasr",
-      native_backend = "whisper"
+      native_backend = "whisper",
+      diarize_speakers = TRUE,
+      diarize_embedder = FALSE
     )
   )
 })

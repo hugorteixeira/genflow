@@ -490,7 +490,7 @@ test_that("CrispASR enables session-scoped speaker diarization explicitly", {
   writeBin(as.raw(c(1, 2, 3)), model)
   on.exit(unlink(c(audio, model)), add = TRUE)
 
-  run_probe <- function(diarize_speakers) {
+  run_probe <- function(diarize_speakers, diarize_embedder = TRUE) {
     seen <- NULL
     result <- genflow:::.stt_native_crispasr(
       audio_path = audio,
@@ -503,6 +503,7 @@ test_that("CrispASR enables session-scoped speaker diarization explicitly", {
       native_device = "cpu",
       diarize = TRUE,
       diarize_speakers = diarize_speakers,
+      diarize_embedder = diarize_embedder,
       runner = function(command, args, timeout_secs, environment) {
         seen <<- args
         output_base <- args[[match("-of", args) + 1L]]
@@ -523,15 +524,36 @@ test_that("CrispASR enables session-scoped speaker diarization explicitly", {
     list(args = seen, result = result)
   }
 
-  enabled <- run_probe(TRUE)
-  disabled <- run_probe(FALSE)
+  enabled <- run_probe(TRUE, TRUE)
+  segmentation_only <- run_probe(TRUE, FALSE)
+  disabled <- run_probe(FALSE, FALSE)
 
   expect_equal(sum(enabled$args == "--diarize-speakers"), 1L)
   expect_false("--diarize" %in% enabled$args)
   expect_false("--chunk-seconds" %in% enabled$args)
+  expect_false("--diarize-speakers" %in% segmentation_only$args)
+  expect_equal(sum(segmentation_only$args == "--diarize"), 1L)
+  method_position <- match("--diarize-method", segmentation_only$args)
+  expect_false(is.na(method_position))
+  expect_identical(
+    segmentation_only$args[[method_position + 1L]],
+    "pyannote"
+  )
+  segment_model_position <- match(
+    "--sherpa-segment-model",
+    segmentation_only$args
+  )
+  expect_false(is.na(segment_model_position))
+  expect_identical(
+    segmentation_only$args[[segment_model_position + 1L]],
+    "auto"
+  )
+  expect_false("--diarize-embedder" %in% segmentation_only$args)
+  expect_false("--sherpa-embedding-model" %in% segmentation_only$args)
   expect_false("--diarize-speakers" %in% disabled$args)
   expect_false("--diarize" %in% disabled$args)
   expect_true(enabled$result$metadata$diarize_speakers)
+  expect_true(enabled$result$metadata$diarize_embedder)
   expect_identical(
     enabled$result$metadata$speaker_diarization_scope,
     "recording"
@@ -543,6 +565,12 @@ test_that("CrispASR enables session-scoped speaker diarization explicitly", {
   expect_identical(
     enabled$result$metadata$speaker_diarization_embedder,
     "auto"
+  )
+  expect_true(segmentation_only$result$metadata$diarize_speakers)
+  expect_false(segmentation_only$result$metadata$diarize_embedder)
+  expect_identical(
+    segmentation_only$result$metadata$speaker_diarization_embedder,
+    "none"
   )
   expect_null(disabled$result$metadata$diarize_speakers)
   expect_null(disabled$result$metadata$speaker_diarization_scope)
@@ -599,10 +627,16 @@ test_that("gen_stt forwards its speaker controls to the native adapter", {
   seen <- list()
 
   testthat::local_mocked_bindings(
-    .stt_local_native = function(diarize, diarize_speakers, ...) {
+    .stt_local_native = function(
+      diarize,
+      diarize_speakers,
+      diarize_embedder,
+      ...
+    ) {
       seen[[length(seen) + 1L]] <<- c(
         diarize = diarize,
-        diarize_speakers = diarize_speakers
+        diarize_speakers = diarize_speakers,
+        diarize_embedder = diarize_embedder
       )
       list(text = "Plain transcript.", metadata = list())
     },
@@ -622,14 +656,23 @@ test_that("gen_stt forwards its speaker controls to the native adapter", {
     model = "granite-speech-4.1-2b-plus-f16.gguf",
     save_txt = FALSE,
     diarize = TRUE,
-    diarize_speakers = TRUE
+    diarize_speakers = TRUE,
+    diarize_embedder = FALSE
   ))
 
   expect_identical(
     seen,
     list(
-      c(diarize = FALSE, diarize_speakers = FALSE),
-      c(diarize = TRUE, diarize_speakers = TRUE)
+      c(
+        diarize = FALSE,
+        diarize_speakers = FALSE,
+        diarize_embedder = TRUE
+      ),
+      c(
+        diarize = TRUE,
+        diarize_speakers = TRUE,
+        diarize_embedder = FALSE
+      )
     )
   )
   expect_identical(result$response_value, "Plain transcript.")

@@ -202,12 +202,16 @@ line, or `diarize = FALSE` to save and return only the plain transcript. When
 `saved_metadata_file` preserves the complete structured result.
 
 Models without native speaker labels can opt in to CrispASR's generic
-session-scoped diarization with `diarize_speakers = TRUE`. This combines
-native GGUF Pyannote segmentation with TitaNet clustering, requires no Python,
-and keeps anonymous speaker IDs stable across one input recording. CrispASR
-downloads the Pyannote (about 6 MB) and TitaNet (about 46 MB) models on first
-use. The TitaNet embedding step runs on CPU, so benchmark the end-to-end cost
-before processing a large collection.
+session-scoped diarization with `diarize_speakers = TRUE`. By default,
+`diarize_embedder = TRUE` combines native GGUF Pyannote segmentation with
+TitaNet clustering, requires no Python, and keeps anonymous speaker IDs stable
+across one input recording. CrispASR downloads the Pyannote (about 6 MB) and
+TitaNet (about 46 MB) models on first use.
+
+Set `diarize_embedder = FALSE` to keep Pyannote speaker-turn detection but skip
+the CPU-heavy TitaNet pass. This is substantially simpler for large
+collections, but the resulting speaker numbers are best-effort and can swap
+within a long recording.
 
 ```r
 cohere_meeting <- gen_stt(
@@ -216,6 +220,7 @@ cohere_meeting <- gen_stt(
   model = "cohere-transcribe-q8_0.gguf",
   diarize = TRUE,
   diarize_speakers = TRUE,
+  diarize_embedder = FALSE,
   timestamps = FALSE
 )
 
@@ -223,10 +228,13 @@ cohere_meeting$diarized_transcript
 ```
 
 The default `diarize_speakers = FALSE` leaves existing native calls unchanged.
-When enabled, CrispASR computes the speaker timeline globally for the supplied
-file even if its ASR backend slices the audio internally. Speaker IDs remain
-session-scoped: separate `gen_stt()` calls, including chunks created by an
-outer orchestrator, may assign different numbers to the same person.
+When enabled, CrispASR computes the speaker timeline for the supplied file even
+if its ASR backend slices the audio internally. With
+`diarize_embedder = TRUE`, IDs remain recording-scoped but separate
+`gen_stt()` calls, including chunks created by an outer orchestrator, may
+assign different numbers to the same person. Without the embedder, even one
+long recording can contain label swaps because Pyannote's segmentation labels
+are not globally clustered.
 
 For Granite Speech 4.1 Plus models, `diarize = TRUE` also activates the
 model's native speaker-attributed ASR mode through CrispASR. Genflow recognizes

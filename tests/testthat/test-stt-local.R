@@ -184,6 +184,9 @@ test_that("gen_stt validates public scalar controls before dispatch", {
     diarize = list(diarize = NA),
     diarize_speakers = list(diarize_speakers = NA),
     diarize_speakers_number = list(diarize_speakers = 1),
+    diarize_embedder = list(diarize_embedder = NA),
+    diarize_embedder_vector = list(diarize_embedder = c(TRUE, FALSE)),
+    diarize_embedder_number = list(diarize_embedder = 1),
     timestamps = list(timestamps = 1)
   )
   for (case in logical_cases) {

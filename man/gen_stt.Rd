@@ -20,6 +20,7 @@ gen_stt(audio, ...)
   convert = TRUE,
   diarize = TRUE,
   diarize_speakers = FALSE,
+  diarize_embedder = TRUE,
   timestamps = FALSE,
   timeout_api = 240,
   timeout_per_audio_minute = 60,
@@ -83,11 +84,18 @@ output control does not add diarization to a model that lacks it; use
 
 \item{diarize_speakers}{Logical; explicit opt-in to CrispASR's
 session-scoped speaker diarization for \code{service = "local-native"}.
-\code{TRUE} passes \code{--diarize-speakers}, which uses native GGUF Pyannote
-segmentation plus TitaNet clustering to add anonymous speaker labels
-that remain stable within one input recording. It requires
-\code{diarize = TRUE} and the CrispASR engine. The default \code{FALSE} avoids
-model downloads and CPU overhead for callers that do not request it.}
+It requires \code{diarize = TRUE} and the CrispASR engine. The default \code{FALSE}
+avoids auxiliary model downloads and CPU overhead for callers that do not
+request it.}
+
+\item{diarize_embedder}{Logical; controls embedding-based speaker clustering
+when \code{diarize_speakers = TRUE}. The default \code{TRUE} uses CrispASR's
+\code{--diarize-speakers} shortcut: native GGUF Pyannote segmentation plus its
+automatic speaker embedder (currently TitaNet), producing anonymous
+labels that are stable within one input recording. Set \code{FALSE} to run
+Pyannote segmentation without TitaNet. This avoids the CPU-heavy embedding
+pass, but speaker numbers are best-effort and may swap over a long
+recording. The argument has no effect when \code{diarize_speakers = FALSE}.}
 
 \item{timestamps}{Logical; when \code{TRUE}, include the time range of every
 diarized segment. Defaults to \code{FALSE}, which merges consecutive segments
