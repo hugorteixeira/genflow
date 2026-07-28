@@ -201,6 +201,33 @@ line, or `diarize = FALSE` to save and return only the plain transcript. When
 `save_txt = TRUE`, a same-name `.json` sidecar returned as
 `saved_metadata_file` preserves the complete structured result.
 
+Models without native speaker labels can opt in to CrispASR's generic
+session-scoped diarization with `diarize_speakers = TRUE`. This combines
+native GGUF Pyannote segmentation with TitaNet clustering, requires no Python,
+and keeps anonymous speaker IDs stable across one input recording. CrispASR
+downloads the Pyannote (about 6 MB) and TitaNet (about 46 MB) models on first
+use. The TitaNet embedding step runs on CPU, so benchmark the end-to-end cost
+before processing a large collection.
+
+```r
+cohere_meeting <- gen_stt(
+  "meeting.wav",
+  service = "local-native",
+  model = "cohere-transcribe-q8_0.gguf",
+  diarize = TRUE,
+  diarize_speakers = TRUE,
+  timestamps = FALSE
+)
+
+cohere_meeting$diarized_transcript
+```
+
+The default `diarize_speakers = FALSE` leaves existing native calls unchanged.
+When enabled, CrispASR computes the speaker timeline globally for the supplied
+file even if its ASR backend slices the audio internally. Speaker IDs remain
+session-scoped: separate `gen_stt()` calls, including chunks created by an
+outer orchestrator, may assign different numbers to the same person.
+
 For Granite Speech 4.1 Plus models, `diarize = TRUE` also activates the
 model's native speaker-attributed ASR mode through CrispASR. Genflow recognizes
 the standard Plus filename or recorded Hugging Face source; an explicitly

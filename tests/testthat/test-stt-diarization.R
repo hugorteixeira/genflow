@@ -484,14 +484,126 @@ test_that("CrispASR activates Granite Plus speaker attribution on request", {
   )
 })
 
-test_that("gen_stt forwards its diarize control to the native adapter", {
+test_that("CrispASR enables session-scoped speaker diarization explicitly", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile("cohere-transcribe-q8_0-", fileext = ".gguf")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+
+  run_probe <- function(diarize_speakers) {
+    seen <- NULL
+    result <- genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      model = model,
+      language = "en",
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_backend = "cohere",
+      native_device = "cpu",
+      diarize = TRUE,
+      diarize_speakers = diarize_speakers,
+      runner = function(command, args, timeout_secs, environment) {
+        seen <<- args
+        output_base <- args[[match("-of", args) + 1L]]
+        jsonlite::write_json(
+          list(
+            crispasr = list(
+              backend = "cohere",
+              model = basename(model)
+            ),
+            transcription = stt_zero_based_diarized_segments_fixture()
+          ),
+          paste0(output_base, ".json"),
+          auto_unbox = TRUE
+        )
+        list(status = 0L, output = character())
+      }
+    )
+    list(args = seen, result = result)
+  }
+
+  enabled <- run_probe(TRUE)
+  disabled <- run_probe(FALSE)
+
+  expect_equal(sum(enabled$args == "--diarize-speakers"), 1L)
+  expect_false("--diarize" %in% enabled$args)
+  expect_false("--chunk-seconds" %in% enabled$args)
+  expect_false("--diarize-speakers" %in% disabled$args)
+  expect_false("--diarize" %in% disabled$args)
+  expect_true(enabled$result$metadata$diarize_speakers)
+  expect_identical(
+    enabled$result$metadata$speaker_diarization_scope,
+    "recording"
+  )
+  expect_identical(
+    enabled$result$metadata$speaker_diarization_method,
+    "pyannote"
+  )
+  expect_identical(
+    enabled$result$metadata$speaker_diarization_embedder,
+    "auto"
+  )
+  expect_null(disabled$result$metadata$diarize_speakers)
+  expect_null(disabled$result$metadata$speaker_diarization_scope)
+  expect_identical(
+    vapply(
+      enabled$result$metadata$segments,
+      `[[`,
+      character(1),
+      "speaker"
+    ),
+    c("S01", "S02", "S01")
+  )
+})
+
+test_that("session-scoped speaker diarization requires compatible controls", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile("cohere-transcribe-q8_0-", fileext = ".gguf")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
+
+  expect_error(
+    genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      model = model,
+      language = NULL,
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_backend = "cohere",
+      native_device = "cpu",
+      diarize = FALSE,
+      diarize_speakers = TRUE
+    ),
+    "requires `diarize = TRUE`"
+  )
+  expect_error(
+    genflow:::.stt_local_native(
+      audio_path = audio,
+      model = model,
+      language = NULL,
+      prompt = NULL,
+      timeout_secs = 10,
+      native_engine = "moss-transcribe",
+      diarize = TRUE,
+      diarize_speakers = TRUE
+    ),
+    "requires the CrispASR native engine"
+  )
+})
+
+test_that("gen_stt forwards its speaker controls to the native adapter", {
   audio <- stt_diarization_audio_fixture()
   on.exit(unlink(audio), add = TRUE)
-  seen <- logical()
+  seen <- list()
 
   testthat::local_mocked_bindings(
-    .stt_local_native = function(diarize, ...) {
-      seen <<- c(seen, diarize)
+    .stt_local_native = function(diarize, diarize_speakers, ...) {
+      seen[[length(seen) + 1L]] <<- c(
+        diarize = diarize,
+        diarize_speakers = diarize_speakers
+      )
       list(text = "Plain transcript.", metadata = list())
     },
     .package = "genflow"
@@ -509,10 +621,17 @@ test_that("gen_stt forwards its diarize control to the native adapter", {
     service = "local-native",
     model = "granite-speech-4.1-2b-plus-f16.gguf",
     save_txt = FALSE,
-    diarize = TRUE
+    diarize = TRUE,
+    diarize_speakers = TRUE
   ))
 
-  expect_identical(seen, c(FALSE, TRUE))
+  expect_identical(
+    seen,
+    list(
+      c(diarize = FALSE, diarize_speakers = FALSE),
+      c(diarize = TRUE, diarize_speakers = TRUE)
+    )
+  )
   expect_identical(result$response_value, "Plain transcript.")
 })
 

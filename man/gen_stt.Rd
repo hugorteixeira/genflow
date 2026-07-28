@@ -19,6 +19,7 @@ gen_stt(audio, ...)
   save_txt = TRUE,
   convert = TRUE,
   diarize = TRUE,
+  diarize_speakers = FALSE,
   timestamps = FALSE,
   timeout_api = 240,
   timeout_per_audio_minute = 60,
@@ -74,10 +75,19 @@ auto-detection is used when supported.}
 audio formats.}
 
 \item{diarize}{Logical; when \code{TRUE}, request speaker attribution from native
-adapters that expose an opt-in mode (currently CrispASR Granite Speech 4.1
-Plus), then expose and save speaker-attributed text when the selected
-model/provider returns speaker metadata. This does not add diarization
-capability to a model that lacks it.}
+adapters that expose a model-native opt-in mode (currently CrispASR
+Granite Speech 4.1 Plus), then expose and save speaker-attributed text
+whenever the selected model/provider returns speaker metadata. This
+output control does not add diarization to a model that lacks it; use
+\code{diarize_speakers} for CrispASR's generic speaker pipeline.}
+
+\item{diarize_speakers}{Logical; explicit opt-in to CrispASR's
+session-scoped speaker diarization for \code{service = "local-native"}.
+\code{TRUE} passes \code{--diarize-speakers}, which uses native GGUF Pyannote
+segmentation plus TitaNet clustering to add anonymous speaker labels
+that remain stable within one input recording. It requires
+\code{diarize = TRUE} and the CrispASR engine. The default \code{FALSE} avoids
+model downloads and CPU overhead for callers that do not request it.}
 
 \item{timestamps}{Logical; when \code{TRUE}, include the time range of every
 diarized segment. Defaults to \code{FALSE}, which merges consecutive segments
