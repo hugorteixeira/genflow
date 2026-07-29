@@ -30,7 +30,43 @@
 #' @param label Optional short label used for saved filenames.
 #' @param save_txt Logical; save transcript to disk if TRUE.
 #' @param convert Logical; if TRUE, attempt ffmpeg conversion for unsupported
-#'   audio formats.
+#'   audio formats on the single-file path. When large-audio chunking is
+#'   required, genflow still uses ffmpeg to prepare deterministic native WAV
+#'   chunks or remote-service MP3 chunks.
+#' @param chunking Large-audio orchestration policy: `"auto"` prepares and
+#'   chunks only when an explicit limit, an adapter-owned transport limit, or a
+#'   documented model/runtime limit requires it; `"never"` sends the input
+#'   through the existing single-file path.
+#' @param chunk_max_mb Optional positive maximum chunk size in MiB. `NULL`
+#'   uses the finite local-file transport limit owned by the selected adapter;
+#'   an infinite adapter limit preserves whole-file behavior unless the
+#'   selected model/runtime has a documented duration limit.
+#' @param chunk_bitrate_kbps Positive MP3 bitrate used while preparing chunks
+#'   for remote services. Native local STT uses PCM 16-bit WAV instead.
+#' @param chunk_segment_seconds Optional positive target duration for each
+#'   chunk. `NULL` derives a duration from the prepared file and size limit.
+#' @param chunk_overlap_seconds Non-negative overlap between adjacent chunks.
+#'   The default eight-second window gives the conservative reconciliation
+#'   step evidence for deduplicating text and aligning speaker labels.
+#' @param checkpoint_dir Optional persistent directory for opaque per-chunk
+#'   media and result checkpoints. Treat its layout as internal to genflow.
+#'   Recoverable per-run locks enforce a single writer and make a concurrent
+#'   call fail fast instead of corrupting checkpoints. After a successful call,
+#'   Genflow keeps the current run plus one prior valid run for that recording
+#'   and safely prunes older superseded runs. `NULL` uses a temporary directory
+#'   for this call.
+#' @param resume Logical; reuse valid chunk media and successful opaque result
+#'   checkpoints when available.
+#' @param chunk_retry_forever Logical; retry recognized transient per-chunk
+#'   failures until success or interruption. Permanent and unknown errors stop.
+#' @param chunk_max_retries Non-negative integer number of retries allowed
+#'   after the initial attempt when `chunk_retry_forever = FALSE`.
+#' @param chunk_retry_wait_seconds Non-negative initial retry delay in seconds;
+#'   subsequent transient retries use capped exponential backoff.
+#' @param output Return projection: `"full"` preserves the complete regular
+#'   STT result; `"transcript"` returns a smaller regular result that still
+#'   contains the common status/service/model fields plus text, segments,
+#'   diarization, chunking, and reconciliation metadata.
 #' @param diarize Logical; when `TRUE`, request speaker attribution from native
 #'   adapters that expose a model-native opt-in mode (currently CrispASR
 #'   Granite Speech 4.1 Plus), then expose and save speaker-attributed text
@@ -108,7 +144,11 @@
 #'
 #' @return Invisibly returns a plain list with `response_value` (plain
 #'   transcribed text), `status_api`, `status_msg`, `service`, `model`,
-#'   `duration`, `saved_file`, and metadata such as `audio`. When
+#'   `duration` (elapsed processing seconds), `saved_file`, and metadata such
+#'   as `audio`. A chunked call
+#'   additionally exposes normalized chunking and reconciliation metadata;
+#'   speaker identities that cannot be reconciled safely remain explicitly
+#'   unresolved instead of being guessed. When
 #'   `diarize = TRUE`, diarized results additionally include
 #'   `diarized_transcript` and `saved_metadata_file` when saving is enabled.
 #'   Timestamps are optional and disabled by default. As with the other
@@ -129,7 +169,9 @@ gen_stt <- function(audio, ...) {
 #'
 #' Returns stable transport constraints that orchestration clients may need
 #' before calling [gen_stt()]. Provider-specific limits remain owned by
-#' genflow instead of being duplicated in downstream packages.
+#' genflow instead of being duplicated in downstream packages. This is
+#' informational capability discovery; callers should still pass the original
+#' recording to [gen_stt()] instead of recreating its chunk orchestration.
 #'
 #' @param service STT provider identifier accepted by [gen_stt()].
 #'
@@ -182,11 +224,36 @@ gen_stt.default <- function(
   base_url = NULL,
   api_key = NULL,
   response_format = "json",
+  chunking = c("auto", "never"),
+  chunk_max_mb = NULL,
+  chunk_bitrate_kbps = 48,
+  chunk_segment_seconds = NULL,
+  chunk_overlap_seconds = 8,
+  checkpoint_dir = NULL,
+  resume = TRUE,
+  chunk_retry_forever = TRUE,
+  chunk_max_retries = 20,
+  chunk_retry_wait_seconds = 2,
+  output = c("full", "transcript"),
   ...
 ) {
   start_time <- Sys.time()
+  dots <- list(...)
   save_txt <- .stt_validate_logical_scalar(save_txt, "save_txt")
   convert <- .stt_validate_logical_scalar(convert, "convert")
+  chunk_options <- .stt_chunk_validate_options(
+    chunking = chunking,
+    chunk_max_mb = chunk_max_mb,
+    chunk_bitrate_kbps = chunk_bitrate_kbps,
+    chunk_segment_seconds = chunk_segment_seconds,
+    chunk_overlap_seconds = chunk_overlap_seconds,
+    checkpoint_dir = checkpoint_dir,
+    resume = resume,
+    chunk_retry_forever = chunk_retry_forever,
+    chunk_max_retries = chunk_max_retries,
+    chunk_retry_wait_seconds = chunk_retry_wait_seconds,
+    output = output
+  )
   diarize <- .stt_validate_logical_scalar(diarize, "diarize")
   diarize_speakers <- .stt_validate_logical_scalar(
     diarize_speakers,
@@ -198,6 +265,7 @@ gen_stt.default <- function(
   )
   timestamps <- .stt_validate_logical_scalar(timestamps, "timestamps")
   timeout_api <- .stt_validate_positive_number(timeout_api, "timeout_api")
+  timeout_api_base <- timeout_api
   timeout_per_audio_minute <- .stt_validate_nonnegative_number(
     timeout_per_audio_minute,
     "timeout_per_audio_minute"
@@ -276,7 +344,19 @@ gen_stt.default <- function(
     on.exit(try(unlink(prep$tmp), silent = TRUE), add = TRUE)
   }
 
-  if (prep$is_url && !service %in% c("voicegain", "replicate")) {
+  explicit_chunk_input <- identical(chunk_options$chunking, "auto") &&
+    (!is.null(chunk_options$chunk_max_mb) ||
+      !is.null(chunk_options$chunk_segment_seconds))
+  if (identical(service, "voicegain") && isTRUE(explicit_chunk_input)) {
+    stop(
+      "Voicegain requires one externally hosted audio URL and cannot accept ",
+      "locally prepared STT chunks.",
+      call. = FALSE
+    )
+  }
+  if (prep$is_url &&
+      (!service %in% c("voicegain", "replicate") ||
+        isTRUE(explicit_chunk_input))) {
     downloaded <- .stt_download_audio(prep$path)
     if (!is.null(downloaded$tmp)) {
       on.exit(try(unlink(downloaded$tmp), silent = TRUE), add = TRUE)
@@ -304,22 +384,142 @@ gen_stt.default <- function(
   label_base <- substr(label_base, 1, 36)
   label_sanitized <- .sanitize_filename(label_base)
 
+  chunk_runtime_artifacts <- .stt_chunk_runtime_artifacts(
+    service = service,
+    model = model,
+    executable = executable,
+    native_engine = native_engine,
+    native_backend = native_backend
+  )
+  chunk_model_policy <- .stt_chunk_model_policy(
+    service = service,
+    runtime_artifacts = chunk_runtime_artifacts
+  )
+  signature_args <- c(list(
+    prompt = prompt,
+    convert = convert,
+    diarize = diarize,
+    diarize_speakers = diarize_speakers,
+    diarize_embedder = diarize_embedder,
+    timestamps = timestamps,
+    directory = directory,
+    label = label,
+    save_txt = save_txt,
+    timeout_api = timeout_api_base,
+    timeout_per_audio_minute = timeout_per_audio_minute,
+    poll_interval = poll_interval,
+    max_poll_seconds = max_poll_seconds,
+    executable = executable,
+    native_engine = native_engine,
+    native_backend = native_backend,
+    native_quant = native_quant,
+    native_kv_quant = native_kv_quant,
+    native_device = native_device,
+    max_new_tokens = max_new_tokens,
+    base_url = base_url,
+    api_key = api_key,
+    response_format = response_format,
+    chunking = chunk_options$chunking,
+    chunk_max_mb = chunk_options$chunk_max_mb,
+    chunk_bitrate_kbps = chunk_options$chunk_bitrate_kbps,
+    chunk_segment_seconds = chunk_options$chunk_segment_seconds,
+    chunk_overlap_seconds = chunk_options$chunk_overlap_seconds,
+    checkpoint_dir = chunk_options$checkpoint_dir,
+    resume = chunk_options$resume,
+    chunk_retry_forever = chunk_options$chunk_retry_forever,
+    chunk_max_retries = chunk_options$chunk_max_retries,
+    chunk_retry_wait_seconds = chunk_options$chunk_retry_wait_seconds,
+    output = chunk_options$output
+  ), dots)
+  chunk_config_fingerprint <- if (service %in% .stt_supported_services()) {
+    gen_stt_signature(
+      service = service,
+      model = model,
+      language = language,
+      stt_args = signature_args
+    )
+  } else {
+    # Preserve gen_stt()'s structured-error contract for unknown services.
+    # Invalid services cannot produce reusable successful checkpoints.
+    .stt_chunk_object_fingerprint(list(
+      schema_version = 1L,
+      unsupported_service = service
+    ))
+  }
+  chunk_plan <- .stt_chunk_plan_audio(
+    audio_path = prep$path,
+    service = service,
+    config_fingerprint = chunk_config_fingerprint,
+    options = chunk_options,
+    model_segment_seconds = chunk_model_policy$model_segment_seconds,
+    model_decision_reason = chunk_model_policy$decision_reason,
+    input_duration_seconds = input_duration_seconds
+  )
+  on.exit(.stt_chunk_release_lock(chunk_plan$lock), add = TRUE)
+  if (!is.null(chunk_plan$cleanup_dir)) {
+    cleanup_dir <- chunk_plan$cleanup_dir
+    on.exit(
+      if (dir.exists(cleanup_dir)) {
+        unlink(cleanup_dir, recursive = TRUE, force = TRUE)
+      },
+      add = TRUE
+    )
+  }
+  backend_audio_path <- chunk_plan$audio_path
+
   raw_transcription <- NULL
   transcribed_text <- NULL
   provider_metadata <- list()
   error_message <- NULL
 
   raw_transcription <- tryCatch({
-    switch(service,
-      "openai" = .stt_openai(prep$path, model, language, prompt, timeout_api),
-      "groq" = .stt_groq(prep$path, model, language, prompt, timeout_api),
-      "assemblyai" = .stt_assemblyai(prep$path, language, poll_interval, max_poll_seconds, timeout_api),
-      "cloudflare" = .stt_cloudflare(prep$path, timeout_api),
-      "voicegain" = .stt_voicegain(prep$path, language, poll_interval, max_poll_seconds, timeout_api),
-      "hf" = .stt_hf(prep$path, model, timeout_api),
-      "replicate" = .stt_replicate(prep$path, model, timeout_api, poll_interval, max_poll_seconds),
+    if (isTRUE(chunk_plan$chunked)) {
+      chunk_call_arguments <- c(
+        list(
+          service = service,
+          model = model,
+          language = language,
+          prompt = prompt,
+          directory = directory,
+          label = label_base,
+          convert = convert,
+          diarize = diarize,
+          diarize_speakers = diarize_speakers,
+          diarize_embedder = diarize_embedder,
+          timestamps = timestamps,
+          timeout_api = timeout_api_base,
+          timeout_per_audio_minute = timeout_per_audio_minute,
+          poll_interval = poll_interval,
+          max_poll_seconds = max_poll_seconds,
+          executable = executable,
+          native_engine = native_engine,
+          native_backend = native_backend,
+          native_quant = native_quant,
+          native_kv_quant = native_kv_quant,
+          native_device = native_device,
+          max_new_tokens = max_new_tokens,
+          base_url = base_url,
+          api_key = api_key,
+          response_format = response_format
+        ),
+        dots
+      )
+      .stt_chunk_transcribe_parts(
+        plan = chunk_plan,
+        call_arguments = chunk_call_arguments,
+        options = chunk_options,
+        timestamps = timestamps
+      )
+    } else switch(service,
+      "openai" = .stt_openai(backend_audio_path, model, language, prompt, timeout_api),
+      "groq" = .stt_groq(backend_audio_path, model, language, prompt, timeout_api),
+      "assemblyai" = .stt_assemblyai(backend_audio_path, language, poll_interval, max_poll_seconds, timeout_api),
+      "cloudflare" = .stt_cloudflare(backend_audio_path, timeout_api),
+      "voicegain" = .stt_voicegain(backend_audio_path, language, poll_interval, max_poll_seconds, timeout_api),
+      "hf" = .stt_hf(backend_audio_path, model, timeout_api),
+      "replicate" = .stt_replicate(backend_audio_path, model, timeout_api, poll_interval, max_poll_seconds),
       "local-openai" = .stt_local_openai(
-        audio_path = prep$path,
+        audio_path = backend_audio_path,
         model = model,
         language = language,
         prompt = prompt,
@@ -330,7 +530,7 @@ gen_stt.default <- function(
         max_new_tokens = max_new_tokens
       ),
       "local-native" = .stt_local_native(
-        audio_path = prep$path,
+        audio_path = backend_audio_path,
         audio_duration_seconds = input_duration_seconds,
         model = model,
         language = language,
@@ -359,6 +559,22 @@ gen_stt.default <- function(
   normalized <- .stt_normalize_result(raw_transcription)
   transcribed_text <- normalized$text
   provider_metadata <- normalized$metadata
+  if (!isTRUE(chunk_plan$chunked) &&
+      (isTRUE(chunk_plan$prepared) ||
+        !is.null(chunk_plan$decision_reason))) {
+    chunking_metadata <- list(
+      schema_version = 1L,
+      enabled = FALSE,
+      decision_reason = chunk_plan$decision_reason,
+      model_segment_seconds = chunk_plan$model_segment_seconds,
+      prepared_format = chunk_plan$prepared_format,
+      prepared_size_bytes = chunk_plan$prepared_size_bytes,
+      input_duration_seconds = chunk_plan$input_duration_seconds
+    )
+    provider_metadata$chunking <- chunking_metadata[
+      !vapply(chunking_metadata, is.null, logical(1))
+    ]
+  }
   # Match the other generators: the public `model` field reflects what the
   # caller selected. Runtime-resolved paths remain available in metadata.
   effective_model <- model %||% provider_metadata$model %||%
@@ -468,8 +684,30 @@ gen_stt.default <- function(
     )
   }
 
+  if (identical(final_status, "SUCCESS") &&
+      !is.null(chunk_plan$checkpoint_root)) {
+    prune_error <- tryCatch(
+      {
+        .stt_chunk_prune_runs(
+          checkpoint_dir = chunk_plan$checkpoint_root,
+          current_run_dir = chunk_plan$run_dir,
+          keep_previous = 1L
+        )
+        NULL
+      },
+      error = function(e) conditionMessage(e)
+    )
+    if (!is.null(prune_error)) {
+      warning(
+        "Transcription succeeded, but superseded STT checkpoints could not ",
+        "be pruned: ", prune_error,
+        call. = FALSE
+      )
+    }
+  }
+
   .stt_report_result(result)
-  return(invisible(result))
+  return(invisible(.stt_project_output(result, chunk_options$output)))
 }
 
 #' @rdname gen_stt
@@ -619,7 +857,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
         "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
-        path
+        shQuote(path)
       ),
       stdout = TRUE,
       stderr = TRUE
@@ -697,6 +935,15 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
   mapped <- unname(aliases[service_id])
   if (length(mapped) == 1L && !is.na(mapped)) mapped else service_id
+}
+
+#' @keywords internal
+#' @noRd
+.stt_supported_services <- function() {
+  c(
+    "openai", "groq", "assemblyai", "cloudflare", "voicegain", "hf",
+    "replicate", "local-openai", "local-native"
+  )
 }
 
 #' @keywords internal

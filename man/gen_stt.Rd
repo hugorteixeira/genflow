@@ -36,6 +36,17 @@ gen_stt(audio, ...)
   base_url = NULL,
   api_key = NULL,
   response_format = "json",
+  chunking = c("auto", "never"),
+  chunk_max_mb = NULL,
+  chunk_bitrate_kbps = 48,
+  chunk_segment_seconds = NULL,
+  chunk_overlap_seconds = 8,
+  checkpoint_dir = NULL,
+  resume = TRUE,
+  chunk_retry_forever = TRUE,
+  chunk_max_retries = 20,
+  chunk_retry_wait_seconds = 2,
+  output = c("full", "transcript"),
   ...
 )
 
@@ -74,7 +85,9 @@ auto-detection is used when supported.}
 \item{save_txt}{Logical; save transcript to disk if TRUE.}
 
 \item{convert}{Logical; if TRUE, attempt ffmpeg conversion for unsupported
-audio formats.}
+audio formats on the single-file path. When large-audio chunking is
+required, genflow still uses ffmpeg to prepare deterministic native WAV
+chunks or remote-service MP3 chunks.}
 
 \item{diarize}{Logical; when \code{TRUE}, request speaker attribution from native
 adapters that expose a model-native opt-in mode (currently CrispASR
@@ -166,11 +179,60 @@ both are empty.}
 
 \item{response_format}{Response format requested from a local
 OpenAI-compatible server, typically \code{"json"} or \code{"verbose_json"}.}
+
+\item{chunking}{Large-audio orchestration policy: \code{"auto"} prepares and
+chunks only when an explicit limit, an adapter-owned transport limit, or a
+documented model/runtime limit requires it; \code{"never"} sends the input
+through the existing single-file path.}
+
+\item{chunk_max_mb}{Optional positive maximum chunk size in MiB. \code{NULL}
+uses the finite local-file transport limit owned by the selected adapter;
+an infinite adapter limit preserves whole-file behavior unless the
+selected model/runtime has a documented duration limit.}
+
+\item{chunk_bitrate_kbps}{Positive MP3 bitrate used while preparing chunks
+for remote services. Native local STT uses PCM 16-bit WAV instead.}
+
+\item{chunk_segment_seconds}{Optional positive target duration for each
+chunk. \code{NULL} derives a duration from the prepared file and size limit.}
+
+\item{chunk_overlap_seconds}{Non-negative overlap between adjacent chunks.
+The default eight-second window gives the conservative reconciliation
+step evidence for deduplicating text and aligning speaker labels.}
+
+\item{checkpoint_dir}{Optional persistent directory for opaque per-chunk
+media and result checkpoints. Treat its layout as internal to genflow.
+Recoverable per-run locks enforce a single writer and make a concurrent
+call fail fast instead of corrupting checkpoints. After a successful call,
+Genflow keeps the current run plus one prior valid run for that recording
+and safely prunes older superseded runs. \code{NULL} uses a temporary directory
+for this call.}
+
+\item{resume}{Logical; reuse valid chunk media and successful opaque result
+checkpoints when available.}
+
+\item{chunk_retry_forever}{Logical; retry recognized transient per-chunk
+failures until success or interruption. Permanent and unknown errors stop.}
+
+\item{chunk_max_retries}{Non-negative integer number of retries allowed
+after the initial attempt when \code{chunk_retry_forever = FALSE}.}
+
+\item{chunk_retry_wait_seconds}{Non-negative initial retry delay in seconds;
+subsequent transient retries use capped exponential backoff.}
+
+\item{output}{Return projection: \code{"full"} preserves the complete regular
+STT result; \code{"transcript"} returns a smaller regular result that still
+contains the common status/service/model fields plus text, segments,
+diarization, chunking, and reconciliation metadata.}
 }
 \value{
 Invisibly returns a plain list with \code{response_value} (plain
 transcribed text), \code{status_api}, \code{status_msg}, \code{service}, \code{model},
-\code{duration}, \code{saved_file}, and metadata such as \code{audio}. When
+\code{duration} (elapsed processing seconds), \code{saved_file}, and metadata such
+as \code{audio}. A chunked call
+additionally exposes normalized chunking and reconciliation metadata;
+speaker identities that cannot be reconciled safely remain explicitly
+unresolved instead of being guessed. When
 \code{diarize = TRUE}, diarized results additionally include
 \code{diarized_transcript} and \code{saved_metadata_file} when saving is enabled.
 Timestamps are optional and disabled by default. As with the other

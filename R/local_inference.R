@@ -1116,6 +1116,16 @@ gen_local_diagnostics <- function(config = NULL,
       if (nzchar(ffmpeg)) ffmpeg else
         "FFmpeg was not found; some audio formats may not load locally."
     )
+    ffprobe <- .genflow_resolve_executable("", "ffprobe")
+    rows[[length(rows) + 1L]] <- .genflow_diagnostic_row(
+      "FFprobe",
+      if (nzchar(ffprobe)) "ok" else "warning",
+      if (nzchar(ffprobe)) ffprobe else
+        paste0(
+          "ffprobe was not found; duration-aware timeouts and safe ",
+          "large-audio model limits are unavailable."
+        )
+    )
   }
 
   if (wants("local-native")) {

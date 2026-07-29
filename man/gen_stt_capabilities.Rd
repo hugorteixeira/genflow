@@ -18,7 +18,9 @@ every possible upstream model or account limit.
 \description{
 Returns stable transport constraints that orchestration clients may need
 before calling \code{\link[=gen_stt]{gen_stt()}}. Provider-specific limits remain owned by
-genflow instead of being duplicated in downstream packages.
+genflow instead of being duplicated in downstream packages. This is
+informational capability discovery; callers should still pass the original
+recording to \code{\link[=gen_stt]{gen_stt()}} instead of recreating its chunk orchestration.
 }
 \examples{
 gen_stt_capabilities("replicate")$max_local_file_bytes

@@ -815,6 +815,7 @@ test_that("gen_stt saves readable diarization and a structured JSON sidecar", {
 
   testthat::local_mocked_bindings(
     .stt_local_native = function(...) normalized,
+    .stt_audio_duration_seconds = function(...) 10,
     .package = "genflow"
   )
 
@@ -883,6 +884,7 @@ test_that("diarize FALSE keeps plain output even when speaker metadata exists", 
 
   testthat::local_mocked_bindings(
     .stt_local_native = function(...) normalized,
+    .stt_audio_duration_seconds = function(...) 10,
     .package = "genflow"
   )
 

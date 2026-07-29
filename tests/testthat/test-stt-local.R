@@ -420,6 +420,7 @@ test_that("gen_stt canonicalizes native services and preserves MOSS aliases", {
   seen <- NULL
 
   testthat::local_mocked_bindings(
+    .stt_audio_duration_seconds = function(...) 10,
     .stt_local_native = function(...) {
       seen <<- list(...)
       list(

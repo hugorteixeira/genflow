@@ -21,7 +21,17 @@ Primary goal: keep provider integrations consistent across runtime, batch, model
   - `gen_txt.default()` normalizes inputs, dispatches by `service`, saves output, returns structured status list.
   - Provider implementations currently in-tree: `.gen_txt_openai()`, `.gen_txt_openrouter()`, `.gen_txt_hf()`, `.gen_txt_ollama()`, `.gen_txt_llamacpp()`.
 - Image runtime entrypoint: `R/image_functions.R` (`gen_img.default()` + provider-specific internals).
-- STT runtime entrypoint: `R/stt_functions.R` (`gen_stt.default()` + provider-specific internals).
+- STT runtime entrypoint: `R/stt_functions.R` (`gen_stt.default()` +
+  provider-specific internals).
+  - `R/stt_chunking.R` owns large-audio preparation, model/transport limits,
+    overlap windows, opaque checkpoints, resume/retry, and final orchestration.
+  - `R/stt_reconciliation.R` owns cross-chunk speaker mapping, overlap
+    deduplication, uncertainty, global timestamps, and transcript rendering.
+  - `R/stt_signature.R` exposes the secret-free effective STT configuration
+    fingerprint used by downstream caches; keep it aligned with runtime
+    resolution whenever STT semantics, endpoints, or native artifacts change.
+  - Callers such as Fossick may supply a checkpoint directory, but must treat
+    its contents as opaque and must not duplicate these responsibilities.
 - TTS runtime entrypoint: `R/tts_functions.R` (`gen_tts.default()` + provider-specific internals).
 - Batch/parallel runtime:
   - `R/batch_functions.R` orchestrates batches.
@@ -52,6 +62,10 @@ All high-level generators should return a list with this shape (or compatible su
 
 Text (`gen_txt`) also expects token estimates and persists responses through `.save_response()`.
 Batch worker code expects list-like responses and uses `status_api` for error handling.
+
+`gen_stt(output = "transcript")` is a smaller compatible list, not a character
+shortcut. It must retain the common runtime fields plus normalized transcript,
+diarization, chunking, and reconciliation metadata.
 
 ## Service Naming Rules
 - Service ids are lowercase (examples: `openai`, `openrouter`, `hf`).

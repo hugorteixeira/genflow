@@ -403,6 +403,7 @@ test_that("local diagnostics can run without endpoint probes", {
   expect_named(result, c("component", "status", "detail"))
   expect_true(all(c(
     "FFmpeg",
+    "FFprobe",
     "Native STT CLI",
     "Native STT cache",
     "Vulkan"
