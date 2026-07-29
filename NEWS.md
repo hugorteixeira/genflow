@@ -1,3 +1,14 @@
+# genflow 0.0.7
+
+- Added semantic `chunk_format = "auto"`, `"wav"`, or `"mp3"` selection.
+  CrispASR can now receive compact native MP3 chunks; moss-transcribe.cpp
+  rejects MP3 early because its CLI requires WAV.
+- Added operational `checkpoint_retention = "results"` cleanup, which removes
+  only safe Genflow-owned prepared/chunk audio after a successful result while
+  retaining manifests and per-part transcript checkpoints. Its structured
+  `checkpoint_media_cleanup_complete` result prevents downstream retention
+  markers from treating partial cleanup as complete.
+
 # genflow 0.0.6
 
 - `gen_stt()` now owns large-audio preparation, chunk planning, overlap,

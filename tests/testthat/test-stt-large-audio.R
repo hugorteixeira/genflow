@@ -90,12 +90,23 @@ test_that("large-audio public controls validate without touching a backend", {
     "timeout_per_audio_minute", "poll_interval", "max_poll_seconds",
     "executable", "native_engine", "native_backend", "native_quant",
     "native_kv_quant", "native_device", "max_new_tokens", "base_url",
-    "api_key", "response_format"
+    "api_key", "response_format", "chunking", "chunk_max_mb",
+    "chunk_bitrate_kbps", "chunk_segment_seconds", "chunk_overlap_seconds",
+    "checkpoint_dir", "resume", "chunk_retry_forever", "chunk_max_retries",
+    "chunk_retry_wait_seconds", "output"
   )
+  public_formals <- names(formals(genflow:::gen_stt.default))
   expect_identical(
-    names(formals(genflow:::gen_stt.default))[seq_along(legacy_formals)],
+    public_formals[seq_along(legacy_formals)],
     legacy_formals
   )
+  expect_identical(
+    public_formals[
+      seq.int(length(legacy_formals) + 1L, length(legacy_formals) + 2L)
+    ],
+    c("chunk_format", "checkpoint_retention")
+  )
+  expect_identical(utils::tail(public_formals, 1L), "...")
 
   expect_error(
     genflow:::.stt_chunk_validate_options(chunk_max_mb = 0),
@@ -116,6 +127,14 @@ test_that("large-audio public controls validate without touching a backend", {
     genflow:::.stt_chunk_validate_options(chunk_max_retries = 1.5),
     "whole number"
   )
+  expect_error(
+    genflow:::.stt_chunk_validate_options(chunk_format = "flac"),
+    "arg"
+  )
+  expect_error(
+    genflow:::.stt_chunk_validate_options(checkpoint_retention = "none"),
+    "arg"
+  )
 
   options <- genflow:::.stt_chunk_validate_options(
     chunking = "auto",
@@ -123,16 +142,97 @@ test_that("large-audio public controls validate without touching a backend", {
     chunk_bitrate_kbps = "48",
     chunk_segment_seconds = "300",
     chunk_overlap_seconds = "8",
+    chunk_format = "mp3",
+    checkpoint_retention = "results",
     output = "transcript"
   )
   expect_identical(options$chunking, "auto")
   expect_identical(options$chunk_max_mb, 10)
   expect_identical(options$chunk_bitrate_kbps, 48L)
   expect_identical(options$chunk_segment_seconds, 300)
+  expect_identical(options$chunk_format, "mp3")
+  expect_identical(options$checkpoint_retention, "results")
   expect_identical(options$output, "transcript")
   expect_equal(
     genflow:::.stt_chunk_starts(1000, 300, 8),
     c(0, 292, 584, 876)
+  )
+})
+
+test_that("chunk format auto preserves defaults and explicit MP3 reaches native planning", {
+  expect_identical(
+    genflow:::.stt_chunk_resolve_format("local-native", "auto"),
+    "wav"
+  )
+  expect_identical(
+    genflow:::.stt_chunk_resolve_format("openai", "auto"),
+    "mp3"
+  )
+
+  source <- stt_large_audio_file()
+  checkpoint <- tempfile("genflow-native-mp3-checkpoint-")
+  on.exit(unlink(c(source, checkpoint), recursive = TRUE), add = TRUE)
+  formats <- character()
+
+  testthat::local_mocked_bindings(
+    .stt_chunk_prepare_media = function(source,
+                                        target,
+                                        format,
+                                        bitrate_kbps) {
+      formats <<- c(formats, format)
+      writeBin(as.raw(rep(2L, 1000L)), target)
+      invisible(target)
+    },
+    .stt_chunk_extract_media = function(source,
+                                        target,
+                                        start_seconds,
+                                        duration_seconds,
+                                        format,
+                                        bitrate_kbps) {
+      formats <<- c(formats, format)
+      writeBin(as.raw(rep(3L, 100L)), target)
+      invisible(target)
+    },
+    .stt_audio_duration_seconds = function(path) 100,
+    .package = "genflow"
+  )
+
+  options <- genflow:::.stt_chunk_validate_options(
+    chunk_max_mb = 0.0002,
+    chunk_overlap_seconds = 2,
+    chunk_format = "mp3",
+    checkpoint_dir = checkpoint
+  )
+  plan <- genflow:::.stt_chunk_plan_audio(
+    source,
+    service = "local-native",
+    config_fingerprint = "native-mp3-config",
+    options = options
+  )
+  on.exit(genflow:::.stt_chunk_release_lock(plan$lock), add = TRUE)
+
+  expect_true(plan$chunked)
+  expect_identical(plan$chunk_format, "mp3")
+  expect_identical(plan$prepared_format, "mp3")
+  expect_true(all(formats == "mp3"))
+  expect_identical(readRDS(plan$manifest_path)$prepared_format, "mp3")
+})
+
+test_that("moss-transcribe rejects explicit MP3 chunks before inference", {
+  expect_error(
+    genflow:::.stt_chunk_validate_native_format(
+      service = "local-native",
+      format = "mp3",
+      engine = "moss-transcribe"
+    ),
+    "requires WAV"
+  )
+  expect_invisible(
+    genflow:::.stt_chunk_validate_native_format(
+      service = "local-native",
+      format = "mp3",
+      engine = "crispasr"
+    )
   )
 })
 
@@ -931,6 +1031,184 @@ test_that("checkpoint pruning keeps current and newest valid previous run", {
   if (linked) expect_true(file.exists(marker))
 })
 
+test_that("results-only retention removes safe media and preserves checkpoints", {
+  checkpoint <- tempfile("genflow-results-retention-")
+  outside <- tempfile("genflow-results-retention-outside-")
+  dir.create(checkpoint, recursive = TRUE)
+  dir.create(outside, recursive = TRUE)
+  on.exit(unlink(c(checkpoint, outside), recursive = TRUE), add = TRUE)
+
+  create_run <- function(key, source_fingerprint) {
+    run <- file.path(checkpoint, paste0("run-", key))
+    dir.create(run, recursive = TRUE)
+    prepared <- file.path(run, "prepared.wav")
+    part <- file.path(run, "part_0001.wav")
+    result <- file.path(run, "part_0001.result.rds")
+    writeBin(as.raw(c(1, 2, 3)), prepared)
+    writeBin(as.raw(c(4, 5, 6)), part)
+    saveRDS(list(response_value = "kept"), result)
+    manifest <- list(
+      schema_version = 2L,
+      key = key,
+      source_fingerprint = source_fingerprint,
+      prepared_path = prepared,
+      prepared_format = "wav",
+      parts = list(list(
+        audio_path = part,
+        result_path = result
+      ))
+    )
+    genflow:::.genflow_atomic_save_rds(
+      manifest,
+      file.path(run, "manifest.rds")
+    )
+    list(
+      run = run,
+      prepared = prepared,
+      part = part,
+      result = result,
+      manifest = file.path(run, "manifest.rds")
+    )
+  }
+
+  current <- create_run("aa", "recording-a")
+  previous <- create_run("bb", "recording-a")
+  other <- create_run("cc", "recording-b")
+  outside_part <- file.path(outside, "part_0002.wav")
+  writeBin(as.raw(c(7, 8, 9)), outside_part)
+  marker <- file.path(outside, "marker.wav")
+  writeBin(as.raw(c(10, 11, 12)), marker)
+  linked_part <- file.path(current$run, "part_0003.wav")
+  linked <- isTRUE(file.symlink(marker, linked_part))
+
+  manifest <- readRDS(current$manifest)
+  manifest$parts[[2]] <- list(audio_path = outside_part)
+  if (linked) manifest$parts[[3]] <- list(audio_path = linked_part)
+  genflow:::.genflow_atomic_save_rds(manifest, current$manifest)
+
+  cleaned <- genflow:::.stt_chunk_cleanup_checkpoint_media(
+    checkpoint,
+    current_run_dir = current$run
+  )
+
+  expect_length(cleaned$deleted, 4L)
+  expect_length(cleaned$remaining, if (linked) 2L else 1L)
+  expect_true(outside_part %in% cleaned$remaining)
+  if (linked) expect_true(linked_part %in% cleaned$remaining)
+  expect_false(any(file.exists(c(
+    current$prepared, current$part,
+    previous$prepared, previous$part
+  ))))
+  expect_true(all(file.exists(c(
+    current$result, current$manifest,
+    previous$result, previous$manifest,
+    other$prepared, other$part, other$result, other$manifest,
+    outside_part, marker
+  ))))
+  if (linked) expect_true(nzchar(Sys.readlink(linked_part)))
+})
+
+test_that("results-only retention leaves an active run untouched", {
+  checkpoint <- tempfile("genflow-results-retention-active-")
+  dir.create(checkpoint, recursive = TRUE)
+  on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
+  run <- file.path(checkpoint, "run-aa")
+  dir.create(run)
+  prepared <- file.path(run, "prepared.wav")
+  writeBin(as.raw(c(1, 2, 3)), prepared)
+  manifest <- list(
+    schema_version = 2L,
+    key = "aa",
+    source_fingerprint = "recording-a",
+    prepared_path = prepared,
+    prepared_format = "wav",
+    parts = list()
+  )
+  genflow:::.genflow_atomic_save_rds(
+    manifest,
+    file.path(run, "manifest.rds")
+  )
+  lock <- genflow:::.stt_chunk_acquire_lock(run)
+  on.exit(genflow:::.stt_chunk_release_lock(lock), add = TRUE)
+
+  cleaned <- genflow:::.stt_chunk_cleanup_checkpoint_media(
+    checkpoint,
+    current_run_dir = run
+  )
+  expect_identical(cleaned$skipped_runs, "run-aa")
+  expect_length(cleaned$remaining, 0L)
+  expect_true(file.exists(prepared))
+})
+
+test_that("results-only retention reports regular files that unlink cannot remove", {
+  checkpoint <- tempfile("genflow-results-retention-unlink-")
+  dir.create(checkpoint, recursive = TRUE)
+  on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
+  run <- file.path(checkpoint, "run-aa")
+  dir.create(run)
+  prepared <- file.path(run, "prepared.wav")
+  writeBin(as.raw(c(1, 2, 3)), prepared)
+  manifest <- list(
+    schema_version = 2L,
+    key = "aa",
+    source_fingerprint = "recording-a",
+    prepared_path = prepared,
+    prepared_format = "wav",
+    parts = list()
+  )
+  genflow:::.genflow_atomic_save_rds(
+    manifest,
+    file.path(run, "manifest.rds")
+  )
+  testthat::local_mocked_bindings(
+    .stt_chunk_remove_media_file = function(path) invisible(1L),
+    .package = "genflow"
+  )
+
+  cleaned <- genflow:::.stt_chunk_cleanup_checkpoint_media(
+    checkpoint,
+    current_run_dir = run
+  )
+  expect_length(cleaned$deleted, 0L)
+  expect_identical(cleaned$remaining, prepared)
+  expect_true(file.exists(prepared))
+})
+
+test_that("results-only retention rejects indeterminate current run state", {
+  checkpoint <- tempfile("genflow-results-retention-invalid-")
+  dir.create(checkpoint, recursive = TRUE)
+  on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
+
+  unsafe_name <- file.path(checkpoint, "current")
+  dir.create(unsafe_name)
+  expect_error(
+    genflow:::.stt_chunk_cleanup_checkpoint_media(
+      checkpoint,
+      current_run_dir = unsafe_name
+    ),
+    "safe direct run"
+  )
+
+  invalid_run <- file.path(checkpoint, "run-aa")
+  dir.create(invalid_run)
+  genflow:::.genflow_atomic_save_rds(
+    list(
+      schema_version = 99L,
+      key = "aa",
+      source_fingerprint = "recording-a",
+      parts = list()
+    ),
+    file.path(invalid_run, "manifest.rds")
+  )
+  expect_error(
+    genflow:::.stt_chunk_cleanup_checkpoint_media(
+      checkpoint,
+      current_run_dir = invalid_run
+    ),
+    "manifest is invalid"
+  )
+})
+
 test_that("saved or explicit MOSS Diarize selection resolves a model cap", {
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_model <- "moss-transcribe-diarize-0.9b-q8_0.gguf"
@@ -1082,6 +1360,10 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
   plan <- stt_large_plan_fixture(checkpoint)
   on.exit(unlink(c(audio, checkpoint), recursive = TRUE), add = TRUE)
   calls <- 0L
+  cleanup_calls <- 0L
+  plan$checkpoint_root <- checkpoint
+  plan$run_dir <- file.path(checkpoint, "run-fixture")
+  plan$lock <- NULL
 
   testthat::local_mocked_bindings(
     .stt_audio_duration_seconds = function(path) 19,
@@ -1121,6 +1403,11 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
         stt_large_result("continues now.", "S01", 0, 10)
       }
     },
+    .stt_chunk_prune_runs = function(...) character(),
+    .stt_chunk_cleanup_checkpoint_media = function(...) {
+      cleanup_calls <<- cleanup_calls + 1L
+      list(deleted = c("prepared.wav", "part_0001.wav"), skipped_runs = character())
+    },
     .package = "genflow"
   )
 
@@ -1128,25 +1415,239 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
     audio,
     service = "local-native",
     model = "mock.gguf",
-    save_txt = FALSE,
+    directory = checkpoint,
+    save_txt = TRUE,
     chunk_max_mb = 10,
     checkpoint_dir = checkpoint,
+    checkpoint_retention = "results",
     output = "transcript"
   ))
 
   expect_identical(result$status_api, "SUCCESS")
   expect_identical(calls, 2L)
+  expect_identical(cleanup_calls, 1L)
   expect_match(result$response_value, "continues now", fixed = TRUE)
   expect_true("diarized_transcript" %in% names(result))
   expect_identical(result$metadata$chunking$part_count, 2L)
+  expect_identical(result$metadata$chunking$checkpoint_retention, "results")
+  expect_true(
+    result$metadata$chunking$checkpoint_media_cleanup_complete
+  )
+  expect_false(result$metadata$chunking$checkpoint_media_retained)
+  expect_identical(
+    result$metadata$chunking$checkpoint_media_removed_count,
+    2L
+  )
   expect_identical(result$metadata$diarization$speaker_count, 2L)
   expect_true("saved_file" %in% names(result))
-  expect_true(is.na(result$saved_file))
+  expect_true(file.exists(result$saved_file))
+  expect_true(file.exists(result$saved_metadata_file))
+  sidecar <- jsonlite::fromJSON(
+    result$saved_metadata_file,
+    simplifyVector = FALSE
+  )
+  expect_identical(
+    sidecar$metadata$chunking$checkpoint_media_cleanup_complete,
+    result$metadata$chunking$checkpoint_media_cleanup_complete
+  )
+  expect_identical(
+    sidecar$metadata$chunking$checkpoint_media_retained,
+    result$metadata$chunking$checkpoint_media_retained
+  )
+  expect_equal(
+    sidecar$metadata$chunking$checkpoint_media_removed_count,
+    result$metadata$chunking$checkpoint_media_removed_count
+  )
   expect_identical(result$service, "local-native")
   expect_identical(result$model, "mock.gguf")
   expect_identical(result$label, tools::file_path_sans_ext(basename(audio)))
   expect_identical(result$audio, audio)
   expect_true(is.numeric(result$duration))
+})
+
+test_that("results-only retention never cleans checkpoint media after failure", {
+  audio <- stt_large_audio_file()
+  checkpoint <- tempfile("genflow-retention-failure-")
+  on.exit(unlink(c(audio, checkpoint), recursive = TRUE), add = TRUE)
+  cleanup_calls <- 0L
+
+  testthat::local_mocked_bindings(
+    .stt_audio_duration_seconds = function(path) 10,
+    .stt_chunk_runtime_artifacts = function(...) list(),
+    .stt_chunk_model_policy = function(...) {
+      list(model_segment_seconds = NULL, decision_reason = NULL)
+    },
+    .stt_chunk_plan_audio = function(audio_path, ...) {
+      list(
+        chunked = FALSE,
+        audio_path = audio_path,
+        cleanup_dir = NULL,
+        prepared = TRUE,
+        chunk_format = "mp3",
+        prepared_format = "mp3",
+        prepared_size_bytes = 100,
+        input_duration_seconds = 10,
+        decision_reason = "within-configured-limits",
+        model_segment_seconds = NULL,
+        checkpoint_root = checkpoint,
+        run_dir = file.path(checkpoint, "run-fixture"),
+        lock = NULL
+      )
+    },
+    .stt_local_openai = function(...) NULL,
+    .stt_chunk_cleanup_checkpoint_media = function(...) {
+      cleanup_calls <<- cleanup_calls + 1L
+      list(deleted = character(), skipped_runs = character())
+    },
+    .package = "genflow"
+  )
+
+  capture.output(result <- gen_stt(
+    audio,
+    service = "local-openai",
+    save_txt = FALSE,
+    chunk_max_mb = 10,
+    chunk_format = "mp3",
+    checkpoint_dir = checkpoint,
+    checkpoint_retention = "results"
+  ))
+
+  expect_identical(result$status_api, "ERROR")
+  expect_identical(cleanup_calls, 0L)
+})
+
+test_that("results-only retention exposes incomplete cleanup to callers", {
+  audio <- stt_large_audio_file()
+  checkpoint <- tempfile("genflow-retention-incomplete-")
+  on.exit(unlink(c(audio, checkpoint), recursive = TRUE), add = TRUE)
+
+  testthat::local_mocked_bindings(
+    .stt_audio_duration_seconds = function(path) 10,
+    .stt_chunk_runtime_artifacts = function(...) list(),
+    .stt_chunk_model_policy = function(...) {
+      list(model_segment_seconds = NULL, decision_reason = NULL)
+    },
+    .stt_chunk_plan_audio = function(audio_path, ...) {
+      list(
+        chunked = FALSE,
+        audio_path = audio_path,
+        cleanup_dir = NULL,
+        prepared = TRUE,
+        chunk_format = "mp3",
+        prepared_format = "mp3",
+        prepared_size_bytes = 100,
+        input_duration_seconds = 10,
+        decision_reason = "within-configured-limits",
+        model_segment_seconds = NULL,
+        checkpoint_root = checkpoint,
+        run_dir = file.path(checkpoint, "run-fixture"),
+        lock = NULL
+      )
+    },
+    .stt_local_openai = function(...) "Transcript.",
+    .stt_chunk_prune_runs = function(...) character(),
+    .stt_chunk_cleanup_checkpoint_media = function(...) {
+      list(
+        deleted = character(),
+        remaining = "prepared.mp3",
+        skipped_runs = character()
+      )
+    },
+    .package = "genflow"
+  )
+
+  expect_warning(
+    capture.output(result <- gen_stt(
+      audio,
+      service = "local-openai",
+      save_txt = FALSE,
+      chunk_max_mb = 10,
+      chunk_format = "mp3",
+      checkpoint_dir = checkpoint,
+      checkpoint_retention = "results"
+    )),
+    "managed STT checkpoint media"
+  )
+
+  expect_identical(result$status_api, "SUCCESS")
+  expect_false(
+    result$metadata$chunking$checkpoint_media_cleanup_complete
+  )
+  expect_true(result$metadata$chunking$checkpoint_media_retained)
+  expect_identical(
+    result$metadata$chunking$checkpoint_media_cleanup_remaining_paths,
+    "prepared.mp3"
+  )
+})
+
+test_that("invalid current manifests expose incomplete cleanup to callers", {
+  audio <- stt_large_audio_file()
+  checkpoint <- tempfile("genflow-retention-invalid-public-")
+  run <- file.path(checkpoint, "run-aa")
+  dir.create(run, recursive = TRUE)
+  on.exit(unlink(c(audio, checkpoint), recursive = TRUE), add = TRUE)
+  genflow:::.genflow_atomic_save_rds(
+    list(
+      schema_version = 99L,
+      key = "aa",
+      source_fingerprint = "recording-a",
+      parts = list()
+    ),
+    file.path(run, "manifest.rds")
+  )
+
+  testthat::local_mocked_bindings(
+    .stt_audio_duration_seconds = function(path) 10,
+    .stt_chunk_runtime_artifacts = function(...) list(),
+    .stt_chunk_model_policy = function(...) {
+      list(model_segment_seconds = NULL, decision_reason = NULL)
+    },
+    .stt_chunk_plan_audio = function(audio_path, ...) {
+      list(
+        chunked = FALSE,
+        audio_path = audio_path,
+        cleanup_dir = NULL,
+        prepared = TRUE,
+        chunk_format = "mp3",
+        prepared_format = "mp3",
+        prepared_size_bytes = 100,
+        input_duration_seconds = 10,
+        decision_reason = "within-configured-limits",
+        model_segment_seconds = NULL,
+        checkpoint_root = checkpoint,
+        run_dir = run,
+        lock = NULL
+      )
+    },
+    .stt_local_openai = function(...) "Transcript.",
+    .stt_chunk_prune_runs = function(...) character(),
+    .package = "genflow"
+  )
+
+  expect_warning(
+    capture.output(result <- gen_stt(
+      audio,
+      service = "local-openai",
+      save_txt = FALSE,
+      chunk_max_mb = 10,
+      chunk_format = "mp3",
+      checkpoint_dir = checkpoint,
+      checkpoint_retention = "results"
+    )),
+    "current STT checkpoint manifest is invalid"
+  )
+
+  expect_identical(result$status_api, "SUCCESS")
+  expect_false(
+    result$metadata$chunking$checkpoint_media_cleanup_complete
+  )
+  expect_true(is.na(
+    result$metadata$chunking$checkpoint_media_retained
+  ))
+  expect_match(
+    result$metadata$chunking$checkpoint_media_cleanup_error,
+    "manifest is invalid"
+  )
 })
 
 test_that("checkpoint fingerprints follow effective endpoint and model", {

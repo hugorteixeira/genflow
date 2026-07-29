@@ -110,6 +110,28 @@ test_that("chunk controls use the regular STT validation", {
     gen_stt_signature(stt_args = list(chunk_overlap_seconds = 8)),
     gen_stt_signature(stt_args = list(chunk_overlap_seconds = 4))
   ))
+  expect_false(identical(
+    gen_stt_signature(stt_args = list(chunk_format = "wav")),
+    gen_stt_signature(stt_args = list(chunk_format = "mp3"))
+  ))
+  expect_identical(
+    gen_stt_signature(
+      service = "local-native",
+      model = "mock.gguf",
+      stt_args = list(
+        native_engine = "crispasr",
+        chunk_format = "auto"
+      )
+    ),
+    gen_stt_signature(
+      service = "local-native",
+      model = "mock.gguf",
+      stt_args = list(
+        native_engine = "crispasr",
+        chunk_format = "wav"
+      )
+    )
+  )
 })
 
 test_that("credentials and operational controls never change the signature", {
@@ -122,6 +144,7 @@ test_that("credentials and operational controls never change the signature", {
       timeout_api = 30,
       timeout_per_audio_minute = 10,
       checkpoint_dir = tempfile("signature-checkpoint-a-"),
+      checkpoint_retention = "all",
       resume = FALSE,
       chunk_retry_forever = FALSE,
       chunk_max_retries = 2,
@@ -139,6 +162,7 @@ test_that("credentials and operational controls never change the signature", {
       timeout_api = 900,
       timeout_per_audio_minute = 120,
       checkpoint_dir = tempfile("signature-checkpoint-b-"),
+      checkpoint_retention = "results",
       resume = TRUE,
       chunk_retry_forever = TRUE,
       chunk_max_retries = 99,
@@ -148,6 +172,20 @@ test_that("credentials and operational controls never change the signature", {
     )
   )
   expect_identical(first, second)
+})
+
+test_that("Moss native signatures reject MP3 chunk media", {
+  expect_error(
+    gen_stt_signature(
+      service = "local-native",
+      model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
+      stt_args = list(
+        native_engine = "moss-transcribe",
+        chunk_format = "mp3"
+      )
+    ),
+    "requires WAV"
+  )
 })
 
 test_that("the effective local endpoint changes the STT signature", {

@@ -1,7 +1,7 @@
 Package: genflow
 Type: Package
 Title: Unified Cloud and Local Generative AI Workflows
-Version: 0.0.6
+Version: 0.0.7
 Authors@R: person(
     given = "Hugo",
     family = "Rzepian Teixeira",

@@ -11,13 +11,17 @@
                                         chunk_bitrate_kbps = 48,
                                         chunk_segment_seconds = NULL,
                                         chunk_overlap_seconds = 8,
+                                        chunk_format = c("auto", "wav", "mp3"),
                                         checkpoint_dir = NULL,
+                                        checkpoint_retention = c("all", "results"),
                                         resume = TRUE,
                                         chunk_retry_forever = TRUE,
                                         chunk_max_retries = 20,
                                         chunk_retry_wait_seconds = 2,
                                         output = c("full", "transcript")) {
   chunking <- match.arg(chunking)
+  chunk_format <- match.arg(chunk_format)
+  checkpoint_retention <- match.arg(checkpoint_retention)
   output <- match.arg(output)
 
   scalar_number <- function(value, arg, minimum = 0, strict = FALSE) {
@@ -111,12 +115,50 @@
     chunk_bitrate_kbps = as.integer(round(chunk_bitrate_kbps)),
     chunk_segment_seconds = chunk_segment_seconds,
     chunk_overlap_seconds = chunk_overlap_seconds,
+    chunk_format = chunk_format,
     checkpoint_dir = checkpoint_dir,
+    checkpoint_retention = checkpoint_retention,
     resume = resume,
     chunk_retry_forever = chunk_retry_forever,
     chunk_max_retries = as.integer(chunk_max_retries),
     chunk_retry_wait_seconds = chunk_retry_wait_seconds,
     output = output
+  )
+}
+
+#' Resolve the prepared/chunk media format for an STT service
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_resolve_format <- function(service,
+                                      chunk_format = c("auto", "wav", "mp3")) {
+  chunk_format <- match.arg(chunk_format)
+  if (!identical(chunk_format, "auto")) return(chunk_format)
+  if (identical(service, "local-native")) "wav" else "mp3"
+}
+
+#' Validate prepared/chunk media support for a native STT engine
+#'
+#' CrispASR decodes MP3 directly. The separate moss-transcribe.cpp CLI accepts
+#' WAV input, so reject an explicit MP3 chunk request before any inference is
+#' attempted instead of relying on an implicit per-part reconversion.
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_validate_native_format <- function(service,
+                                              format,
+                                              engine = NULL) {
+  if (!identical(service, "local-native") ||
+      !identical(format, "mp3") ||
+      !identical(engine, "moss-transcribe")) {
+    return(invisible(format))
+  }
+  stop(
+    '`chunk_format = "mp3"` is supported by the CrispASR native engine, ',
+    "but moss-transcribe.cpp requires WAV input. Use ",
+    '`chunk_format = "wav"` (or `"auto"`) or select ',
+    '`native_engine = "crispasr"`.',
+    call. = FALSE
   )
 }
 
@@ -889,6 +931,218 @@
   invisible(deleted)
 }
 
+#' Remove only checkpoint-owned prepared/chunk media after successful STT
+#'
+#' The current run identifies the source recording. Every eligible run must be
+#' a direct, non-symlink child of the checkpoint root with a valid manifest for
+#' that same source fingerprint. Only the exact manifest-owned `prepared.*`
+#' and `part_NNNN.*` regular files are removed; manifests and result RDS files
+#' remain reusable.
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_cleanup_checkpoint_media <- function(checkpoint_dir,
+                                                current_run_dir) {
+  checkpoint_input <- as.character(checkpoint_dir)[1]
+  current_input <- as.character(current_run_dir)[1]
+  if (is.na(checkpoint_input) || !nzchar(checkpoint_input) ||
+      is.na(current_input) || !nzchar(current_input)) {
+    stop("STT checkpoint cleanup requires non-empty checkpoint/run paths.")
+  }
+  checkpoint_input <- path.expand(checkpoint_input)
+  current_input <- path.expand(current_input)
+  if (!dir.exists(checkpoint_input) ||
+      nzchar(Sys.readlink(checkpoint_input))) {
+    stop("The STT checkpoint root is missing or is a symbolic link.")
+  }
+  if (!dir.exists(current_input) ||
+      nzchar(Sys.readlink(current_input))) {
+    stop("The current STT checkpoint run is missing or is a symbolic link.")
+  }
+
+  checkpoint_dir <- normalizePath(
+    checkpoint_input,
+    winslash = "/",
+    mustWork = TRUE
+  )
+  current_run_dir <- normalizePath(
+    current_input,
+    winslash = "/",
+    mustWork = TRUE
+  )
+  if (!identical(dirname(current_run_dir), checkpoint_dir) ||
+      !grepl("^run-[0-9a-f]+$", basename(current_run_dir), perl = TRUE)) {
+    stop(
+      "The current STT checkpoint run is not a safe direct run-* child."
+    )
+  }
+  current_key <- sub("^run-", "", basename(current_run_dir))
+  current_manifest <- .stt_chunk_read_rds(
+    .stt_chunk_manifest_path(current_run_dir)
+  )
+  if (!.stt_chunk_manifest_valid(current_manifest, current_key)) {
+    stop("The current STT checkpoint manifest is invalid.")
+  }
+  source_fingerprint <- as.character(
+    current_manifest$source_fingerprint %||% ""
+  )[1]
+  if (!nzchar(source_fingerprint)) {
+    stop("The current STT checkpoint manifest has no source fingerprint.")
+  }
+
+  entries <- list.files(
+    checkpoint_dir,
+    all.files = TRUE,
+    full.names = TRUE,
+    no.. = TRUE
+  )
+  runs <- Filter(Negate(is.null), lapply(entries, function(path) {
+    name <- basename(path)
+    info <- suppressWarnings(file.info(path))
+    if (!grepl("^run-[0-9a-f]+$", name, perl = TRUE) ||
+        !nrow(info) || !isTRUE(info$isdir[[1]]) ||
+        nzchar(Sys.readlink(path))) {
+      return(NULL)
+    }
+    normalized <- normalizePath(path, winslash = "/", mustWork = TRUE)
+    if (!identical(dirname(normalized), checkpoint_dir)) return(NULL)
+    key <- sub("^run-", "", name)
+    manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(normalized))
+    if (!.stt_chunk_manifest_valid(manifest, key) ||
+        !identical(
+          as.character(manifest$source_fingerprint %||% "")[1],
+          source_fingerprint
+        )) {
+      return(NULL)
+    }
+    normalized
+  }))
+  if (!(current_run_dir %in% unlist(runs, use.names = FALSE))) {
+    stop("The current STT checkpoint run changed during media cleanup.")
+  }
+
+  cleanup_run <- function(run_dir, lock) {
+    on.exit(.stt_chunk_release_lock(lock), add = TRUE)
+    key <- sub("^run-", "", basename(run_dir))
+    manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(run_dir))
+    valid <- !nzchar(Sys.readlink(run_dir)) &&
+      identical(dirname(run_dir), checkpoint_dir) &&
+      .stt_chunk_manifest_valid(manifest, key) &&
+      identical(
+        as.character(manifest$source_fingerprint %||% "")[1],
+        source_fingerprint
+      )
+    if (!valid) {
+      stop("STT checkpoint manifest changed during media cleanup.")
+    }
+
+    format <- as.character(manifest$prepared_format %||% "")[1]
+    if (!format %in% c("wav", "mp3")) {
+      stop("STT checkpoint manifest has an unsafe prepared media format.")
+    }
+    candidates <- list(list(
+      path = manifest$prepared_path,
+      basename = paste0("prepared.", format)
+    ))
+    if (length(manifest$parts)) {
+      candidates <- c(candidates, lapply(
+        seq_along(manifest$parts),
+        function(index) {
+          part <- manifest$parts[[index]]
+          if (!is.list(part)) return(NULL)
+          list(
+            path = part$audio_path,
+            basename = sprintf("part_%04d.%s", index, format)
+          )
+        }
+      ))
+      candidates <- Filter(Negate(is.null), candidates)
+    }
+
+    removed <- character()
+    remaining <- character()
+    for (candidate in candidates) {
+      path <- candidate$path
+      if (!is.character(path) || length(path) != 1L ||
+          is.na(path) || !nzchar(path)) {
+        next
+      }
+      path <- path.expand(path)
+      link_target <- Sys.readlink(path)
+      is_link <- !is.na(link_target) && nzchar(link_target)
+      artifact_exists <- file.exists(path) || is_link
+      if (!identical(basename(path), candidate$basename) ||
+          !dir.exists(dirname(path)) || is_link) {
+        if (artifact_exists) remaining <- c(remaining, path)
+        next
+      }
+      parent <- normalizePath(
+        dirname(path),
+        winslash = "/",
+        mustWork = TRUE
+      )
+      if (!identical(parent, run_dir)) {
+        if (artifact_exists) remaining <- c(remaining, path)
+        next
+      }
+      info <- suppressWarnings(file.info(path))
+      if (!nrow(info) || !file.exists(path)) next
+      if (!isTRUE(utils::file_test("-f", path)) || isTRUE(info$isdir[[1]])) {
+        remaining <- c(remaining, path)
+        next
+      }
+      .stt_chunk_remove_media_file(path)
+      link_target <- Sys.readlink(path)
+      still_exists <- file.exists(path) ||
+        (!is.na(link_target) && nzchar(link_target))
+      if (!still_exists) {
+        removed <- c(removed, path)
+      } else {
+        remaining <- c(remaining, path)
+      }
+    }
+    list(
+      deleted = unique(removed),
+      remaining = unique(remaining)
+    )
+  }
+
+  deleted <- character()
+  remaining <- character()
+  skipped <- character()
+  for (run_dir in runs) {
+    lock <- tryCatch(
+      .stt_chunk_acquire_lock(run_dir),
+      error = function(e) NULL
+    )
+    if (!is.list(lock)) {
+      skipped <- c(skipped, basename(run_dir))
+      next
+    }
+    cleaned <- tryCatch(
+      cleanup_run(run_dir, lock),
+      error = function(e) {
+        skipped <<- c(skipped, basename(run_dir))
+        list(deleted = character(), remaining = character())
+      }
+    )
+    deleted <- c(deleted, cleaned$deleted)
+    remaining <- c(remaining, cleaned$remaining)
+  }
+
+  invisible(list(
+    deleted = unique(deleted),
+    remaining = unique(remaining),
+    skipped_runs = unique(skipped)
+  ))
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_remove_media_file <- function(path) {
+  unlink(path, force = TRUE)
+}
+
 #' @keywords internal
 #' @noRd
 .stt_chunk_write_manifest <- function(manifest, path) {
@@ -1068,7 +1322,7 @@
   if (!nzchar(source_fingerprint)) {
     stop("Could not fingerprint the input audio for chunking.", call. = FALSE)
   }
-  format <- if (identical(service, "local-native")) "wav" else "mp3"
+  format <- .stt_chunk_resolve_format(service, options$chunk_format)
   key <- .stt_chunk_object_fingerprint(list(
     schema_version = 2L,
     source_fingerprint = source_fingerprint,
@@ -1173,6 +1427,7 @@
       source_fingerprint = source_fingerprint,
       config_fingerprint = config_fingerprint,
       prepared_path = prepared_path,
+      chunk_format = options$chunk_format,
       prepared_format = format,
       prepared_fingerprint = prepared_fingerprint,
       prepared_size_bytes = prepared_size,
@@ -1192,6 +1447,7 @@
       audio_path = prepared_path,
       cleanup_dir = if (temporary_root) run_dir else NULL,
       prepared = TRUE,
+      chunk_format = options$chunk_format,
       prepared_format = format,
       prepared_size_bytes = prepared_size,
       input_duration_seconds = duration_seconds,
@@ -1378,6 +1634,7 @@
     source_fingerprint = source_fingerprint,
     config_fingerprint = config_fingerprint,
     prepared_path = prepared_path,
+    chunk_format = options$chunk_format,
     prepared_format = format,
     prepared_fingerprint = prepared_fingerprint,
     prepared_size_bytes = prepared_size,
@@ -1399,6 +1656,7 @@
     audio_path = prepared_path,
     cleanup_dir = if (temporary_root) run_dir else NULL,
     prepared = TRUE,
+    chunk_format = options$chunk_format,
     prepared_format = format,
     prepared_size_bytes = prepared_size,
     input_duration_seconds = duration_seconds,
@@ -1767,6 +2025,7 @@
     enabled = TRUE,
     part_count = as.integer(length(results)),
     resumed_part_count = as.integer(sum(resumed)),
+    chunk_format = plan$chunk_format,
     prepared_format = plan$prepared_format,
     prepared_size_bytes = plan$prepared_size_bytes,
     input_duration_seconds = plan$input_duration_seconds,
@@ -1776,7 +2035,8 @@
     overlap_seconds = plan$overlap_seconds,
     decision_reason = plan$decision_reason,
     model_segment_seconds = plan$model_segment_seconds,
-    checkpoint_dir = plan$checkpoint_dir
+    checkpoint_dir = plan$checkpoint_dir,
+    checkpoint_retention = options$checkpoint_retention
   )
   list(text = normalized$text, metadata = metadata)
 }

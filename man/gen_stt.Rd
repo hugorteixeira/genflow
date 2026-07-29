@@ -47,6 +47,8 @@ gen_stt(audio, ...)
   chunk_max_retries = 20,
   chunk_retry_wait_seconds = 2,
   output = c("full", "transcript"),
+  chunk_format = c("auto", "wav", "mp3"),
+  checkpoint_retention = c("all", "results"),
   ...
 )
 
@@ -86,8 +88,8 @@ auto-detection is used when supported.}
 
 \item{convert}{Logical; if TRUE, attempt ffmpeg conversion for unsupported
 audio formats on the single-file path. When large-audio chunking is
-required, genflow still uses ffmpeg to prepare deterministic native WAV
-chunks or remote-service MP3 chunks.}
+required, Genflow still uses ffmpeg to prepare deterministic mono/16 kHz
+media in \code{chunk_format}.}
 
 \item{diarize}{Logical; when \code{TRUE}, request speaker attribution from native
 adapters that expose a model-native opt-in mode (currently CrispASR
@@ -190,8 +192,8 @@ uses the finite local-file transport limit owned by the selected adapter;
 an infinite adapter limit preserves whole-file behavior unless the
 selected model/runtime has a documented duration limit.}
 
-\item{chunk_bitrate_kbps}{Positive MP3 bitrate used while preparing chunks
-for remote services. Native local STT uses PCM 16-bit WAV instead.}
+\item{chunk_bitrate_kbps}{Positive MP3 bitrate used whenever
+\code{chunk_format = "mp3"}.}
 
 \item{chunk_segment_seconds}{Optional positive target duration for each
 chunk. \code{NULL} derives a duration from the prepared file and size limit.}
@@ -224,6 +226,21 @@ subsequent transient retries use capped exponential backoff.}
 STT result; \code{"transcript"} returns a smaller regular result that still
 contains the common status/service/model fields plus text, segments,
 diarization, chunking, and reconciliation metadata.}
+
+\item{chunk_format}{Prepared/chunk media format. \code{"auto"} (the default)
+preserves PCM 16-bit mono 16 kHz WAV for \code{service = "local-native"} and
+compressed mono 16 kHz MP3 for other services. Explicit \code{"mp3"} is
+supported by CrispASR and can make a byte-size limit cover much longer
+chunks; moss-transcribe.cpp requires \code{"wav"}.}
+
+\item{checkpoint_retention}{Persistent checkpoint media policy. \code{"all"}
+retains prepared/chunk audio plus result checkpoints. \code{"results"} removes
+only Genflow-owned prepared/chunk audio from valid runs for the same source
+after the final transcription succeeds, while preserving manifests and
+per-part result RDS files for resume. It never deletes the caller's
+original input and does nothing after a failed/interrupted call. Inspect
+\code{metadata$chunking$checkpoint_media_cleanup_complete}; it is \code{TRUE} only
+when all eligible managed media was removed.}
 }
 \value{
 Invisibly returns a plain list with \code{response_value} (plain

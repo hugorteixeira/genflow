@@ -211,21 +211,30 @@ meeting <- gen_stt(
   "meeting.wav",
   service = "local-native",
   model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
+  native_engine = "crispasr",
+  chunk_format = "mp3",
   chunk_overlap_seconds = 8,
   checkpoint_dir = "meeting-stt-work",
+  checkpoint_retention = "results",
   output = "transcript"
 )
 ```
 
 With `chunking = "auto"` (the default), Genflow combines explicit
 `chunk_max_mb`/`chunk_segment_seconds`, finite adapter transport limits, and
-documented model limits. Native chunks are PCM 16-bit mono 16 kHz WAV; remote
-chunks are compressed MP3. `chunking = "never"` is an explicit escape hatch
-for callers that accept whole-recording failure or truncation risk. The
-built-in duration policy currently covers MOSS Diarize; an unknown backend is
-kept whole unless the caller supplies a size/duration limit. Requested segment
-duration is a target and may be reduced adaptively when the encoded bytes still
-exceed the effective limit.
+documented model limits. `chunk_format = "auto"` preserves PCM 16-bit mono
+16 kHz WAV for native STT and compressed mono 16 kHz MP3 for remote services.
+Explicit MP3 is also accepted by the CrispASR native engine, so a byte-size
+limit such as `chunk_max_mb = 5` covers much more audio than it does with WAV.
+The separate moss-transcribe.cpp engine requires WAV. Use
+`chunk_segment_seconds` when the desired number/duration of chunks matters;
+encoding changes byte size, not the semantic duration target.
+`chunking = "never"` is an explicit escape hatch for callers that accept
+whole-recording failure or truncation risk. The built-in duration policy
+currently covers MOSS Diarize; an unknown backend is kept whole unless the
+caller supplies a size/duration limit. Requested segment duration is a target
+and may be reduced adaptively when the encoded bytes still exceed the
+effective limit.
 
 When `checkpoint_dir` is supplied, prepared media, validated chunks, and
 successful per-chunk results are stored there as opaque checkpoints. Reruns
@@ -238,8 +247,17 @@ owners are recovered conservatively. After a successful transcription, Genflow
 retains the current run and one previous valid run for that recording, then
 safely prunes older superseded runs without touching runs for other recordings.
 These checkpoints contain prepared audio and transcript results, so budget disk
-space and protect the directory as sensitive data. With `checkpoint_dir = NULL`
-the working directory is temporary and cannot resume a later R call;
+space and protect the directory as sensitive data. Set
+`checkpoint_retention = "results"` to remove only Genflow-owned prepared/chunk
+audio after the final result succeeds while retaining manifests and successful
+per-part result RDS files. Cleanup is restricted to valid runs for the same
+source recording, never follows symlinks, never deletes the original input, and
+does not run after failure or interruption. Callers that persist their own
+retention marker should require
+`metadata$chunking$checkpoint_media_cleanup_complete` to be exactly `TRUE`;
+active/unsafe runs leave it `FALSE` and also emit a warning. With
+`checkpoint_dir = NULL` the working directory is temporary and cannot resume a
+later R call;
 `resume = FALSE` deliberately rebuilds and retranscribes the selected run.
 
 Adjacent chunks overlap by eight seconds by default. Genflow aligns the

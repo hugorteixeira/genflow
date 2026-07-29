@@ -31,8 +31,8 @@
 #' @param save_txt Logical; save transcript to disk if TRUE.
 #' @param convert Logical; if TRUE, attempt ffmpeg conversion for unsupported
 #'   audio formats on the single-file path. When large-audio chunking is
-#'   required, genflow still uses ffmpeg to prepare deterministic native WAV
-#'   chunks or remote-service MP3 chunks.
+#'   required, Genflow still uses ffmpeg to prepare deterministic mono/16 kHz
+#'   media in `chunk_format`.
 #' @param chunking Large-audio orchestration policy: `"auto"` prepares and
 #'   chunks only when an explicit limit, an adapter-owned transport limit, or a
 #'   documented model/runtime limit requires it; `"never"` sends the input
@@ -41,13 +41,18 @@
 #'   uses the finite local-file transport limit owned by the selected adapter;
 #'   an infinite adapter limit preserves whole-file behavior unless the
 #'   selected model/runtime has a documented duration limit.
-#' @param chunk_bitrate_kbps Positive MP3 bitrate used while preparing chunks
-#'   for remote services. Native local STT uses PCM 16-bit WAV instead.
+#' @param chunk_bitrate_kbps Positive MP3 bitrate used whenever
+#'   `chunk_format = "mp3"`.
 #' @param chunk_segment_seconds Optional positive target duration for each
 #'   chunk. `NULL` derives a duration from the prepared file and size limit.
 #' @param chunk_overlap_seconds Non-negative overlap between adjacent chunks.
 #'   The default eight-second window gives the conservative reconciliation
 #'   step evidence for deduplicating text and aligning speaker labels.
+#' @param chunk_format Prepared/chunk media format. `"auto"` (the default)
+#'   preserves PCM 16-bit mono 16 kHz WAV for `service = "local-native"` and
+#'   compressed mono 16 kHz MP3 for other services. Explicit `"mp3"` is
+#'   supported by CrispASR and can make a byte-size limit cover much longer
+#'   chunks; moss-transcribe.cpp requires `"wav"`.
 #' @param checkpoint_dir Optional persistent directory for opaque per-chunk
 #'   media and result checkpoints. Treat its layout as internal to genflow.
 #'   Recoverable per-run locks enforce a single writer and make a concurrent
@@ -55,6 +60,14 @@
 #'   Genflow keeps the current run plus one prior valid run for that recording
 #'   and safely prunes older superseded runs. `NULL` uses a temporary directory
 #'   for this call.
+#' @param checkpoint_retention Persistent checkpoint media policy. `"all"`
+#'   retains prepared/chunk audio plus result checkpoints. `"results"` removes
+#'   only Genflow-owned prepared/chunk audio from valid runs for the same source
+#'   after the final transcription succeeds, while preserving manifests and
+#'   per-part result RDS files for resume. It never deletes the caller's
+#'   original input and does nothing after a failed/interrupted call. Inspect
+#'   `metadata$chunking$checkpoint_media_cleanup_complete`; it is `TRUE` only
+#'   when all eligible managed media was removed.
 #' @param resume Logical; reuse valid chunk media and successful opaque result
 #'   checkpoints when available.
 #' @param chunk_retry_forever Logical; retry recognized transient per-chunk
@@ -235,6 +248,8 @@ gen_stt.default <- function(
   chunk_max_retries = 20,
   chunk_retry_wait_seconds = 2,
   output = c("full", "transcript"),
+  chunk_format = c("auto", "wav", "mp3"),
+  checkpoint_retention = c("all", "results"),
   ...
 ) {
   start_time <- Sys.time()
@@ -247,7 +262,9 @@ gen_stt.default <- function(
     chunk_bitrate_kbps = chunk_bitrate_kbps,
     chunk_segment_seconds = chunk_segment_seconds,
     chunk_overlap_seconds = chunk_overlap_seconds,
+    chunk_format = chunk_format,
     checkpoint_dir = checkpoint_dir,
+    checkpoint_retention = checkpoint_retention,
     resume = resume,
     chunk_retry_forever = chunk_retry_forever,
     chunk_max_retries = chunk_max_retries,
@@ -391,6 +408,15 @@ gen_stt.default <- function(
     native_engine = native_engine,
     native_backend = native_backend
   )
+  resolved_chunk_format <- .stt_chunk_resolve_format(
+    service,
+    chunk_options$chunk_format
+  )
+  .stt_chunk_validate_native_format(
+    service = service,
+    format = resolved_chunk_format,
+    engine = chunk_runtime_artifacts$engine
+  )
   chunk_model_policy <- .stt_chunk_model_policy(
     service = service,
     runtime_artifacts = chunk_runtime_artifacts
@@ -424,7 +450,9 @@ gen_stt.default <- function(
     chunk_bitrate_kbps = chunk_options$chunk_bitrate_kbps,
     chunk_segment_seconds = chunk_options$chunk_segment_seconds,
     chunk_overlap_seconds = chunk_options$chunk_overlap_seconds,
+    chunk_format = chunk_options$chunk_format,
     checkpoint_dir = chunk_options$checkpoint_dir,
+    checkpoint_retention = chunk_options$checkpoint_retention,
     resume = chunk_options$resume,
     chunk_retry_forever = chunk_options$chunk_retry_forever,
     chunk_max_retries = chunk_options$chunk_max_retries,
@@ -567,9 +595,11 @@ gen_stt.default <- function(
       enabled = FALSE,
       decision_reason = chunk_plan$decision_reason,
       model_segment_seconds = chunk_plan$model_segment_seconds,
+      chunk_format = chunk_plan$chunk_format,
       prepared_format = chunk_plan$prepared_format,
       prepared_size_bytes = chunk_plan$prepared_size_bytes,
-      input_duration_seconds = chunk_plan$input_duration_seconds
+      input_duration_seconds = chunk_plan$input_duration_seconds,
+      checkpoint_retention = chunk_options$checkpoint_retention
     )
     provider_metadata$chunking <- chunking_metadata[
       !vapply(chunking_metadata, is.null, logical(1))
@@ -631,29 +661,6 @@ gen_stt.default <- function(
 
     if (!is.null(diarized_transcript) && !is.na(saved_file)) {
       saved_metadata_file <- sub("\\.txt$", ".json", saved_file)
-      sidecar <- list(
-        schema_version = 1L,
-        service = service,
-        model = effective_model,
-        audio = prep$path,
-        duration = duration_response,
-        response_value = transcribed_text,
-        diarized_transcript = diarized_transcript,
-        metadata = provider_metadata
-      )
-      sidecar_result <- try(
-        .stt_atomic_write_json(sidecar, saved_metadata_file),
-        silent = TRUE
-      )
-      if (inherits(sidecar_result, "try-error") ||
-          !file.exists(saved_metadata_file)) {
-        warning(
-          "The diarized transcript was saved, but its structured JSON ",
-          "metadata sidecar could not be written.",
-          call. = FALSE
-        )
-        saved_metadata_file <- NA_character_
-      }
     }
   }
 
@@ -686,6 +693,9 @@ gen_stt.default <- function(
 
   if (identical(final_status, "SUCCESS") &&
       !is.null(chunk_plan$checkpoint_root)) {
+    # Release this call's run lock before checkpoint maintenance. Pruning and
+    # results-only cleanup reacquire each eligible run lock independently.
+    .stt_chunk_release_lock(chunk_plan$lock)
     prune_error <- tryCatch(
       {
         .stt_chunk_prune_runs(
@@ -703,6 +713,105 @@ gen_stt.default <- function(
         "be pruned: ", prune_error,
         call. = FALSE
       )
+    }
+
+    if (identical(chunk_options$checkpoint_retention, "results")) {
+      if (!is.list(result$metadata$chunking)) {
+        result$metadata$chunking <- list()
+      }
+      result$metadata$chunking$checkpoint_retention <- "results"
+      cleanup <- tryCatch(
+        .stt_chunk_cleanup_checkpoint_media(
+          checkpoint_dir = chunk_plan$checkpoint_root,
+          current_run_dir = chunk_plan$run_dir
+        ),
+        error = function(e) e
+      )
+      if (inherits(cleanup, "error")) {
+        result$metadata$chunking$checkpoint_media_cleanup_complete <- FALSE
+        result$metadata$chunking$checkpoint_media_retained <- NA
+        result$metadata$chunking$checkpoint_media_cleanup_error <-
+          conditionMessage(cleanup)
+        warning(
+          "Transcription succeeded, but prepared/chunk checkpoint media ",
+          "could not be removed: ", conditionMessage(cleanup),
+          call. = FALSE
+        )
+      } else {
+        result$metadata$chunking$checkpoint_media_removed_count <-
+          as.integer(length(cleanup$deleted %||% character()))
+        skipped <- cleanup$skipped_runs %||% character()
+        remaining <- cleanup$remaining %||% character()
+        cleanup_complete <- !length(skipped) && !length(remaining)
+        result$metadata$chunking$checkpoint_media_cleanup_complete <-
+          cleanup_complete
+        result$metadata$chunking$checkpoint_media_retained <-
+          !cleanup_complete
+        if (length(remaining)) {
+          result$metadata$chunking$checkpoint_media_cleanup_remaining_paths <-
+            as.character(remaining)
+        }
+        if (length(skipped)) {
+          result$metadata$chunking$checkpoint_media_cleanup_skipped_runs <-
+            as.character(skipped)
+        }
+        if (length(skipped)) {
+          warning(
+            "Transcription succeeded, but active STT checkpoint run(s) were ",
+            "left untouched while removing prepared/chunk media: ",
+            paste(skipped, collapse = ", "),
+            call. = FALSE
+          )
+        }
+        if (length(remaining)) {
+          warning(
+            "Transcription succeeded, but managed STT checkpoint media could ",
+            "not be removed: ", paste(remaining, collapse = ", "),
+            call. = FALSE
+          )
+        }
+      }
+    }
+  }
+  if (identical(final_status, "SUCCESS") &&
+      identical(chunk_options$checkpoint_retention, "results") &&
+      is.null(chunk_plan$checkpoint_root)) {
+    if (!is.list(result$metadata$chunking)) {
+      result$metadata$chunking <- list()
+    }
+    result$metadata$chunking$checkpoint_retention <- "results"
+    result$metadata$chunking$checkpoint_media_cleanup_complete <- TRUE
+    result$metadata$chunking$checkpoint_media_retained <- FALSE
+    result$metadata$chunking$checkpoint_media_removed_count <- 0L
+  }
+
+  if (!is.null(diarized_transcript) &&
+      isTRUE(save_txt) &&
+      !is.na(saved_file) &&
+      !is.na(saved_metadata_file)) {
+    sidecar <- list(
+      schema_version = 1L,
+      service = service,
+      model = effective_model,
+      audio = prep$path,
+      duration = duration_response,
+      response_value = transcribed_text,
+      diarized_transcript = diarized_transcript,
+      metadata = result$metadata
+    )
+    sidecar_result <- try(
+      .stt_atomic_write_json(sidecar, saved_metadata_file),
+      silent = TRUE
+    )
+    if (inherits(sidecar_result, "try-error") ||
+        !file.exists(saved_metadata_file)) {
+      warning(
+        "The diarized transcript was saved, but its structured JSON ",
+        "metadata sidecar could not be written.",
+        call. = FALSE
+      )
+      saved_metadata_file <- NA_character_
+      result$saved_metadata_file <- NA_character_
     }
   }
 

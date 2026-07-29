@@ -12,8 +12,8 @@
 #' Excluded controls include timeouts, polling/retry settings, checkpoint and
 #' output directories, persistence, and output projection. Large-audio
 #' controls that can change the transcript itself (chunk size, duration,
-#' bitrate, and overlap) remain part of the signature and are normalized with
-#' the same validation used by [gen_stt()].
+#' bitrate, format, and overlap) remain part of the signature and are
+#' normalized with the same validation used by [gen_stt()].
 #'
 #' @param service STT provider identifier accepted by [gen_stt()].
 #' @param model Optional provider model identifier. `NULL` resolves the same
@@ -84,7 +84,9 @@ gen_stt_signature <- function(service = "openai",
     chunk_bitrate_kbps = get_arg("chunk_bitrate_kbps", 48),
     chunk_segment_seconds = get_arg("chunk_segment_seconds"),
     chunk_overlap_seconds = get_arg("chunk_overlap_seconds", 8),
+    chunk_format = get_arg("chunk_format", "auto"),
     checkpoint_dir = get_arg("checkpoint_dir"),
+    checkpoint_retention = get_arg("checkpoint_retention", "all"),
     resume = get_arg("resume", TRUE),
     chunk_retry_forever = get_arg("chunk_retry_forever", TRUE),
     chunk_max_retries = get_arg("chunk_max_retries", 20),
@@ -121,7 +123,11 @@ gen_stt_signature <- function(service = "openai",
     chunk_max_mb = chunk_options$chunk_max_mb,
     chunk_bitrate_kbps = chunk_options$chunk_bitrate_kbps,
     chunk_segment_seconds = chunk_options$chunk_segment_seconds,
-    chunk_overlap_seconds = chunk_options$chunk_overlap_seconds
+    chunk_overlap_seconds = chunk_options$chunk_overlap_seconds,
+    chunk_format = .stt_chunk_resolve_format(
+      service,
+      chunk_options$chunk_format
+    )
   )
   if (isTRUE(semantic$diarize_speakers) && !isTRUE(semantic$diarize)) {
     stop(
@@ -143,7 +149,8 @@ gen_stt_signature <- function(service = "openai",
     "prompt", "convert", "diarize", "diarize_speakers",
     "diarize_embedder", "timestamps", "max_new_tokens", "chunking",
     "chunk_max_mb", "chunk_bitrate_kbps", "chunk_segment_seconds",
-    "chunk_overlap_seconds", "executable", "native_engine",
+    "chunk_overlap_seconds", "chunk_format", "checkpoint_retention",
+    "executable", "native_engine",
     "native_backend", "native_quant", "native_kv_quant", "native_device",
     "base_url", "response_format"
   )
@@ -200,6 +207,11 @@ gen_stt_signature <- function(service = "openai",
       model = effective_model,
       native_backend = get_arg("native_backend"),
       config = config
+    )
+    .stt_chunk_validate_native_format(
+      service = service,
+      format = semantic$chunk_format,
+      engine = engine
     )
     backend <- runtime$backend %||% .stt_validate_native_backend(
       .stt_native_setting(
@@ -347,7 +359,8 @@ gen_stt_signature <- function(service = "openai",
 .stt_signature_is_operational_name <- function(name) {
   name <- tolower(as.character(name)[1])
   name %in% c(
-    "directory", "label", "save_txt", "output", "checkpoint_dir", "resume",
+    "directory", "label", "save_txt", "output", "checkpoint_dir",
+    "checkpoint_retention", "resume",
     "timeout_api", "timeout_per_audio_minute", "poll_interval",
     "max_poll_seconds", "chunk_retry_forever", "chunk_max_retries",
     "chunk_retry_wait_seconds", "quiet", "verbose", "progress", "workers"
