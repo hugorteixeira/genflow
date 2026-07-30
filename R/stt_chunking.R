@@ -2139,7 +2139,12 @@
     reconciliation <- list(
       method = reconciliation,
       speaker_maps = metadata$speaker_maps %||% list(),
-      boundaries = metadata$boundaries %||% list()
+      boundaries = metadata$boundaries %||% list(),
+      canonical_speaker_map = metadata$canonical_speaker_map %||% character(),
+      unresolved_global_speakers =
+        metadata$unresolved_global_speakers %||% character(),
+      unresolved_public_speakers =
+        metadata$unresolved_public_speakers %||% character()
     )
   }
   projected_metadata <- list(

@@ -244,7 +244,7 @@ test_that("missing punctuation alone is insufficient for continuation", {
   )
 })
 
-test_that("three-speaker chunks abstain instead of inventing a permutation", {
+test_that("ambiguous three-speaker chunks remain internally unresolved", {
   first <- stt_reconcile_result(list(
     stt_reconcile_segment("S01", "Host introduction.", 0, 1),
     stt_reconcile_segment("S03", "A short aside.", 2, 3),
@@ -260,7 +260,7 @@ test_that("three-speaker chunks abstain instead of inventing a permutation", {
 
   expect_identical(
     reconciled$metadata$boundaries[[1]]$method,
-    "unsupported_roster_size"
+    "no_evidence"
   )
   expect_identical(
     reconciled$metadata$speaker_maps[[2]],
@@ -270,18 +270,143 @@ test_that("three-speaker chunks abstain instead of inventing a permutation", {
       S03 = "U0002_S03"
     )
   )
+  second_segments <- Filter(
+    function(segment) identical(segment$chunk_index, 2L),
+    reconciled$metadata$segments
+  )
+  expect_identical(
+    vapply(second_segments, `[[`, character(1), "speaker"),
+    c("S04", "S05", "S06")
+  )
+  expect_identical(
+    vapply(second_segments, `[[`, character(1), "speaker_reconciled"),
+    c("U0002_S01", "U0002_S02", "U0002_S03")
+  )
+})
+
+test_that("intro interview and outro rosters reconcile without label explosion", {
+  chunk <- function(segments, duration_seconds = 600) {
+    stt_reconcile_result(segments, duration_seconds = duration_seconds)
+  }
+  first <- chunk(list(
+    stt_reconcile_segment("S01", "Guest cold open.", 0, 20),
+    stt_reconcile_segment("S02", "Production introduction.", 30, 60),
+    stt_reconcile_segment("S03", "Host question near the boundary.", 520, 550),
+    stt_reconcile_segment("S01", "Guest overlap one.", 592, 600)
+  ))
+  second <- chunk(list(
+    stt_reconcile_segment("S01", "Guest overlap one revised.", 0, 8),
+    stt_reconcile_segment("S02", "Host follow-up.", 80, 100),
+    stt_reconcile_segment("S02", "Host later question.", 500, 520),
+    stt_reconcile_segment("S01", "Guest overlap two.", 592, 600)
+  ))
+  third <- chunk(list(
+    stt_reconcile_segment("S01", "Guest overlap two revised.", 0, 8),
+    stt_reconcile_segment("S02", "Host middle question.", 400, 420),
+    stt_reconcile_segment("S01", "Guest overlap three.", 592, 600)
+  ))
+  fourth <- chunk(list(
+    stt_reconcile_segment("S01", "Guest overlap three revised.", 0, 8),
+    stt_reconcile_segment("S02", "Host final question.", 410, 420),
+    stt_reconcile_segment("S01", "Guest overlap four.", 592, 600)
+  ))
+  fifth <- chunk(list(
+    stt_reconcile_segment("S01", "Guest overlap four revised.", 0, 8),
+    stt_reconcile_segment("S02", "Host closes the interview.", 60, 90),
+    stt_reconcile_segment("S03", "Production disclaimer.", 330, 400)
+  ), duration_seconds = 432)
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second, third, fourth, fifth),
+    chunk_starts_seconds = c(0, 592, 1184, 1776, 2368),
+    chunk_overlap_seconds = 8
+  )
+
+  expect_identical(
+    reconciled$metadata$speaker_maps,
+    list(
+      c(S01 = "S01", S02 = "S02", S03 = "S03"),
+      c(S01 = "S01", S02 = "S03"),
+      c(S01 = "S01", S02 = "S03"),
+      c(S01 = "S01", S02 = "S03"),
+      c(S01 = "S01", S02 = "S03", S03 = "U0005_S03")
+    )
+  )
   expect_identical(
     vapply(
-      Filter(
-        function(segment) identical(segment$chunk_index, 2L),
-        reconciled$metadata$segments
-      ),
+      reconciled$metadata$boundaries,
+      `[[`,
+      character(1),
+      "status"
+    ),
+    c("accepted", "accepted", "accepted", "partial")
+  )
+  expect_identical(
+    reconciled$metadata$canonical_speaker_map,
+    c(
+      S01 = "S01",
+      S02 = "S02",
+      S03 = "S03",
+      U0005_S03 = "S04"
+    )
+  )
+  expect_identical(
+    reconciled$metadata$unresolved_global_speakers,
+    "U0005_S03"
+  )
+  expect_identical(
+    reconciled$metadata$unresolved_public_speakers,
+    "S04"
+  )
+  expect_setequal(
+    unique(vapply(
+      reconciled$metadata$segments,
       `[[`,
       character(1),
       "speaker"
-    ),
-    c("U0002_S01", "U0002_S02", "U0002_S03")
+    )),
+    sprintf("S%02d", 1:4)
   )
+  expect_false(grepl("\\[U[0-9]", reconciled$diarized_transcript))
+  expect_match(
+    reconciled$diarized_transcript,
+    "\\[S04\\] Production disclaimer"
+  )
+  summary <- genflow:::.stt_diarization_summary(
+    reconciled$metadata$segments
+  )
+  expect_identical(summary$speaker_count, 4L)
+  expect_identical(summary$unresolved_speaker_count, 1L)
+  expect_identical(summary$unresolved_speakers, "S04")
+})
+
+test_that("an inactive singleton is not inferred across an unequal boundary", {
+  first <- stt_reconcile_result(list(
+    stt_reconcile_segment("S02", "Old production voice.", 30, 60),
+    stt_reconcile_segment("S03", "Host near the boundary.", 500, 530),
+    stt_reconcile_segment("S01", "Guest overlap.", 592, 600)
+  ), duration_seconds = 600)
+  second <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "Guest overlap revised.", 0, 8),
+    stt_reconcile_segment("S02", "A new late speaker.", 300, 330)
+  ), duration_seconds = 600)
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second),
+    chunk_starts_seconds = c(0, 592),
+    chunk_overlap_seconds = 8
+  )
+  boundary <- reconciled$metadata$boundaries[[1]]
+
+  expect_identical(
+    reconciled$metadata$speaker_maps[[2]],
+    c(S01 = "S01", S02 = "U0002_S02")
+  )
+  expect_identical(boundary$direct, c(S01 = "S01"))
+  expect_length(boundary$inferred, 0L)
+  expect_identical(boundary$status, "partial")
+  expect_identical(boundary$method, "timing_overlap_partial")
+  expect_false("S02" %in% boundary$boundary_active_right_speakers)
 })
 
 test_that("stable roster can be disabled without disabling normalization", {
@@ -513,7 +638,7 @@ test_that("timing overlap abstains below its absolute and relative floor", {
   )
 })
 
-test_that("timing overlap abstains for a three-speaker roster", {
+test_that("timing overlap partially maps a three-speaker roster", {
   first <- stt_reconcile_result(list(
     stt_reconcile_segment("S01", "Host one.", 2, 4),
     stt_reconcile_segment("S02", "Guest one.", 4, 7),
@@ -531,12 +656,18 @@ test_that("timing overlap abstains for a three-speaker roster", {
   )
   boundary <- reconciled$metadata$boundaries[[1]]
 
-  expect_identical(boundary$method, "unsupported_roster_size")
-  expect_false(boundary$timing_overlap_accepted)
   expect_identical(
-    boundary$timing_overlap_reason,
-    "unsupported_roster_size"
+    boundary$method,
+    "timing_overlap_partial_boundary_active_complement"
   )
+  expect_true(boundary$timing_overlap_accepted)
+  expect_identical(boundary$timing_overlap_reason, "accepted")
+  expect_identical(
+    reconciled$metadata$speaker_maps[[2]],
+    c(S01 = "S01", S02 = "S02", S03 = "S03")
+  )
+  expect_identical(boundary$direct, c(S02 = "S02", S03 = "S03"))
+  expect_identical(boundary$inferred, c(S01 = "S01"))
 })
 
 test_that("conflicting exact-text and timing maps abstain", {
@@ -679,7 +810,7 @@ test_that("failed overlap alignment does not use the right chunk start as a boun
   )
 })
 
-test_that("overlap deduplicates content but does not map three speakers", {
+test_that("overlap deduplicates content and preserves its proven partial map", {
   overlap_text <- "these repeated words belong to one overlap"
   first <- stt_reconcile_result(list(
     stt_reconcile_segment("S01", "Host.", 0, 1),
@@ -704,7 +835,7 @@ test_that("overlap deduplicates content but does not map three speakers", {
 
   expect_identical(
     reconciled$metadata$boundaries[[1]]$method,
-    "unsupported_roster_size"
+    "overlap_partial"
   )
   expect_gt(
     reconciled$metadata$boundaries[[1]]$deduplicated_tokens,
@@ -713,7 +844,7 @@ test_that("overlap deduplicates content but does not map three speakers", {
   expect_identical(
     reconciled$metadata$speaker_maps[[2]],
     c(
-      S01 = "U0002_S01",
+      S01 = "S02",
       S02 = "U0002_S02",
       S03 = "U0002_S03"
     )

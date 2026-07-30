@@ -6,7 +6,10 @@
 #' speech-to-text configuration that [gen_stt()] would use. The signature is
 #' intended for downstream cache validation: it changes when semantic
 #' transcription settings, the effective endpoint, a resolved local model or
-#' executable, or their lightweight artifact signatures change.
+#' executable, their lightweight artifact signatures, or semantic final
+#' post-processing change. Genflow keeps the provider/runtime checkpoint
+#' fingerprint separate internally so post-processing upgrades can reuse
+#' successful chunk inference.
 #'
 #' Credentials and operational controls do not affect the fingerprint.
 #' Excluded controls include timeouts, polling/retry settings, checkpoint and
@@ -48,6 +51,30 @@ gen_stt_signature <- function(service = "openai",
                               model = NULL,
                               language = NULL,
                               stt_args = list()) {
+  .stt_signature_build(
+    service = service,
+    model = model,
+    language = language,
+    stt_args = stt_args,
+    include_postprocessing = TRUE
+  )
+}
+
+#' Build the shared STT signature payload
+#'
+#' Public cache consumers include semantic post-processing revisions, while
+#' Genflow's opaque chunk checkpoints intentionally fingerprint only the
+#' provider/runtime work. This lets a reconciliation-only upgrade rebuild the
+#' final transcript from successful part checkpoints without retranscribing
+#' their audio.
+#'
+#' @keywords internal
+#' @noRd
+.stt_signature_build <- function(service = "openai",
+                                 model = NULL,
+                                 language = NULL,
+                                 stt_args = list(),
+                                 include_postprocessing = TRUE) {
   stt_args <- .stt_signature_validate_args(stt_args)
   legacy_moss_service <- .stt_is_legacy_moss_service(service)
   service <- .stt_normalize_service(service)
@@ -284,7 +311,29 @@ gen_stt_signature <- function(service = "openai",
     runtime = runtime,
     model_policy = model_policy
   )
+  if (isTRUE(include_postprocessing)) {
+    payload$postprocessing <- list(
+      speaker_reconciliation = .stt_reconciliation_version()
+    )
+  }
   .stt_chunk_object_fingerprint(.stt_signature_canonicalize(payload))
+}
+
+#' Fingerprint only provider/runtime work stored in chunk checkpoints
+#'
+#' @keywords internal
+#' @noRd
+.stt_checkpoint_signature <- function(service = "openai",
+                                      model = NULL,
+                                      language = NULL,
+                                      stt_args = list()) {
+  .stt_signature_build(
+    service = service,
+    model = model,
+    language = language,
+    stt_args = stt_args,
+    include_postprocessing = FALSE
+  )
 }
 
 #' @keywords internal

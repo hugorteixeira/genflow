@@ -218,6 +218,40 @@ test_that("credentials and operational controls never change the signature", {
   expect_identical(first, second)
 })
 
+test_that("public signatures version post-processing without expiring parts", {
+  args <- list(
+    chunk_max_mb = 9.9,
+    chunk_segment_seconds = 600,
+    chunk_overlap_seconds = 8,
+    output = "transcript"
+  )
+  public <- gen_stt_signature(
+    service = "local-openai",
+    model = "local-whisper",
+    stt_args = args
+  )
+  checkpoint <- genflow:::.stt_checkpoint_signature(
+    service = "local-openai",
+    model = "local-whisper",
+    stt_args = args
+  )
+
+  expect_false(identical(public, checkpoint))
+  expect_identical(
+    genflow:::.stt_reconciliation_version(),
+    "deterministic-boundary-v2"
+  )
+  expect_identical(
+    checkpoint,
+    genflow:::.stt_signature_build(
+      service = "local-openai",
+      model = "local-whisper",
+      stt_args = args,
+      include_postprocessing = FALSE
+    )
+  )
+})
+
 test_that("Moss native signatures reject MP3 chunk media", {
   expect_error(
     gen_stt_signature(

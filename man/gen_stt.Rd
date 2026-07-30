@@ -249,8 +249,11 @@ transcribed text), \code{status_api}, \code{status_msg}, \code{service}, \code{m
 \code{duration} (elapsed processing seconds), \code{saved_file}, and metadata such
 as \code{audio}. A chunked call
 additionally exposes normalized chunking and reconciliation metadata;
-speaker identities that cannot be reconciled safely remain explicitly
-unresolved instead of being guessed. When
+directly supported mappings are preserved across unequal speaker rosters,
+while identities that cannot be reconciled safely remain explicitly
+unresolved in metadata instead of being guessed. Public transcript labels
+are canonical \code{S01}, \code{S02}, ... values; segments retain both their local
+and internal reconciled identities. When
 \code{diarize = TRUE}, diarized results additionally include
 \code{diarized_transcript} and \code{saved_metadata_file} when saving is enabled.
 Timestamps are optional and disabled by default. As with the other

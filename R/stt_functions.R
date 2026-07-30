@@ -161,8 +161,11 @@
 #'   `duration` (elapsed processing seconds), `saved_file`, and metadata such
 #'   as `audio`. A chunked call
 #'   additionally exposes normalized chunking and reconciliation metadata;
-#'   speaker identities that cannot be reconciled safely remain explicitly
-#'   unresolved instead of being guessed. When
+#'   directly supported mappings are preserved across unequal speaker rosters,
+#'   while identities that cannot be reconciled safely remain explicitly
+#'   unresolved in metadata instead of being guessed. Public transcript labels
+#'   are canonical `S01`, `S02`, ... values; segments retain both their local
+#'   and internal reconciled identities. When
 #'   `diarize = TRUE`, diarized results additionally include
 #'   `diarized_transcript` and `saved_metadata_file` when saving is enabled.
 #'   Timestamps are optional and disabled by default. As with the other
@@ -461,7 +464,7 @@ gen_stt.default <- function(
     output = chunk_options$output
   ), dots)
   chunk_config_fingerprint <- if (service %in% .stt_supported_services()) {
-    gen_stt_signature(
+    .stt_checkpoint_signature(
       service = service,
       model = model,
       language = language,
@@ -890,12 +893,25 @@ gen_stt.genflow_agent <- function(audio, ...) {
   )
   if (isTRUE(diarization$has_diarization)) {
     cat(sprintf(
-      "   -> Diarization: %d speaker%s (%s) | %d segment%s\n",
+      "   -> Diarization: %d speaker%s (%s) | %d segment%s%s\n",
       diarization$speaker_count,
       if (identical(diarization$speaker_count, 1L)) "" else "s",
       paste(diarization$speakers, collapse = ", "),
       diarization$segment_count,
-      if (identical(diarization$segment_count, 1L)) "" else "s"
+      if (identical(diarization$segment_count, 1L)) "" else "s",
+      if (diarization$unresolved_speaker_count > 0L) {
+        sprintf(
+          " | %d cross-chunk identit%s unresolved",
+          diarization$unresolved_speaker_count,
+          if (identical(diarization$unresolved_speaker_count, 1L)) {
+            "y"
+          } else {
+            "ies"
+          }
+        )
+      } else {
+        ""
+      }
     ))
     saved_metadata_file <- scalar_text(result$saved_metadata_file, "")
     if (nzchar(saved_metadata_file)) {
@@ -1236,11 +1252,33 @@ gen_stt.genflow_agent <- function(audio, ...) {
     character()
   }
   speakers <- unique(speakers[nzchar(speakers)])
+  unresolved <- if (length(segments)) {
+    vapply(
+      segments,
+      function(segment) {
+        if (!is.list(segment)) return("")
+        reconciled <- .stt_normalize_speaker_label(
+          segment$speaker_reconciled
+        )
+        if (grepl("^U[0-9]{4}_", reconciled)) {
+          .stt_normalize_speaker_label(segment$speaker)
+        } else {
+          ""
+        }
+      },
+      character(1)
+    )
+  } else {
+    character()
+  }
+  unresolved <- unique(unresolved[nzchar(unresolved)])
   list(
     has_diarization = length(speakers) > 0L,
     speaker_count = as.integer(length(speakers)),
     segment_count = as.integer(length(segments)),
-    speakers = speakers
+    speakers = speakers,
+    unresolved_speaker_count = as.integer(length(unresolved)),
+    unresolved_speakers = unresolved
   )
 }
 

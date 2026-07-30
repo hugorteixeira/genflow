@@ -261,18 +261,28 @@ later R call;
 `resume = FALSE` deliberately rebuilds and retranscribes the selected run.
 
 Adjacent chunks overlap by eight seconds by default. Genflow aligns the
-overlap, removes duplicated text, and reconciles local speaker IDs. For two
-speakers, strong exact-text evidence or timestamped overlap support can
-establish an identity/swap mapping. Temporal mappings require conservative
-support, purity, and margin thresholds; conflicting or weak evidence abstains
-and receives explicit unresolved IDs such as `U0002_S01`. With three or more
-speakers the reconciler also abstains instead of inventing a permutation.
-Timing is never used to delete content: only an exact normalized text overlap
-can trigger deduplication. Sentence-continuation evidence remains a
-conservative fallback when no overlap was requested. Every segment retains
-`speaker_local` and `chunk_index`, while boundary evidence and speaker maps
-live in reconciliation metadata. This keeps uncertainty visible and prevents
-one weak boundary from corrupting later speaker assignments.
+overlap, removes duplicated text, and reconciles local speaker IDs. Strong
+exact-text evidence or timestamped overlap support can establish directly
+observed mappings even when adjacent chunks contain different numbers of
+speakers. Temporal mappings require conservative support, purity, and margin
+thresholds. After a strong direct match, Genflow may infer at most one
+additional pair when exactly one boundary-active choice remains on each side;
+all other identities stay unresolved instead of being guessed. This handles
+common intro -> interview -> outro recordings without treating every local
+label as a new person. Timing is never used to delete content: only an exact
+normalized text overlap can trigger deduplication. Sentence-continuation
+evidence remains a conservative fallback for two-speaker audio when no overlap
+was requested.
+
+Every segment retains `speaker_local`, `chunk_index`, and the auditable
+`speaker_reconciled` identity. Internal unresolved namespaces such as
+`U0005_S03` remain in reconciliation metadata, while public transcripts use
+dense first-appearance labels (`S01`, `S02`, ...) and report how many
+cross-chunk identities remain unresolved. This keeps uncertainty visible
+without leaking implementation IDs into the transcript. Public STT signatures
+version this final post-processing separately from opaque part checkpoints, so
+a reconciliation upgrade can rebuild the TXT while reusing completed model
+inference.
 
 `output = "full"` preserves the regular complete result. The opt-in
 `output = "transcript"` projection remains a list with the common generator

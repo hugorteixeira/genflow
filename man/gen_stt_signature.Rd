@@ -33,7 +33,10 @@ Builds a deterministic, secret-free fingerprint for the effective
 speech-to-text configuration that \code{\link[=gen_stt]{gen_stt()}} would use. The signature is
 intended for downstream cache validation: it changes when semantic
 transcription settings, the effective endpoint, a resolved local model or
-executable, or their lightweight artifact signatures change.
+executable, their lightweight artifact signatures, or semantic final
+post-processing change. Genflow keeps the provider/runtime checkpoint
+fingerprint separate internally so post-processing upgrades can reuse
+successful chunk inference.
 }
 \details{
 Credentials and operational controls do not affect the fingerprint.

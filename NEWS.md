@@ -5,11 +5,14 @@
   gives priority to explicit `f16`, `q8_0`, or `q4_0`. The new implicit default
   changes the STT signature/checkpoint key; explicit `f16` preserves the former
   policy.
-- Timestamped chunk overlaps can now reconcile two-speaker identity/swap
-  permutations using duration support plus conservative purity and margin
-  thresholds. Weak, conflicting, or larger-roster evidence still receives
-  unresolved `U...` labels, and only exact normalized text overlap can delete
-  duplicated content.
+- Timestamped chunk overlaps now retain strong partial speaker mappings across
+  unequal rosters such as `3 -> 2` and `2 -> 3`. A single boundary-active
+  complement may be inferred only after direct evidence; ambiguous identities
+  remain internally unresolved. Public transcripts use canonical `S01`,
+  `S02`, ... labels and preserve internal `U...` ids in metadata. Public STT
+  signatures version reconciliation separately, allowing final transcripts to
+  refresh without retranscribing valid part checkpoints. Only exact normalized
+  text overlap can delete duplicated content.
 - Added semantic `chunk_format = "auto"`, `"wav"`, or `"mp3"` selection.
   CrispASR can now receive compact native MP3 chunks; moss-transcribe.cpp
   rejects MP3 early because its CLI requires WAV.

@@ -1,10 +1,18 @@
+#' Semantic version of final cross-chunk speaker post-processing
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconciliation_version <- function() {
+  "deterministic-boundary-v2"
+}
+
 #' Reconcile speaker labels across independently transcribed STT chunks
 #'
 #' This internal helper keeps every chunk's original speaker label in
-#' `speaker_local`, and only applies a cross-chunk two-speaker permutation when
-#' a conservative boundary detector supplies evidence for it. Textual overlap
-#' is detected independently and can be removed even when the speaker roster is
-#' not eligible for reconciliation.
+#' `speaker_local`, applies directly supported cross-chunk mappings, and may
+#' infer at most one additional boundary-active speaker when the remaining
+#' choice is unique. Textual overlap is detected independently and can be
+#' removed even when some speaker identities remain unresolved.
 #'
 #' @keywords internal
 #' @noRd
@@ -85,7 +93,14 @@
         )
       }
 
-      mapping <- .stt_reconcile_two_speaker_map(
+      boundary_activity <- .stt_reconcile_boundary_activity(
+        left_segments = left_segments,
+        right_segments = right_segments,
+        left_duration_seconds = left_chunk$duration_seconds,
+        right_duration_seconds = right_chunk$duration_seconds,
+        overlap_seconds = overlap_seconds
+      )
+      mapping <- .stt_reconcile_speaker_map(
         left_speakers = .stt_reconcile_mapped_roster(
           left_chunk$speakers,
           speaker_maps[[left_index]]
@@ -94,6 +109,7 @@
         overlap = overlap,
         continuity = continuity,
         stable_roster = stable_roster,
+        boundary_activity = boundary_activity,
         unresolved_map = .stt_reconcile_unresolved_map(
           right_chunk$speakers,
           chunk_index = right_index,
@@ -164,11 +180,16 @@
         timing_overlap_margin = mapping$timing$margin %||% 0,
         deduplicated_tokens = as.integer(deduplicated_tokens),
         continuation_score = continuity$score,
-        continuation_detected = continuity$accepted
+        continuation_detected = continuity$accepted,
+        boundary_activity_window_seconds = boundary_activity$window_seconds,
+        boundary_active_left_speakers = boundary_activity$left_active,
+        boundary_active_right_speakers = boundary_activity$right_active
       )
     }
   }
 
+  canonical <- .stt_reconcile_canonicalize_speakers(merged_segments)
+  merged_segments <- canonical$segments
   plain_text <- .stt_reconcile_plain_text(merged_segments)
   has_diarization <- any(vapply(
     merged_segments,
@@ -231,10 +252,14 @@
       speaker_maps = speaker_maps,
       boundaries = boundaries,
       unresolved_global_speakers = unresolved_global_speakers,
+      canonical_speaker_map = canonical$map,
+      unresolved_public_speakers = unname(
+        canonical$map[unresolved_global_speakers]
+      ),
       chunk_count = as.integer(chunk_count),
       chunk_starts_seconds = chunk_starts_seconds,
       chunk_overlap_seconds = overlap_by_boundary,
-      reconciliation = "deterministic-boundary-v1"
+      reconciliation = .stt_reconciliation_version()
     )
   )
   if (!is.null(diarized_transcript)) {
@@ -528,6 +553,40 @@
     }
     segment
   })
+}
+
+#' Canonicalize public speaker labels while retaining reconciliation ids
+#'
+#' Internal `U...` ids make uncertainty auditable, but they are implementation
+#' namespaces rather than useful transcript labels. Public segments use dense
+#' `S01`, `S02`, ... labels in first-appearance order and retain the internal
+#' identity in `speaker_reconciled`.
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconcile_canonicalize_speakers <- function(segments) {
+  if (!length(segments)) {
+    return(list(segments = segments, map = character()))
+  }
+  internal <- vapply(segments, function(segment) {
+    if (!is.list(segment)) return("")
+    .stt_normalize_speaker_label(segment$speaker)
+  }, character(1))
+  ordered <- unique(internal[nzchar(internal)])
+  canonical <- stats::setNames(
+    sprintf("S%02d", seq_along(ordered)),
+    ordered
+  )
+  normalized <- lapply(seq_along(segments), function(index) {
+    segment <- segments[[index]]
+    reconciled <- internal[[index]]
+    if (nzchar(reconciled) && reconciled %in% names(canonical)) {
+      segment$speaker_reconciled <- reconciled
+      segment$speaker <- unname(canonical[[reconciled]])
+    }
+    segment
+  })
+  list(segments = normalized, map = canonical)
 }
 
 #' @keywords internal
@@ -868,6 +927,434 @@
     total_support_seconds = sum(votes$weight),
     required_support_seconds = required,
     frame = frame
+  )
+}
+
+#' Find speakers active near a chunk boundary
+#'
+#' Activity is deliberately local to the boundary. A production narrator near
+#' the start or end of a recording must not block a unique host/guest
+#' complement several minutes later. The activity window is capped so it does
+#' not turn into a whole-chunk roster guess.
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconcile_boundary_activity <- function(left_segments,
+                                               right_segments,
+                                               left_duration_seconds,
+                                               right_duration_seconds,
+                                               overlap_seconds) {
+  overlap_seconds <- suppressWarnings(as.numeric(overlap_seconds)[1])
+  if (!is.finite(overlap_seconds) || overlap_seconds < 0) {
+    overlap_seconds <- 0
+  }
+  window_seconds <- min(240, max(30, 30 * overlap_seconds))
+  finite_durations <- c(left_duration_seconds, right_duration_seconds)
+  finite_durations <- finite_durations[
+    is.finite(finite_durations) & finite_durations > 0
+  ]
+  if (length(finite_durations)) {
+    window_seconds <- min(window_seconds, finite_durations)
+  }
+
+  collect <- function(segments, side, duration_seconds) {
+    support <- numeric()
+    if (!length(segments) ||
+        !is.finite(duration_seconds) || duration_seconds <= 0) {
+      return(support)
+    }
+    window_start <- if (identical(side, "left")) {
+      max(0, duration_seconds - window_seconds)
+    } else {
+      0
+    }
+    window_end <- if (identical(side, "left")) {
+      duration_seconds
+    } else {
+      min(duration_seconds, window_seconds)
+    }
+    for (segment in segments) {
+      speaker <- if (identical(side, "left")) {
+        .stt_reconcile_segment_global_speaker(segment)
+      } else {
+        .stt_reconcile_segment_speaker(segment)
+      }
+      if (!nzchar(speaker)) next
+      interval <- .stt_reconcile_local_interval(segment)
+      if (!all(is.finite(interval))) next
+      seconds <- min(interval[["end"]], window_end) -
+        max(interval[["start"]], window_start)
+      if (!is.finite(seconds) || seconds <= 0) next
+      current <- if (speaker %in% names(support)) support[[speaker]] else 0
+      support[[speaker]] <- current + seconds
+    }
+    support
+  }
+
+  left_support <- collect(
+    left_segments,
+    "left",
+    left_duration_seconds
+  )
+  right_support <- collect(
+    right_segments,
+    "right",
+    right_duration_seconds
+  )
+  list(
+    window_seconds = as.numeric(window_seconds),
+    minimum_active_seconds = 1.5,
+    left_support = left_support,
+    right_support = right_support,
+    left_active = names(left_support)[left_support >= 1.5],
+    right_active = names(right_support)[right_support >= 1.5]
+  )
+}
+
+#' Reconcile arbitrary speaker rosters while preserving the 2x2 contract
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconcile_speaker_map <- function(left_speakers,
+                                        right_speakers,
+                                        overlap,
+                                        continuity,
+                                        stable_roster,
+                                        boundary_activity,
+                                        unresolved_map) {
+  if (length(left_speakers) == 2L && length(right_speakers) == 2L) {
+    return(.stt_reconcile_two_speaker_map(
+      left_speakers = left_speakers,
+      right_speakers = right_speakers,
+      overlap = overlap,
+      continuity = continuity,
+      stable_roster = stable_roster,
+      unresolved_map = unresolved_map
+    ))
+  }
+  .stt_reconcile_partial_speaker_map(
+    left_speakers = left_speakers,
+    right_speakers = right_speakers,
+    overlap = overlap,
+    stable_roster = stable_roster,
+    boundary_activity = boundary_activity,
+    unresolved_map = unresolved_map
+  )
+}
+
+#' Select directly supported, mutually dominant edges from a vote matrix
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconcile_partial_assignment <- function(votes,
+                                               left_speakers,
+                                               right_speakers,
+                                               source,
+                                               minimum_support = 0) {
+  rejected <- function(reason, total_support = 0, best_support = 0) {
+    list(
+      accepted = FALSE,
+      reason = reason,
+      map = character(),
+      score = 0,
+      best_support = best_support,
+      total_support = total_support,
+      purity = 0,
+      margin = 0,
+      source = source
+    )
+  }
+  if (!is.data.frame(votes) || !nrow(votes)) {
+    return(rejected("no_support"))
+  }
+  votes <- votes[
+    votes$left_speaker %in% left_speakers &
+      votes$right_speaker %in% right_speakers &
+      is.finite(votes$weight) & votes$weight > 0,
+    c("left_speaker", "right_speaker", "weight"),
+    drop = FALSE
+  ]
+  if (!nrow(votes)) return(rejected("no_support"))
+  votes <- stats::aggregate(
+    votes$weight,
+    by = list(
+      left_speaker = votes$left_speaker,
+      right_speaker = votes$right_speaker
+    ),
+    FUN = sum
+  )
+  names(votes)[[3]] <- "weight"
+  vote_value <- function(left, right) {
+    matches <- votes$left_speaker == left & votes$right_speaker == right
+    sum(votes$weight[matches])
+  }
+  matrix_value <- vapply(left_speakers, function(left) {
+    vapply(right_speakers, function(right) {
+      vote_value(left, right)
+    }, numeric(1))
+  }, numeric(length(right_speakers)))
+  if (is.null(dim(matrix_value))) {
+    matrix_value <- matrix(
+      matrix_value,
+      nrow = length(right_speakers),
+      ncol = length(left_speakers)
+    )
+  }
+  rownames(matrix_value) <- right_speakers
+  colnames(matrix_value) <- left_speakers
+
+  dominance <- function(values, selected_index) {
+    total <- sum(values)
+    best <- values[[selected_index]]
+    others <- values[-selected_index]
+    runner_up <- if (length(others)) max(others) else 0
+    ties <- sum(values == best) > 1L
+    list(
+      total = total,
+      best = best,
+      purity = if (total > 0) best / total else 0,
+      margin = if (total > 0) (best - runner_up) / total else 0,
+      unique = !ties
+    )
+  }
+
+  candidates <- list()
+  for (right in right_speakers) {
+    column_votes <- matrix_value[right, ]
+    left_index <- which.max(column_votes)
+    left <- left_speakers[[left_index]]
+    column <- dominance(column_votes, left_index)
+    row_votes <- matrix_value[, left]
+    right_index <- match(right, right_speakers)
+    row <- dominance(row_votes, right_index)
+    accepted <- column$best >= minimum_support &&
+      column$unique && row$unique &&
+      column$purity >= 0.80 && row$purity >= 0.80 &&
+      column$margin >= 0.25 && row$margin >= 0.25 &&
+      which.max(row_votes) == right_index
+    if (accepted) {
+      candidates[[right]] <- list(
+        left = left,
+        support = column$best,
+        purity = min(column$purity, row$purity),
+        margin = min(column$margin, row$margin)
+      )
+    }
+  }
+  if (!length(candidates)) {
+    maximum <- max(votes$weight)
+    reason <- if (maximum < minimum_support) {
+      "insufficient_support"
+    } else {
+      "ambiguous"
+    }
+    return(rejected(reason, sum(votes$weight), maximum))
+  }
+
+  map <- stats::setNames(
+    vapply(candidates, `[[`, character(1), "left"),
+    names(candidates)
+  )
+  duplicated_left <- unique(unname(map)[duplicated(unname(map))])
+  if (length(duplicated_left)) {
+    map <- map[!unname(map) %in% duplicated_left]
+  }
+  if (!length(map)) {
+    return(rejected("collision", sum(votes$weight), max(votes$weight)))
+  }
+  kept <- candidates[names(map)]
+  purity <- min(vapply(kept, `[[`, numeric(1), "purity"))
+  margin <- min(vapply(kept, `[[`, numeric(1), "margin"))
+  best_support <- sum(vapply(kept, `[[`, numeric(1), "support"))
+  list(
+    accepted = TRUE,
+    reason = "accepted",
+    map = map,
+    score = min(1, purity * (0.5 + 0.5 * margin)),
+    best_support = best_support,
+    total_support = sum(votes$weight),
+    purity = purity,
+    margin = margin,
+    source = source
+  )
+}
+
+#' Map directly supported edges and at most one active-roster complement
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconcile_partial_speaker_map <- function(left_speakers,
+                                                right_speakers,
+                                                overlap,
+                                                stable_roster,
+                                                boundary_activity,
+                                                unresolved_map) {
+  unresolved_map <- unresolved_map[right_speakers]
+  empty_assignment <- function(source, reason = "unavailable") {
+    list(
+      accepted = FALSE,
+      reason = reason,
+      map = character(),
+      score = 0,
+      best_support = 0,
+      total_support = 0,
+      purity = 0,
+      margin = 0,
+      source = source
+    )
+  }
+  timing <- empty_assignment("timing_overlap")
+  timing$total_support <- overlap$timing_total_support_seconds %||% 0
+  text <- empty_assignment("overlap")
+  if (!isTRUE(stable_roster)) {
+    timing$reason <- "unstable_roster"
+    return(list(
+      map = unresolved_map,
+      status = "abstained",
+      method = "unstable_roster",
+      score = 0,
+      direct = character(),
+      inferred = character(),
+      unresolved = unresolved_map,
+      timing = timing
+    ))
+  }
+  if (isTRUE(overlap$timing_verified) && nrow(overlap$timing_votes)) {
+    timing <- .stt_reconcile_partial_assignment(
+      overlap$timing_votes,
+      left_speakers,
+      right_speakers,
+      source = "timing_overlap",
+      minimum_support = overlap$timing_required_support_seconds
+    )
+  } else if (isTRUE(overlap$timing_verified)) {
+    timing$reason <- "no_support"
+  }
+  if (isTRUE(overlap$accepted) && nrow(overlap$votes)) {
+    text <- .stt_reconcile_partial_assignment(
+      overlap$votes,
+      left_speakers,
+      right_speakers,
+      source = "overlap",
+      minimum_support = 1
+    )
+  }
+
+  assignments <- Filter(
+    function(value) isTRUE(value$accepted) && length(value$map),
+    list(text, timing)
+  )
+  candidate_right <- unique(unlist(lapply(assignments, function(value) {
+    names(value$map)
+  }), use.names = FALSE))
+  direct <- character()
+  direct_source <- character()
+  conflicts <- character()
+  for (right in candidate_right) {
+    values <- unique(unlist(lapply(assignments, function(value) {
+      if (right %in% names(value$map)) unname(value$map[[right]]) else NULL
+    }), use.names = FALSE))
+    if (length(values) == 1L) {
+      direct[[right]] <- values[[1]]
+      sources <- vapply(assignments, function(value) {
+        if (right %in% names(value$map) &&
+            identical(unname(value$map[[right]]), values[[1]])) {
+          value$source
+        } else {
+          ""
+        }
+      }, character(1))
+      direct_source[[right]] <- paste(
+        sort(unique(sources[nzchar(sources)])),
+        collapse = "+"
+      )
+    } else if (length(values) > 1L) {
+      conflicts <- c(conflicts, right)
+    }
+  }
+  if (length(direct)) {
+    collisions <- unique(unname(direct)[duplicated(unname(direct))])
+    if (length(collisions)) {
+      collision_right <- names(direct)[unname(direct) %in% collisions]
+      conflicts <- unique(c(conflicts, collision_right))
+      direct <- direct[!names(direct) %in% collision_right]
+      direct_source <- direct_source[names(direct)]
+    }
+  }
+
+  inferred <- character()
+  if (length(direct) && !length(conflicts)) {
+    remaining_left <- setdiff(left_speakers, unname(direct))
+    remaining_right <- setdiff(right_speakers, names(direct))
+    choose_candidate <- function(remaining, active, support) {
+      active_remaining <- intersect(remaining, active)
+      if (length(active_remaining) != 1L) return("")
+      competitors <- setdiff(remaining, active_remaining)
+      competitor_support <- support[competitors]
+      competitor_support[is.na(competitor_support)] <- 0
+      if (length(competitor_support) && any(competitor_support > 0)) {
+        return("")
+      }
+      active_remaining[[1]]
+    }
+    inferred_left <- choose_candidate(
+      remaining_left,
+      boundary_activity$left_active,
+      boundary_activity$left_support
+    )
+    inferred_right <- choose_candidate(
+      remaining_right,
+      boundary_activity$right_active,
+      boundary_activity$right_support
+    )
+    if (nzchar(inferred_left) && nzchar(inferred_right)) {
+      inferred <- stats::setNames(inferred_left, inferred_right)
+    }
+  }
+
+  map <- unresolved_map
+  if (length(direct)) map[names(direct)] <- unname(direct)
+  if (length(inferred)) map[names(inferred)] <- unname(inferred)
+  unresolved <- map[unname(map) %in% unname(unresolved_map)]
+  if (!length(direct) && !length(inferred)) {
+    method <- if (length(conflicts)) {
+      "conflicting_overlap_evidence"
+    } else {
+      "no_evidence"
+    }
+    return(list(
+      map = map,
+      status = "abstained",
+      method = method,
+      score = max(text$score, timing$score),
+      direct = character(),
+      inferred = character(),
+      unresolved = unresolved,
+      timing = timing
+    ))
+  }
+
+  sources <- sort(unique(unname(direct_source[names(direct)])))
+  sources <- sources[nzchar(sources)]
+  method <- if (length(sources)) {
+    paste(sources, collapse = "+")
+  } else {
+    "boundary"
+  }
+  method <- paste0(method, "_partial")
+  if (length(inferred)) {
+    method <- paste0(method, "_boundary_active_complement")
+  }
+  list(
+    map = map[right_speakers],
+    status = if (length(unresolved)) "partial" else "accepted",
+    method = method,
+    score = max(text$score, timing$score),
+    direct = direct,
+    inferred = inferred,
+    inferred_score = max(text$score, timing$score) * 0.85,
+    unresolved = unresolved,
+    timing = timing
   )
 }
 
