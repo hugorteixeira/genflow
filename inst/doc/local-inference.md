@@ -245,6 +245,12 @@ longer than the documented 90-minute single-window limit are attempted with a
 warning. Callers that need reliable processing beyond that limit should split
 the input into model-supported windows.
 
+For this backend, `native_kv_quant = NULL` selects the model-specific `q8_0`
+KV-cache default. Explicit `f16`, `q8_0`, and `q4_0` values always win, while
+other native backends keep their existing runtime default. Genflow records the
+effective MOSS value and whether it came from the model default or an explicit
+override in the result metadata.
+
 ### AMD and Vulkan
 
 For an AMD GPU, use a CrispASR build compiled with Vulkan and select

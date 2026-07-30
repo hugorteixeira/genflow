@@ -134,6 +134,50 @@ test_that("chunk controls use the regular STT validation", {
   )
 })
 
+test_that("STT signatures reflect the backend-specific MOSS KV default", {
+  signature <- function(backend, kv_quant = NULL) {
+    args <- list(
+      native_engine = "crispasr",
+      native_backend = backend
+    )
+    if (!is.null(kv_quant)) args$native_kv_quant <- kv_quant
+    gen_stt_signature(
+      service = "local-native",
+      model = "unknown-model.gguf",
+      stt_args = args
+    )
+  }
+
+  expect_identical(
+    signature("moss-diarize"),
+    signature("moss-diarize", "q8_0")
+  )
+  expect_false(identical(
+    signature("moss-diarize"),
+    signature("moss-diarize", "f16")
+  ))
+  expect_identical(
+    signature("whisper"),
+    signature("whisper", "f16")
+  )
+  expect_false(identical(
+    signature("whisper"),
+    signature("whisper", "q8_0")
+  ))
+
+  inferred <- function(kv_quant = NULL) {
+    args <- list(native_engine = "crispasr")
+    if (!is.null(kv_quant)) args$native_kv_quant <- kv_quant
+    gen_stt_signature(
+      service = "local-native",
+      model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
+      stt_args = args
+    )
+  }
+  expect_identical(inferred(), inferred("q8_0"))
+  expect_false(identical(inferred(), inferred("f16")))
+})
+
 test_that("credentials and operational controls never change the signature", {
   first <- gen_stt_signature(
     service = "local-openai",

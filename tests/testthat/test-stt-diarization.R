@@ -325,14 +325,14 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
     result$metadata$max_new_tokens_source,
     "automatic-duration"
   )
-  expect_identical(result$metadata$native_kv_quant, "f16")
+  expect_identical(result$metadata$native_kv_quant, "q8_0")
   expect_identical(
     result$metadata$native_kv_quant_source,
-    "runtime-default"
+    "model-default"
   )
   expect_identical(
     seen$environment,
-    c(CRISPASR_KV_QUANT = "f16")
+    c(CRISPASR_KV_QUANT = "q8_0")
   )
   expect_false(result$metadata$max_new_tokens_context_limited)
   expect_identical(result$metadata$input_duration_seconds, 321)
@@ -386,7 +386,7 @@ test_that("CrispASR runs MOSS Diarize as one speaker-continuous input", {
   expect_identical(conflicted$metadata$requested_backend, "granite-4.1")
 })
 
-test_that("long MOSS Diarize runs keep F16 and expose context limits", {
+test_that("long MOSS Diarize runs use the Q8 model default and expose context limits", {
   audio <- stt_diarization_audio_fixture()
   model <- tempfile(
     "moss-transcribe-diarize-0.9b-q8_0-",
@@ -430,12 +430,12 @@ test_that("long MOSS Diarize runs keep F16 and expose context limits", {
   expect_identical(seen$args[[token_position + 1L]], "74752")
   expect_identical(
     seen$environment,
-    c(CRISPASR_KV_QUANT = "f16")
+    c(CRISPASR_KV_QUANT = "q8_0")
   )
-  expect_identical(result$metadata$native_kv_quant, "f16")
+  expect_identical(result$metadata$native_kv_quant, "q8_0")
   expect_identical(
     result$metadata$native_kv_quant_source,
-    "runtime-default"
+    "model-default"
   )
   expect_true(result$metadata$max_new_tokens_context_limited)
   expect_identical(result$metadata$moss_total_context_tokens, 131072L)
@@ -452,28 +452,73 @@ test_that("explicit CrispASR KV quantization wins over long-form policy", {
   )
   writeBin(as.raw(c(1, 2, 3)), model)
   on.exit(unlink(c(audio, model)), add = TRUE)
+
+  for (requested in c("f16", "q8_0", "q4_0")) {
+    seen_environment <- NULL
+    result <- genflow:::.stt_native_crispasr(
+      audio_path = audio,
+      audio_duration_seconds = 3600,
+      model = model,
+      language = NULL,
+      prompt = NULL,
+      timeout_secs = 10,
+      executable = file.path(R.home("bin"), "R"),
+      native_kv_quant = requested,
+      native_device = "vulkan",
+      runner = function(command, args, timeout_secs, environment) {
+        seen_environment <<- environment
+        output_base <- args[[match("-of", args) + 1L]]
+        jsonlite::write_json(
+          list(
+            crispasr = list(
+              backend = "moss-diarize",
+              model = basename(model)
+            ),
+            transcription = stt_diarized_segments_fixture()
+          ),
+          paste0(output_base, ".json"),
+          auto_unbox = TRUE
+        )
+        list(status = 0L, output = character())
+      }
+    )
+
+    expect_identical(
+      seen_environment,
+      stats::setNames(requested, "CRISPASR_KV_QUANT")
+    )
+    expect_identical(result$metadata$max_new_tokens, 72704L)
+    expect_identical(result$metadata$native_kv_quant, requested)
+    expect_identical(result$metadata$native_kv_quant_source, "explicit")
+  }
+})
+
+test_that("non-MOSS CrispASR backends keep their existing KV runtime default", {
+  audio <- stt_diarization_audio_fixture()
+  model <- tempfile("whisper-large-v3-Q8_0-", fileext = ".gguf")
+  writeBin(as.raw(c(1, 2, 3)), model)
+  on.exit(unlink(c(audio, model)), add = TRUE)
   seen_environment <- NULL
 
   result <- genflow:::.stt_native_crispasr(
     audio_path = audio,
-    audio_duration_seconds = 3600,
+    audio_duration_seconds = 60,
     model = model,
     language = NULL,
     prompt = NULL,
     timeout_secs = 10,
     executable = file.path(R.home("bin"), "R"),
-    native_kv_quant = "q4_0",
-    native_device = "vulkan",
+    native_device = "cpu",
     runner = function(command, args, timeout_secs, environment) {
       seen_environment <<- environment
       output_base <- args[[match("-of", args) + 1L]]
       jsonlite::write_json(
         list(
           crispasr = list(
-            backend = "moss-diarize",
+            backend = "whisper",
             model = basename(model)
           ),
-          transcription = stt_diarized_segments_fixture()
+          transcription = "Transcript."
         ),
         paste0(output_base, ".json"),
         auto_unbox = TRUE
@@ -482,13 +527,9 @@ test_that("explicit CrispASR KV quantization wins over long-form policy", {
     }
   )
 
-  expect_identical(
-    seen_environment,
-    c(CRISPASR_KV_QUANT = "q4_0")
-  )
-  expect_identical(result$metadata$max_new_tokens, 72704L)
-  expect_identical(result$metadata$native_kv_quant, "q4_0")
-  expect_identical(result$metadata$native_kv_quant_source, "explicit")
+  expect_identical(seen_environment, character())
+  expect_null(result$metadata$native_kv_quant)
+  expect_null(result$metadata$native_kv_quant_source)
 })
 
 test_that("MOSS Diarize preserves explicit limits beyond its supported window", {

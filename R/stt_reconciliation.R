@@ -66,7 +66,9 @@
         left_segments,
         right_segments,
         overlap_seconds = overlap_seconds,
-        left_duration_seconds = left_chunk$duration_seconds
+        left_duration_seconds = left_chunk$duration_seconds,
+        left_chunk_start_seconds = left_chunk$chunk_start_seconds,
+        right_chunk_start_seconds = right_chunk$chunk_start_seconds
       )
       continuity <- if (overlap_seconds <= 0) {
         .stt_reconcile_continuity_evidence(
@@ -150,6 +152,16 @@
         overlap_identity = overlap$identity,
         overlap_timing_verified = overlap$timing_verified,
         overlap_timing_unverified = overlap$timing_unverified,
+        timing_overlap_accepted = isTRUE(mapping$timing$accepted),
+        timing_overlap_reason = mapping$timing$reason %||% "unavailable",
+        timing_overlap_support_seconds =
+          mapping$timing$best_support %||% 0,
+        timing_overlap_total_support_seconds =
+          mapping$timing$total_support %||% 0,
+        timing_overlap_required_support_seconds =
+          overlap$timing_required_support_seconds %||% 0,
+        timing_overlap_purity = mapping$timing$purity %||% 0,
+        timing_overlap_margin = mapping$timing$margin %||% 0,
         deduplicated_tokens = as.integer(deduplicated_tokens),
         continuation_score = continuity$score,
         continuation_detected = continuity$accepted
@@ -345,7 +357,8 @@
   list(
     segments = segments,
     speakers = speakers,
-    duration_seconds = duration_seconds
+    duration_seconds = duration_seconds,
+    chunk_start_seconds = chunk_start_seconds
   )
 }
 
@@ -731,6 +744,133 @@
     right_start <= 0.75
 }
 
+#' Build duration-weighted speaker votes inside the shared audio window
+#'
+#' @keywords internal
+#' @noRd
+.stt_reconcile_timing_overlap_evidence <- function(
+    left_segments,
+    right_segments,
+    overlap_seconds,
+    left_duration_seconds,
+    left_chunk_start_seconds = NA_real_,
+    right_chunk_start_seconds = NA_real_) {
+  empty_votes <- data.frame(
+    left_speaker = character(),
+    right_speaker = character(),
+    weight = numeric(),
+    stringsAsFactors = FALSE
+  )
+  required <- if (is.finite(overlap_seconds) && overlap_seconds > 0) {
+    max(1.5, 0.35 * overlap_seconds)
+  } else {
+    Inf
+  }
+  empty <- function(verified = FALSE, frame = "unavailable") {
+    list(
+      verified = verified,
+      votes = empty_votes,
+      total_support_seconds = 0,
+      required_support_seconds = required,
+      frame = frame
+    )
+  }
+  if (!is.finite(overlap_seconds) || overlap_seconds <= 0 ||
+      !is.finite(left_duration_seconds) || left_duration_seconds <= 0) {
+    return(empty())
+  }
+
+  global_frame <- is.finite(left_chunk_start_seconds) &&
+    is.finite(right_chunk_start_seconds)
+  if (global_frame) {
+    left_end <- left_chunk_start_seconds + left_duration_seconds
+    window_start <- max(left_end - overlap_seconds, right_chunk_start_seconds)
+    window_end <- min(
+      left_end,
+      right_chunk_start_seconds + overlap_seconds
+    )
+    frame <- "global"
+  } else {
+    window_start <- left_duration_seconds - overlap_seconds
+    window_end <- left_duration_seconds
+    frame <- "local-offset"
+  }
+  if (window_end <= window_start) return(empty(TRUE, frame))
+
+  collect <- function(segments, side) {
+    Filter(Negate(is.null), lapply(segments, function(segment) {
+      speaker <- if (identical(side, "left")) {
+        .stt_reconcile_segment_global_speaker(segment)
+      } else {
+        .stt_reconcile_segment_speaker(segment)
+      }
+      if (!nzchar(speaker)) return(NULL)
+      local <- .stt_reconcile_local_interval(segment)
+      if (!all(is.finite(local))) return(list(valid = FALSE))
+      if (global_frame && !is.null(segment$start_local)) {
+        interval <- .stt_reconcile_segment_interval(segment)
+      } else {
+        offset <- if (identical(side, "right")) {
+          left_duration_seconds - overlap_seconds
+        } else {
+          0
+        }
+        interval <- local + offset
+      }
+      list(
+        valid = all(is.finite(interval)),
+        speaker = speaker,
+        start = interval[["start"]],
+        end = interval[["end"]]
+      )
+    }))
+  }
+  left <- collect(left_segments, "left")
+  right <- collect(right_segments, "right")
+  if (!length(left) || !length(right) ||
+      any(!vapply(left, `[[`, logical(1), "valid")) ||
+      any(!vapply(right, `[[`, logical(1), "valid"))) {
+    return(empty(FALSE, frame))
+  }
+
+  raw_votes <- list()
+  for (left_segment in left) {
+    left_start <- max(left_segment$start, window_start)
+    left_end <- min(left_segment$end, window_end)
+    if (left_end <= left_start) next
+    for (right_segment in right) {
+      right_start <- max(right_segment$start, window_start)
+      right_end <- min(right_segment$end, window_end)
+      support <- min(left_end, right_end) - max(left_start, right_start)
+      if (!is.finite(support) || support <= 0) next
+      raw_votes[[length(raw_votes) + 1L]] <- data.frame(
+        left_speaker = left_segment$speaker,
+        right_speaker = right_segment$speaker,
+        weight = support,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  if (!length(raw_votes)) return(empty(TRUE, frame))
+  votes <- do.call(rbind, raw_votes)
+  votes <- stats::aggregate(
+    votes$weight,
+    by = list(
+      left_speaker = votes$left_speaker,
+      right_speaker = votes$right_speaker
+    ),
+    FUN = sum
+  )
+  names(votes)[[3]] <- "weight"
+  list(
+    verified = TRUE,
+    votes = votes,
+    total_support_seconds = sum(votes$weight),
+    required_support_seconds = required,
+    frame = frame
+  )
+}
+
 #' @keywords internal
 #' @noRd
 .stt_reconcile_two_speaker_map <- function(left_speakers,
@@ -740,10 +880,40 @@
                                             stable_roster,
                                             unresolved_map) {
   unresolved_map <- unresolved_map[right_speakers]
+  timing <- list(
+    accepted = FALSE,
+    reason = "unavailable",
+    best_support = 0,
+    total_support = overlap$timing_total_support_seconds %||% 0,
+    purity = 0,
+    margin = 0
+  )
+  if (isTRUE(stable_roster) &&
+      length(left_speakers) == 2L &&
+      length(right_speakers) == 2L &&
+      isTRUE(overlap$timing_verified) &&
+      nrow(overlap$timing_votes)) {
+    timing <- .stt_reconcile_overlap_assignment(
+      overlap$timing_votes,
+      left_speakers,
+      right_speakers,
+      source = "timing_overlap",
+      minimum_support = overlap$timing_required_support_seconds
+    )
+  }
+  attach_timing <- function(value) {
+    value$timing <- timing
+    value
+  }
   if (!isTRUE(stable_roster) ||
       length(left_speakers) != 2L ||
       length(right_speakers) != 2L) {
-    return(list(
+    timing$reason <- if (!isTRUE(stable_roster)) {
+      "unstable_roster"
+    } else {
+      "unsupported_roster_size"
+    }
+    return(attach_timing(list(
       map = unresolved_map,
       status = "abstained",
       method = if (!isTRUE(stable_roster)) {
@@ -755,23 +925,40 @@
       direct = character(),
       inferred = character(),
       unresolved = unresolved_map
-    ))
+    )))
   }
 
   direct_left <- ""
   direct_right <- ""
   score <- 0
   method <- "none"
+  text_assignment <- list(accepted = FALSE)
   if (isTRUE(overlap$accepted) && nrow(overlap$votes)) {
-    assignment <- .stt_reconcile_overlap_assignment(
+    text_assignment <- .stt_reconcile_overlap_assignment(
       overlap$votes,
       left_speakers,
       right_speakers
     )
-    if (isTRUE(assignment$accepted)) {
-      return(assignment)
-    }
   }
+  if (isTRUE(text_assignment$accepted) && isTRUE(timing$accepted) &&
+      !identical(
+        unname(text_assignment$map[right_speakers]),
+        unname(timing$map[right_speakers])
+      )) {
+    return(attach_timing(list(
+      map = unresolved_map,
+      status = "abstained",
+      method = "conflicting_overlap_evidence",
+      score = max(text_assignment$score, timing$score),
+      direct = character(),
+      inferred = character(),
+      unresolved = unresolved_map
+    )))
+  }
+  if (isTRUE(text_assignment$accepted)) {
+    return(attach_timing(text_assignment))
+  }
+  if (isTRUE(timing$accepted)) return(attach_timing(timing))
   if (isTRUE(continuity$accepted) &&
       continuity$left_speaker %in% left_speakers &&
       continuity$right_speaker %in% right_speakers) {
@@ -781,7 +968,7 @@
     method <- "continuation"
   }
   if (!nzchar(direct_left) || !nzchar(direct_right)) {
-    return(list(
+    return(attach_timing(list(
       map = unresolved_map,
       status = "abstained",
       method = "no_evidence",
@@ -789,7 +976,7 @@
       direct = character(),
       inferred = character(),
       unresolved = unresolved_map
-    ))
+    )))
   }
 
   remaining_left <- setdiff(left_speakers, direct_left)
@@ -799,7 +986,7 @@
     remaining_right
   ))
   inferred_score <- score * 0.85
-  list(
+  attach_timing(list(
     map = map[right_speakers],
     status = "accepted",
     method = .stt_reconcile_map_method(map, right_speakers, method),
@@ -808,14 +995,16 @@
     inferred = stats::setNames(remaining_left, remaining_right),
     inferred_score = inferred_score,
     unresolved = character()
-  )
+  ))
 }
 
 #' @keywords internal
 #' @noRd
 .stt_reconcile_overlap_assignment <- function(votes,
                                                left_speakers,
-                                               right_speakers) {
+                                               right_speakers,
+                                               source = "overlap",
+                                               minimum_support = 0) {
   vote_value <- function(left, right) {
     matches <- votes$left_speaker == left & votes$right_speaker == right
     sum(votes$weight[matches])
@@ -830,33 +1019,50 @@
   first_score <- map_score(first_map)
   second_score <- map_score(second_map)
   total <- sum(votes$weight)
-  if (total <= 0 || identical(first_score, second_score)) {
-    return(list(accepted = FALSE))
-  }
-  best <- if (first_score > second_score) first_map else second_map
   best_score <- max(first_score, second_score)
   runner_up <- min(first_score, second_score)
-  purity <- best_score / total
-  margin <- (best_score - runner_up) / total
+  purity <- if (total > 0) best_score / total else 0
+  margin <- if (total > 0) (best_score - runner_up) / total else 0
+  rejected <- function(reason) {
+    list(
+      accepted = FALSE,
+      reason = reason,
+      best_support = best_score,
+      total_support = total,
+      purity = purity,
+      margin = margin
+    )
+  }
+  if (total <= 0) return(rejected("no_support"))
+  if (identical(first_score, second_score)) return(rejected("tied"))
   if (purity < 0.80 || margin < 0.25) {
-    return(list(accepted = FALSE))
+    return(rejected("ambiguous"))
+  }
+  if (best_score < minimum_support) {
+    return(rejected("insufficient_support"))
   }
 
+  best <- if (first_score > second_score) first_map else second_map
   direct_support <- vapply(names(best), function(right) {
     vote_value(best[[right]], right)
   }, numeric(1))
   direct_names <- names(direct_support)[direct_support > 0]
   inferred_names <- setdiff(names(best), direct_names)
-  method <- .stt_reconcile_map_method(best, right_speakers, "overlap")
+  method <- .stt_reconcile_map_method(best, right_speakers, source)
   list(
     accepted = TRUE,
+    reason = "accepted",
     map = best,
     status = "accepted",
     method = method,
     score = min(1, purity * (0.5 + 0.5 * margin)),
     direct = best[direct_names],
     inferred = best[inferred_names],
-    unresolved = character()
+    unresolved = character(),
+    best_support = best_score,
+    total_support = total,
+    purity = purity,
+    margin = margin
   )
 }
 
@@ -879,9 +1085,20 @@
 .stt_reconcile_overlap_evidence <- function(left_segments,
                                              right_segments,
                                              overlap_seconds,
-                                             left_duration_seconds) {
-  empty_result <- function(timing_verified = FALSE,
-                           timing_unverified = FALSE) {
+                                             left_duration_seconds,
+                                             left_chunk_start_seconds = NA_real_,
+                                             right_chunk_start_seconds = NA_real_) {
+  timing <- .stt_reconcile_timing_overlap_evidence(
+    left_segments = left_segments,
+    right_segments = right_segments,
+    overlap_seconds = overlap_seconds,
+    left_duration_seconds = left_duration_seconds,
+    left_chunk_start_seconds = left_chunk_start_seconds,
+    right_chunk_start_seconds = right_chunk_start_seconds
+  )
+  empty_result <- function(
+      timing_verified = isTRUE(timing$verified),
+      timing_unverified = !isTRUE(timing$verified)) {
     list(
       accepted = FALSE,
       deduplicate = FALSE,
@@ -891,6 +1108,10 @@
       identity = 0,
       timing_verified = timing_verified,
       timing_unverified = timing_unverified,
+      timing_votes = timing$votes,
+      timing_total_support_seconds = timing$total_support_seconds,
+      timing_required_support_seconds = timing$required_support_seconds,
+      timing_frame = timing$frame,
       right_prefix_tokens = 0L,
       votes = data.frame(
         left_speaker = character(),
@@ -907,7 +1128,7 @@
   left_all <- .stt_reconcile_segment_tokens(left_segments, global = TRUE)
   right_all <- .stt_reconcile_segment_tokens(right_segments, global = FALSE)
   if (!length(left_all$token) || !length(right_all$token)) {
-    return(empty_result(timing_unverified = TRUE))
+    return(empty_result())
   }
 
   left_has_timing <- is.finite(left_duration_seconds) &&
@@ -917,7 +1138,8 @@
     all(is.finite(left_all$time))
   right_complete_timing <- right_has_timing &&
     all(is.finite(right_all$time))
-  timing_verified <- left_complete_timing && right_complete_timing
+  timing_verified <- isTRUE(timing$verified) &&
+    left_complete_timing && right_complete_timing
   timing_unverified <- !timing_verified
 
   subset_tokens <- function(value, keep) {
@@ -1042,6 +1264,10 @@
     identity = 1,
     timing_verified = timing_verified,
     timing_unverified = timing_unverified,
+    timing_votes = timing$votes,
+    timing_total_support_seconds = timing$total_support_seconds,
+    timing_required_support_seconds = timing$required_support_seconds,
+    timing_frame = timing$frame,
     right_prefix_tokens = as.integer(match_size),
     votes = votes
   )

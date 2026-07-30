@@ -436,6 +436,131 @@ test_that("overlap normalization ignores case and punctuation", {
   )
 })
 
+test_that("timing overlap maps identity despite small text differences", {
+  first <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "The market outlook stays constructive.", 12, 16),
+    stt_reconcile_segment("S02", "Risk remains concentrated in energy.", 16, 20)
+  ), duration_seconds = 20)
+  second <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "Market outlook is still constructive.", 0, 4),
+    stt_reconcile_segment("S02", "The risk is concentrated in oil.", 4, 8)
+  ), duration_seconds = 20)
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second),
+    chunk_starts_seconds = c(100, 112),
+    chunk_overlap_seconds = 8
+  )
+  boundary <- reconciled$metadata$boundaries[[1]]
+
+  expect_identical(boundary$method, "timing_overlap_identity")
+  expect_identical(
+    reconciled$metadata$speaker_maps[[2]],
+    c(S01 = "S01", S02 = "S02")
+  )
+  expect_equal(boundary$timing_overlap_support_seconds, 8)
+  expect_equal(boundary$timing_overlap_required_support_seconds, 2.8)
+  expect_identical(boundary$deduplicated_tokens, 0L)
+})
+
+test_that("timing overlap maps a chunk-local speaker swap", {
+  first <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "First wording from the host.", 12, 16),
+    stt_reconcile_segment("S02", "First wording from the guest.", 16, 20)
+  ), duration_seconds = 20)
+  second <- stt_reconcile_result(list(
+    stt_reconcile_segment("S02", "A revised host transcription.", 0, 4),
+    stt_reconcile_segment("S01", "A revised guest transcription.", 4, 8)
+  ), duration_seconds = 20)
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second),
+    chunk_overlap_seconds = 8
+  )
+  boundary <- reconciled$metadata$boundaries[[1]]
+
+  expect_identical(boundary$method, "timing_overlap_swap")
+  expect_identical(
+    reconciled$metadata$speaker_maps[[2]],
+    c(S02 = "S01", S01 = "S02")
+  )
+  expect_equal(boundary$timing_overlap_purity, 1)
+  expect_equal(boundary$timing_overlap_margin, 1)
+  expect_identical(boundary$deduplicated_tokens, 0L)
+})
+
+test_that("timing overlap abstains below its absolute and relative floor", {
+  first <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "Brief first voice.", 2, 2.4),
+    stt_reconcile_segment("S02", "Brief second voice.", 8, 9)
+  ))
+  second <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "Different first wording.", 0, 0.4),
+    stt_reconcile_segment("S02", "Different second wording.", 6, 7)
+  ))
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second),
+    chunk_overlap_seconds = 8
+  )
+  boundary <- reconciled$metadata$boundaries[[1]]
+
+  expect_identical(boundary$method, "no_evidence")
+  expect_identical(boundary$timing_overlap_reason, "insufficient_support")
+  expect_lt(
+    boundary$timing_overlap_support_seconds,
+    boundary$timing_overlap_required_support_seconds
+  )
+})
+
+test_that("timing overlap abstains for a three-speaker roster", {
+  first <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "Host one.", 2, 4),
+    stt_reconcile_segment("S02", "Guest one.", 4, 7),
+    stt_reconcile_segment("S03", "Guest two.", 7, 10)
+  ))
+  second <- stt_reconcile_result(list(
+    stt_reconcile_segment("S01", "Host revised.", 0, 2),
+    stt_reconcile_segment("S02", "Guest revised.", 2, 5),
+    stt_reconcile_segment("S03", "Other guest revised.", 5, 8)
+  ))
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second),
+    chunk_overlap_seconds = 8
+  )
+  boundary <- reconciled$metadata$boundaries[[1]]
+
+  expect_identical(boundary$method, "unsupported_roster_size")
+  expect_false(boundary$timing_overlap_accepted)
+  expect_identical(
+    boundary$timing_overlap_reason,
+    "unsupported_roster_size"
+  )
+})
+
+test_that("conflicting exact-text and timing maps abstain", {
+  exact <- "shared exact phrase belongs to the first speaker"
+  first <- stt_reconcile_result(list(
+    stt_reconcile_segment("S02", "Other left material.", 16, 20),
+    stt_reconcile_segment("S01", exact, 12, 16)
+  ), duration_seconds = 20)
+  second <- stt_reconcile_result(list(
+    stt_reconcile_segment("S02", exact, 4, 8),
+    stt_reconcile_segment("S01", "Different right material.", 0, 4)
+  ), duration_seconds = 20)
+
+  reconciled <- genflow:::.stt_reconcile_chunk_results(
+    list(first, second),
+    chunk_overlap_seconds = 8
+  )
+  boundary <- reconciled$metadata$boundaries[[1]]
+
+  expect_identical(boundary$method, "conflicting_overlap_evidence")
+  expect_identical(boundary$status, "abstained")
+  expect_gt(boundary$deduplicated_tokens, 0L)
+})
+
 test_that("short generic repetitions are not treated as overlap", {
   first <- stt_reconcile_result(list(
     stt_reconcile_segment("S01", "Earlier.", 0, 1),

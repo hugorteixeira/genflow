@@ -249,13 +249,11 @@ gen_stt_signature <- function(service = "openai",
     } else {
       ""
     }
-    kv_quant <- .stt_validate_native_kv_quant(get_arg("native_kv_quant"))
-    if (!is.null(kv_quant) && !identical(engine, "crispasr")) {
-      stop(
-        "`native_kv_quant` is available only with the CrispASR native engine.",
-        call. = FALSE
-      )
-    }
+    kv_policy <- .stt_resolve_native_kv_quant(
+      requested = get_arg("native_kv_quant"),
+      engine = engine,
+      backend = backend
+    )
     if (isTRUE(semantic$diarize_speakers) &&
         !identical(engine, "crispasr")) {
       stop(
@@ -268,11 +266,7 @@ gen_stt_signature <- function(service = "openai",
       engine = engine,
       backend = backend,
       quant = if (nzchar(quant)) quant else NULL,
-      kv_quant = if (identical(engine, "crispasr")) {
-        kv_quant %||% "f16"
-      } else {
-        NULL
-      },
+      kv_quant = kv_policy$signature_value,
       device = device
     )
     model_policy <- .stt_chunk_model_policy(service, runtime)

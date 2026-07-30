@@ -131,11 +131,12 @@
 #'   `GENFLOW_STT_NATIVE_QUANT`, then the saved `stt_native_quant` setting.
 #' @param native_kv_quant Optional CrispASR KV-cache quantization:
 #'   `"f16"`, `"q8_0"`, or `"q4_0"`. The value is forwarded only to the
-#'   CrispASR child process through `CRISPASR_KV_QUANT`. `NULL` keeps the F16
-#'   cache for MOSS Diarize because it is the fastest tested option.
-#'   Explicit `"q8_0"` reduces VRAM but was substantially slower with this
-#'   backend on Vulkan. Explicit `"q4_0"` is supported but not recommended for
-#'   MOSS Diarize because observed output quality degraded.
+#'   CrispASR child process through `CRISPASR_KV_QUANT`. For the effective
+#'   MOSS Diarize backend, `NULL` selects the model default `"q8_0"` to reduce
+#'   KV-cache VRAM. Explicit `"f16"`, `"q8_0"`, or `"q4_0"` always wins;
+#'   `"f16"` may be faster when memory is sufficient. Explicit `"q4_0"` is
+#'   supported but not recommended for MOSS Diarize because observed output
+#'   quality degraded. Other backends retain their existing runtime default.
 #' @param native_device Native accelerator for `service = "local-native"`:
 #'   `"auto"`, `"cpu"`, `"vulkan"`, `"hip"`, `"cuda"`, or `"metal"`.
 #'   Support is engine-specific; CrispASR does not expose HIP and should use a
@@ -2196,6 +2197,55 @@ gen_stt.genflow_agent <- function(audio, ...) {
   quant
 }
 
+#' Resolve the effective CrispASR KV-cache policy
+#'
+#' The runtime value is materialized only for explicit choices and
+#' model-specific defaults. Other CrispASR backends continue to rely on the
+#' engine's F16 runtime default, while the signature records that effective
+#' semantic value for cache invalidation.
+#'
+#' @keywords internal
+#' @noRd
+.stt_resolve_native_kv_quant <- function(requested = NULL,
+                                         engine,
+                                         backend = NULL) {
+  requested <- .stt_validate_native_kv_quant(requested)
+  engine <- tolower(trimws(as.character(engine %||% "")[1]))
+  backend <- .stt_validate_native_backend(backend)
+  if (!is.null(requested) && !identical(engine, "crispasr")) {
+    stop(
+      "`native_kv_quant` is available only with the CrispASR native engine.",
+      call. = FALSE
+    )
+  }
+  if (!identical(engine, "crispasr")) {
+    return(list(
+      runtime_value = NULL,
+      signature_value = NULL,
+      source = NULL
+    ))
+  }
+  if (!is.null(requested)) {
+    return(list(
+      runtime_value = requested,
+      signature_value = requested,
+      source = "explicit"
+    ))
+  }
+  if (identical(backend, "moss-diarize")) {
+    return(list(
+      runtime_value = "q8_0",
+      signature_value = "q8_0",
+      source = "model-default"
+    ))
+  }
+  list(
+    runtime_value = NULL,
+    signature_value = "f16",
+    source = NULL
+  )
+}
+
 #' Plan a MOSS Diarize generation budget inside its total context
 #'
 #' MOSS Diarize documents a 131,072-token total context. A real 68.5-minute
@@ -2766,8 +2816,13 @@ gen_stt.genflow_agent <- function(audio, ...) {
     ""
   }
   moss_generation_plan <- NULL
-  effective_kv_quant <- requested_kv_quant
-  kv_quant_source <- if (!is.null(requested_kv_quant)) "explicit" else ""
+  kv_policy <- .stt_resolve_native_kv_quant(
+    requested = requested_kv_quant,
+    engine = "crispasr",
+    backend = backend
+  )
+  effective_kv_quant <- kv_policy$runtime_value
+  kv_quant_source <- kv_policy$source %||% ""
   effective_audio_duration <- suppressWarnings(
     as.numeric(audio_duration_seconds)[1]
   )
@@ -2797,10 +2852,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
         max_new_tokens <- moss_generation_plan$max_new_tokens
       }
       generation_limit_source <- "automatic-duration"
-    }
-    if (is.null(effective_kv_quant)) {
-      effective_kv_quant <- "f16"
-      kv_quant_source <- "runtime-default"
     }
     if (identical(generation_limit_source, "automatic-duration") &&
         isTRUE(moss_generation_plan$context_limited)) {

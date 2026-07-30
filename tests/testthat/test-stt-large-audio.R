@@ -7,7 +7,23 @@ stt_large_audio_file <- function(bytes = 256L, extension = ".wav") {
 stt_large_result <- function(text,
                              speaker = "S01",
                              start = 0,
-                             end = 1) {
+                             end = 1,
+                             native_kv_quant = NULL,
+                             native_kv_quant_source = NULL) {
+  metadata <- list(
+    segments = list(list(
+      text = text,
+      speaker = speaker,
+      start = start,
+      end = end
+    ))
+  )
+  if (!is.null(native_kv_quant)) {
+    metadata$native_kv_quant <- native_kv_quant
+  }
+  if (!is.null(native_kv_quant_source)) {
+    metadata$native_kv_quant_source <- native_kv_quant_source
+  }
   list(
     response_value = text,
     service = "local-native",
@@ -18,14 +34,7 @@ stt_large_result <- function(text,
     saved_file = NA_character_,
     audio = "part.wav",
     content_type = "text",
-    metadata = list(
-      segments = list(list(
-        text = text,
-        speaker = speaker,
-        start = start,
-        end = end
-      ))
-    )
+    metadata = metadata
   )
 }
 
@@ -557,7 +566,14 @@ test_that("recognized empty output is accepted only for a tiny final tail", {
   testthat::local_mocked_bindings(
     .stt_chunk_call_backend = function(audio, arguments) {
       calls <<- calls + 1L
-      if (calls == 1L) return(stt_large_result("Useful transcript.", "S01"))
+      if (calls == 1L) {
+        return(stt_large_result(
+          "Useful transcript.",
+          "S01",
+          native_kv_quant = "q8_0",
+          native_kv_quant_source = "model-default"
+        ))
+      }
       list(
         response_value = NULL,
         status_api = "ERROR",
@@ -578,6 +594,11 @@ test_that("recognized empty output is accepted only for a tiny final tail", {
     options
   )
   expect_identical(result$text, "Useful transcript.")
+  expect_identical(result$metadata$native_kv_quant, "q8_0")
+  expect_identical(
+    result$metadata$native_kv_quant_source,
+    "model-default"
+  )
   expect_identical(
     readRDS(plan$manifest_path)$parts[[2]]$status,
     "done_empty"
@@ -1398,9 +1419,23 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
     .stt_chunk_call_backend = function(audio, arguments) {
       calls <<- calls + 1L
       if (calls == 1L) {
-        stt_large_result("One unfinished thought", "S02", 0, 10)
+        stt_large_result(
+          "One unfinished thought",
+          "S02",
+          0,
+          10,
+          native_kv_quant = "q8_0",
+          native_kv_quant_source = "model-default"
+        )
       } else {
-        stt_large_result("continues now.", "S01", 0, 10)
+        stt_large_result(
+          "continues now.",
+          "S01",
+          0,
+          10,
+          native_kv_quant = "q8_0",
+          native_kv_quant_source = "model-default"
+        )
       }
     },
     .stt_chunk_prune_runs = function(...) character(),
@@ -1430,6 +1465,11 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
   expect_true("diarized_transcript" %in% names(result))
   expect_identical(result$metadata$chunking$part_count, 2L)
   expect_identical(result$metadata$chunking$checkpoint_retention, "results")
+  expect_identical(result$metadata$native_kv_quant, "q8_0")
+  expect_identical(
+    result$metadata$native_kv_quant_source,
+    "model-default"
+  )
   expect_true(
     result$metadata$chunking$checkpoint_media_cleanup_complete
   )
@@ -1463,6 +1503,29 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
   expect_identical(result$label, tools::file_path_sans_ext(basename(audio)))
   expect_identical(result$audio, audio)
   expect_true(is.numeric(result$duration))
+})
+
+test_that("chunk metadata refuses divergent native KV-cache policies", {
+  results <- list(
+    stt_large_result(
+      "First.",
+      native_kv_quant = "q8_0",
+      native_kv_quant_source = "model-default"
+    ),
+    stt_large_result(
+      "Second.",
+      native_kv_quant = "f16",
+      native_kv_quant_source = "explicit"
+    )
+  )
+
+  expect_error(
+    genflow:::.stt_chunk_common_metadata_scalar(
+      results,
+      "native_kv_quant"
+    ),
+    "diverged across parts"
+  )
 })
 
 test_that("results-only retention never cleans checkpoint media after failure", {

@@ -1,5 +1,15 @@
 # genflow 0.0.7
 
+- MOSS Diarize now defaults its CrispASR KV cache to `q8_0` when
+  `native_kv_quant` is `NULL`, reports the source as `model-default`, and still
+  gives priority to explicit `f16`, `q8_0`, or `q4_0`. The new implicit default
+  changes the STT signature/checkpoint key; explicit `f16` preserves the former
+  policy.
+- Timestamped chunk overlaps can now reconcile two-speaker identity/swap
+  permutations using duration support plus conservative purity and margin
+  thresholds. Weak, conflicting, or larger-roster evidence still receives
+  unresolved `U...` labels, and only exact normalized text overlap can delete
+  duplicated content.
 - Added semantic `chunk_format = "auto"`, `"wav"`, or `"mp3"` selection.
   CrispASR can now receive compact native MP3 chunks; moss-transcribe.cpp
   rejects MP3 early because its CLI requires WAV.

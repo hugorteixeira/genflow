@@ -1865,6 +1865,70 @@
   result
 }
 
+#' Require one common scalar metadata value across STT parts
+#'
+#' Chunk reconciliation must not silently report one runtime policy when
+#' resumed or newly processed parts disagree. All-missing values are allowed
+#' for backends that do not expose the field.
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_common_metadata_scalar <- function(results, field) {
+  values <- lapply(results, function(result) {
+    if (!is.list(result) || !is.list(result$metadata)) return(NULL)
+    result$metadata[[field]] %||% NULL
+  })
+  present <- !vapply(values, is.null, logical(1))
+  if (!any(present)) return(NULL)
+  if (!all(present)) {
+    missing_allowed <- vapply(
+      results[!present],
+      function(result) {
+        .stt_chunk_result_empty_success(result) &&
+          identical(
+            .stt_reconcile_scalar_text(result$status_msg),
+            "OK (tiny empty tail)"
+          )
+      },
+      logical(1)
+    )
+    if (!all(missing_allowed)) {
+      stop(
+        sprintf(
+          "STT chunk metadata `%s` is missing from some useful parts and cannot be merged safely.",
+          field
+        ),
+        call. = FALSE
+      )
+    }
+  }
+  normalized <- vapply(values[present], function(value) {
+    if (!is.character(value) || length(value) != 1L ||
+        is.na(value) || !nzchar(trimws(value))) {
+      stop(
+        sprintf(
+          "STT chunk metadata `%s` must be one non-empty character value per part.",
+          field
+        ),
+        call. = FALSE
+      )
+    }
+    trimws(value)
+  }, character(1))
+  unique_values <- unique(normalized)
+  if (length(unique_values) != 1L) {
+    stop(
+      sprintf(
+        "STT chunk metadata `%s` diverged across parts: %s.",
+        field,
+        paste(unique_values, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  unique_values[[1]]
+}
+
 #' @keywords internal
 #' @noRd
 .stt_chunk_transcribe_parts <- function(plan,
@@ -2020,6 +2084,27 @@
     stop("STT chunk reconciliation returned an empty transcript.", call. = FALSE)
   }
   metadata <- normalized$metadata %||% list()
+  native_kv_quant <- .stt_chunk_common_metadata_scalar(
+    results,
+    "native_kv_quant"
+  )
+  native_kv_quant_source <- .stt_chunk_common_metadata_scalar(
+    results,
+    "native_kv_quant_source"
+  )
+  if (xor(is.null(native_kv_quant), is.null(native_kv_quant_source))) {
+    stop(
+      paste0(
+        "STT chunk metadata has an incomplete native KV-cache policy; ",
+        "both `native_kv_quant` and `native_kv_quant_source` are required."
+      ),
+      call. = FALSE
+    )
+  }
+  if (!is.null(native_kv_quant)) {
+    metadata$native_kv_quant <- native_kv_quant
+    metadata$native_kv_quant_source <- native_kv_quant_source
+  }
   metadata$chunking <- list(
     schema_version = 1L,
     enabled = TRUE,
@@ -2061,7 +2146,9 @@
     segments = segments,
     diarization = .stt_diarization_summary(segments),
     chunking = metadata$chunking %||% NULL,
-    reconciliation = reconciliation
+    reconciliation = reconciliation,
+    native_kv_quant = metadata$native_kv_quant %||% NULL,
+    native_kv_quant_source = metadata$native_kv_quant_source %||% NULL
   )
   projected_metadata <- projected_metadata[
     !vapply(projected_metadata, is.null, logical(1))

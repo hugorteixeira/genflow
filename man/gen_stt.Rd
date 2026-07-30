@@ -154,11 +154,12 @@ the corresponding remote artifact exists. Defaults to
 
 \item{native_kv_quant}{Optional CrispASR KV-cache quantization:
 \code{"f16"}, \code{"q8_0"}, or \code{"q4_0"}. The value is forwarded only to the
-CrispASR child process through \code{CRISPASR_KV_QUANT}. \code{NULL} keeps the F16
-cache for MOSS Diarize because it is the fastest tested option.
-Explicit \code{"q8_0"} reduces VRAM but was substantially slower with this
-backend on Vulkan. Explicit \code{"q4_0"} is supported but not recommended for
-MOSS Diarize because observed output quality degraded.}
+CrispASR child process through \code{CRISPASR_KV_QUANT}. For the effective
+MOSS Diarize backend, \code{NULL} selects the model default \code{"q8_0"} to reduce
+KV-cache VRAM. Explicit \code{"f16"}, \code{"q8_0"}, or \code{"q4_0"} always wins;
+\code{"f16"} may be faster when memory is sufficient. Explicit \code{"q4_0"} is
+supported but not recommended for MOSS Diarize because observed output
+quality degraded. Other backends retain their existing runtime default.}
 
 \item{native_device}{Native accelerator for \code{service = "local-native"}:
 \code{"auto"}, \code{"cpu"}, \code{"vulkan"}, \code{"hip"}, \code{"cuda"}, or \code{"metal"}.

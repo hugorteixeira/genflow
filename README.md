@@ -262,14 +262,17 @@ later R call;
 
 Adjacent chunks overlap by eight seconds by default. Genflow aligns the
 overlap, removes duplicated text, and reconciles local speaker IDs. For two
-speakers, strong overlap evidence can establish an identity/swap mapping;
-sentence-continuation evidence is a conservative fallback when no overlap was
-requested. With three or more speakers the reconciler abstains instead of
-inventing a permutation. Ambiguous boundaries receive explicit unresolved IDs
-such as `U0002_S01`. Every segment retains `speaker_local` and `chunk_index`,
-while boundary evidence and speaker maps live in reconciliation metadata. This
-keeps uncertainty visible and prevents one weak boundary from corrupting later
-speaker assignments.
+speakers, strong exact-text evidence or timestamped overlap support can
+establish an identity/swap mapping. Temporal mappings require conservative
+support, purity, and margin thresholds; conflicting or weak evidence abstains
+and receives explicit unresolved IDs such as `U0002_S01`. With three or more
+speakers the reconciler also abstains instead of inventing a permutation.
+Timing is never used to delete content: only an exact normalized text overlap
+can trigger deduplication. Sentence-continuation evidence remains a
+conservative fallback when no overlap was requested. Every segment retains
+`speaker_local` and `chunk_index`, while boundary evidence and speaker maps
+live in reconciliation metadata. This keeps uncertainty visible and prevents
+one weak boundary from corrupting later speaker assignments.
 
 `output = "full"` preserves the regular complete result. The opt-in
 `output = "transcript"` projection remains a list with the common generator
@@ -374,13 +377,17 @@ Use `chunking = "never"` only when intentionally accepting the model's context
 or truncation risk.
 
 Long continuous MOSS runs also need a larger KV cache. With
-`native_kv_quant = NULL`, genflow always keeps CrispASR's F16 cache because it
-was the fastest tested option. Set `native_kv_quant = "q8_0"` explicitly when
-reducing VRAM matters more than speed; on the tested Vulkan backend it was
-substantially slower than F16. Explicit `"q4_0"` is also accepted, but it is
-not recommended for MOSS Diarize because output degradation was observed.
-The effective value and whether it was explicit or the runtime default are
-saved in `result$metadata`.
+`native_kv_quant = NULL`, the effective MOSS Diarize backend now selects
+`"q8_0"` as its model default to reduce KV-cache VRAM. Set
+`native_kv_quant = "f16"` explicitly when speed matters more than memory; on
+the tested Vulkan backend F16 was faster. Explicit `"q8_0"` and `"q4_0"` also
+always win, although `"q4_0"` is not recommended for MOSS Diarize because
+output degradation was observed. Other backends retain their existing runtime
+default. The effective value and its source (`"model-default"` or
+`"explicit"`) are saved in `result$metadata`, including merged chunked
+transcripts. This implicit-default change also changes the semantic STT
+signature, so checkpoints created under the former implicit F16 policy are not
+reused. Set `native_kv_quant = "f16"` explicitly to preserve that policy.
 
 STT timeouts are calculated per input file. The default budget is the
 `timeout_api` base plus one additional minute for every minute (or partial
