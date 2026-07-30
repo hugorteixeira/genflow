@@ -1,4 +1,4 @@
-# genflow 0.0.7
+# genflow 0.0.8
 
 - MOSS Diarize now defaults its CrispASR KV cache to `q8_0` when
   `native_kv_quant` is `NULL`, reports the source as `model-default`, and still
@@ -13,6 +13,9 @@
   signatures version reconciliation separately, allowing final transcripts to
   refresh without retranscribing valid part checkpoints. Only exact normalized
   text overlap can delete duplicated content.
+
+# genflow 0.0.7
+
 - Added semantic `chunk_format = "auto"`, `"wav"`, or `"mp3"` selection.
   CrispASR can now receive compact native MP3 chunks; moss-transcribe.cpp
   rejects MP3 early because its CLI requires WAV.
