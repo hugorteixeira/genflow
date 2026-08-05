@@ -1,59 +1,86 @@
-# genflow
+# 🌊 genflow — AI Generation Toolkit for R
 
 [![Lifecycle: Experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 [![R](https://img.shields.io/badge/R-%E2%89%A54.1-blue)](https://www.r-project.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-genflow provides one R interface for cloud and local generative-AI workflows.
-It normalizes provider responses, persists reusable agents, runs resumable
-batches, maintains model catalogs, and includes a Shiny/RStudio management app.
+> **Easy generative AI workflows for R.** Generate text, images, transcripts,
+> and speech with cloud APIs or local models — through one consistent interface.
 
-Current runtime surfaces:
+**genflow** connects R to OpenAI, OpenRouter, Gemini, Hugging Face, Replicate,
+FAL, Ollama, llama.cpp, native speech engines, and custom OpenAI-compatible
+servers. It also gives you reusable agents, parallel batches, model catalogs,
+structured results, and a Shiny/RStudio management app.
 
-- `gen_txt()`: cloud providers plus local Ollama and llama.cpp servers.
-- `gen_img()`: OpenAI, Hugging Face Inference Providers, Replicate, and FAL.
-- `gen_stt()`: cloud transcription, native STT engines, and
-  OpenAI-compatible local STT servers.
-- `gen_tts()`: OpenAI and Replicate.
+<p align="center">
+  <a href="#-getting-started">Getting started</a> ·
+  <a href="#-everyday-examples">Examples</a> ·
+  <a href="#-asr-for-real-world-recordings">ASR</a> ·
+  <a href="#-reusable-agents">Agents</a> ·
+  <a href="#-function-reference">Reference</a>
+</p>
 
-The package is experimental. Provider APIs and individual model schemas can
-change independently of genflow, so production workflows should pin models,
-use focused smoke tests, and inspect structured `status_api`/`status_msg`
-results.
+## ✨ Why genflow?
 
-## Installation
+- 🚀 **One interface:** a shared result contract across text, image, STT, and TTS
+- 🌐 **Cloud and local:** switch providers without rebuilding your R workflow
+- 🎙️ **Serious ASR:** long-audio chunking, resume, retries, diarization, and
+  cross-chunk speaker continuity
+- 🧠 **Reusable agents:** save setups and content, then pipe them into generators
+- ⚡ **Parallel batches:** separate task count from worker concurrency and
+  checkpoint individual results
+- 🔄 **Model catalogs:** discover cloud models and manage downloaded native
+  speech models
+- 👁️ **Built-in viewer:** inspect generated text and media without leaving R
+- 🖥️ **Interactive app:** manage credentials, models, local runtimes, and agents
+
+| Create | Function | Typical use |
+|:--:|---|---|
+| ✍️ | `gen_txt()` | Text, reasoning, vision, and tool-aware prompts |
+| 🖼️ | `gen_img()` | Image generation from text prompts |
+| 🎙️ | `gen_stt()` | Cloud or local speech-to-text |
+| 🔊 | `gen_tts()` | Speech synthesis |
+
+## 🚀 Getting Started
+
+### Installation
 
 ```r
 # install.packages("pak")
 pak::pak("hugorteixeira/genflow")
 ```
 
-## First call
+### Your first call
 
-Put cloud credentials in environment variables, not in scripts:
-
-```text
-OPENAI_API_KEY=...
-GOOGLE_API_KEY=...       # or GEMINI_API_KEY
-HUGGINGFACE_API_TOKEN=...
-REPLICATE_API_TOKEN=...
-FAL_KEY=...
-```
-
-The app can manage supported credentials in the user `.Renviron`:
+Keep cloud credentials in environment variables rather than scripts. The app
+can add, import, or remove supported keys from your user `.Renviron`:
 
 ```r
 library(genflow)
 gen_interface()
 ```
 
-Use **Models > Credentials** to add, import, or remove credentials. Writes are
-locked, backed up, privately permissioned on Unix-like systems, and atomically
-replaced. Secrets are not stored in agents, model catalogs, local-inference
-configuration, or exported bundles. See
-[the credential and catalog workflow](inst/doc/credential-and-model-catalog-workflow.md).
+Open **Models > Credentials**, save the key, refresh that provider's catalog,
+and select a model in a setup or agent.
 
-Generate text:
+<details>
+<summary><strong>Prefer to configure credentials manually?</strong></summary>
+
+```text
+OPENAI_API_KEY=...
+GOOGLE_API_KEY=...       # GEMINI_API_KEY is also accepted
+HUGGINGFACE_API_TOKEN=...
+REPLICATE_API_TOKEN=...
+FAL_KEY=...
+```
+
+Use `usethis::edit_r_environ()`, then restart R or reload the file with
+`readRenviron("~/.Renviron")`. Secrets are not stored in agents, catalogs,
+local-inference settings, or exported bundles.
+
+</details>
+
+Generate text and inspect the normalized result:
 
 ```r
 result <- gen_txt(
@@ -67,66 +94,19 @@ result$status_api
 result$response_value
 ```
 
-High-level generators return a structured list containing at least:
+Every high-level generator returns a list with `response_value`, `service`,
+`model`, `duration`, `status_api`, and `status_msg`. Text adds token estimates;
+successful media calls add saved-file information.
 
-- `response_value`
-- `service`
-- `model`
-- `duration`
-- `status_api` (`"SUCCESS"` or `"ERROR"`)
-- `status_msg`
-
-Text results also include token estimates. Media results include a saved path
-on success.
-
-Generated files default to subdirectories of `~/.genflow`. Override the root
-without changing every call:
+Generated files default to `~/.genflow`. Change the root globally with:
 
 ```r
 options(genflow.output_dir = "/absolute/path/to/genflow-output")
 ```
 
-`GENFLOW_OUTPUT_DIR` provides the equivalent environment override.
+## 💡 Everyday Examples
 
-See [Architecture and runtime contract](inst/doc/architecture-and-runtime-contract.md)
-for the active provider matrix, persistence boundaries, and provider-extension
-checklist.
-
-## Model catalogs
-
-Refresh one or more catalogs explicitly:
-
-```r
-gen_update_models(
-  provider = c("openai", "hf", "local-native"),
-  fail_on_error = TRUE
-)
-
-gen_show_models(provider = "hf", type = "Chat")
-gen_show_models(provider = "local-native", type = "Audio")
-```
-
-`hf.csv` contains models with a live Hugging Face Inference Provider mapping;
-`service = "hf"` is remote inference. `local-native.csv` is instead a local
-inventory of compatible model files already downloaded into the managed
-CrispASR cache.
-
-The app uses **Models** to select provider/model pairs for setups and agents.
-The **Local** tab configures runtimes and manages native model files; it is not
-a second model picker.
-
-Gemini model discovery and text generation accept `GOOGLE_API_KEY` first and
-`GEMINI_API_KEY` as its compatibility alias. The catalog follows all model-list
-pages; the runtime uses the same model ids through `gen_txt(service =
-"gemini")`.
-
-Catalog refreshes are provider-specific network operations. With
-`fail_on_error = TRUE`, genflow attempts the requested updates and then reports
-every failure instead of presenting a false success.
-
-## Local text inference
-
-Ollama:
+### Local text with Ollama or llama.cpp
 
 ```r
 ollama_result <- gen_txt(
@@ -134,11 +114,7 @@ ollama_result <- gen_txt(
   service = "ollama",
   model = "llama3.2"
 )
-```
 
-llama.cpp's OpenAI-compatible server:
-
-```r
 llamacpp_result <- gen_txt(
   "Draft a concise incident report.",
   service = "llamacpp",
@@ -146,30 +122,72 @@ llamacpp_result <- gen_txt(
 )
 ```
 
-Default endpoints are `http://127.0.0.1:11434` for Ollama and
-`http://127.0.0.1:8080` for llama.cpp. Configure them in **Local**,
-with `gen_local_config()`, or through `OLLAMA_*` and
-`LLAMACPP_*` environment variables.
+The default endpoints are `http://127.0.0.1:11434` for Ollama and
+`http://127.0.0.1:8080` for llama.cpp. genflow talks to these servers; it does
+not install or supervise them.
 
-genflow talks to these servers; it does not install or supervise them.
-The app keeps Ollama, llama.cpp, native STT, and compatible STT servers in
-separate sub-tabs. Saving applies the complete runtime configuration;
-**Check adapter** diagnoses only the currently selected adapter.
+### Image generation
 
-## Local speech-to-text
+```r
+image_result <- gen_img(
+  prompt = "A clean isometric diagram of a reproducible data pipeline",
+  service = "openai",
+  model = "gpt-image-2",
+  h = 1024,
+  y = 1024
+)
 
-`service = "local-native"` invokes an external native STT engine. CrispASR
-supports multiple compatible GGUF speech architectures; `moss-transcribe`
-remains available as a MOSS-specific engine. Configure engine/device in
-**Local**, and choose the downloaded model for a setup or agent in **Models**:
+gen_view(image_result)
+```
+
+### Cloud speech-to-text
+
+```r
+transcript <- gen_stt(
+  "interview.ogg",
+  service = "openai",
+  model = "whisper-1"
+)
+
+transcript$response_value
+```
+
+### Text-to-speech
+
+```r
+speech <- gen_tts(
+  "The validation run completed successfully.",
+  service = "openai",
+  model = "gpt-4o-mini-tts",
+  voice = "alloy"
+)
+```
+
+## 🎙️ ASR for real-world recordings
+
+The newest ASR work makes `gen_stt()` an **audio orchestrator**, not just an API
+wrapper. Give it the original recording; genflow can prepare it, split it only
+when needed, resume completed parts, retry transient failures, remove overlap,
+reconcile speaker identities, and return one auditable result.
+
+### Choose where transcription runs
+
+| Path | `service` | Best for |
+|---|---|---|
+| ☁️ Managed API | `openai`, `groq`, `assemblyai`, `cloudflare`, `voicegain`, `hf`, `replicate` | Minimal local setup |
+| 🏠 Native CLI | `local-native` | GGUF speech models through CrispASR or moss-transcribe.cpp |
+| 🔌 Your server | `local-openai` | Any server implementing the OpenAI multipart transcription contract |
+
+### Native ASR quick start
+
+Configure a compiled native engine once, diagnose it, and then select a
+compatible downloaded model:
 
 ```r
 gen_local_config(
   stt_native_engine = "crispasr",
   stt_native_crispasr_executable =
     "/absolute/path/to/CrispASR/build-vulkan/bin/crispasr",
-  stt_native_moss_transcribe_executable =
-    "/absolute/path/to/moss-transcribe.cpp/build/bin/moss-transcribe",
   stt_native_device = "vulkan"
 )
 
@@ -178,33 +196,22 @@ gen_local_diagnostics(
   check_endpoints = FALSE
 )
 
-native_transcript <- gen_stt(
+native_result <- gen_stt(
   "meeting.wav",
   service = "local-native",
   model = "granite-speech-4.1-2b-q4_k.gguf",
   timeout_api = 1800
 )
-
-native_transcript$response_value
-native_transcript$metadata
 ```
 
-The app exposes both executable paths in **Local > Native STT** and saves them
-independently. Switching between CrispASR and moss-transcribe.cpp changes the
-active engine without clearing either path. The generic `executable` argument
-and `GENFLOW_STT_NATIVE_EXECUTABLE` remain explicit per-call/session overrides.
+The app keeps the CrispASR and moss-transcribe.cpp executable paths separately
+under **Local > Native STT**, so switching engines does not erase either setup.
+Model compatibility is owned by the selected engine; a GGUF file is not
+automatically compatible just because it came from Hugging Face.
 
-Like the other generators, `gen_stt()` writes a concise `[SUCCESS]` or
-`[ERROR]` summary while the call runs and invisibly returns a regular list.
-Printing `native_transcript` therefore uses R's normal list representation;
-the transcript and complete structured provider/runtime data remain available
-through `response_value` and `metadata`.
+### Long audio, speakers, and resumable work
 
-### Large recordings, checkpoints, and speaker continuity
-
-`gen_stt()` owns the complete large-audio workflow. A caller can pass an
-original recording and receive one normalized result without implementing
-FFmpeg splitting or merging:
+This is the complete durable path for a long, multi-speaker recording:
 
 ```r
 meeting <- gen_stt(
@@ -212,307 +219,123 @@ meeting <- gen_stt(
   service = "local-native",
   model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
   native_engine = "crispasr",
+  diarize = TRUE,
+  timestamps = TRUE,
+  chunking = "auto",
   chunk_format = "mp3",
   chunk_overlap_seconds = 8,
   checkpoint_dir = "meeting-stt-work",
   checkpoint_retention = "results",
-  output = "transcript"
-)
-```
-
-With `chunking = "auto"` (the default), Genflow combines explicit
-`chunk_max_mb`/`chunk_segment_seconds`, finite adapter transport limits, and
-documented model limits. `chunk_format = "auto"` preserves PCM 16-bit mono
-16 kHz WAV for native STT and compressed mono 16 kHz MP3 for remote services.
-Explicit MP3 is also accepted by the CrispASR native engine, so a byte-size
-limit such as `chunk_max_mb = 5` covers much more audio than it does with WAV.
-The separate moss-transcribe.cpp engine requires WAV. Use
-`chunk_segment_seconds` when the desired number/duration of chunks matters;
-encoding changes byte size, not the semantic duration target.
-`chunking = "never"` is an explicit escape hatch for callers that accept
-whole-recording failure or truncation risk. The built-in duration policy
-currently covers MOSS Diarize; an unknown backend is kept whole unless the
-caller supplies a size/duration limit. Requested segment duration is a target
-and may be reduced adaptively when the encoded bytes still exceed the
-effective limit.
-
-When `checkpoint_dir` is supplied, prepared media, validated chunks, and
-successful per-chunk results are stored there as opaque checkpoints. Reruns
-verify source, configuration, model/executable signatures, chunk fingerprints,
-size, and duration before reuse. Recognized transient failures use capped
-exponential backoff; permanent and unknown failures stop. Very small empty tail
-chunks are accepted only when they are genuinely tiny. Per-run locks enforce a
-single writer: a concurrent call for the same run fails fast, while stale
-owners are recovered conservatively. After a successful transcription, Genflow
-retains the current run and one previous valid run for that recording, then
-safely prunes older superseded runs without touching runs for other recordings.
-These checkpoints contain prepared audio and transcript results, so budget disk
-space and protect the directory as sensitive data. Set
-`checkpoint_retention = "results"` to remove only Genflow-owned prepared/chunk
-audio after the final result succeeds while retaining manifests and successful
-per-part result RDS files. Cleanup is restricted to valid runs for the same
-source recording, never follows symlinks, never deletes the original input, and
-does not run after failure or interruption. Callers that persist their own
-retention marker should require
-`metadata$chunking$checkpoint_media_cleanup_complete` to be exactly `TRUE`;
-active/unsafe runs leave it `FALSE` and also emit a warning. With
-`checkpoint_dir = NULL` the working directory is temporary and cannot resume a
-later R call;
-`resume = FALSE` deliberately rebuilds and retranscribes the selected run.
-
-Adjacent chunks overlap by eight seconds by default. Genflow aligns the
-overlap, removes duplicated text, and reconciles local speaker IDs. Strong
-exact-text evidence or timestamped overlap support can establish directly
-observed mappings even when adjacent chunks contain different numbers of
-speakers. Temporal mappings require conservative support, purity, and margin
-thresholds. After a strong direct match, Genflow may infer at most one
-additional pair when exactly one boundary-active choice remains on each side;
-all other identities stay unresolved instead of being guessed. This handles
-common intro -> interview -> outro recordings without treating every local
-label as a new person. Timing is never used to delete content: only an exact
-normalized text overlap can trigger deduplication. Sentence-continuation
-evidence remains a conservative fallback for two-speaker audio when no overlap
-was requested.
-
-Every segment retains `speaker_local`, `chunk_index`, and the auditable
-`speaker_reconciled` identity. Internal unresolved namespaces such as
-`U0005_S03` remain in reconciliation metadata, while public transcripts use
-dense first-appearance labels (`S01`, `S02`, ...) and report how many
-cross-chunk identities remain unresolved. This keeps uncertainty visible
-without leaking implementation IDs into the transcript. Public STT signatures
-version this final post-processing separately from opaque part checkpoints, so
-a reconciliation upgrade can rebuild the TXT while reusing completed model
-inference.
-
-`output = "full"` preserves the regular complete result. The opt-in
-`output = "transcript"` projection remains a list with the common generator
-fields plus normalized transcript, diarization, chunking, and reconciliation
-metadata; it is not a character shortcut.
-
-Speaker-aware models keep that same contract: `response_value` remains the
-plain transcript, while `diarized_transcript` contains readable speaker turns.
-By default, consecutive segments from the same speaker are merged and time
-ranges are omitted. Set `timestamps = TRUE` to retain one timed segment per
-line, or `diarize = FALSE` to save and return only the plain transcript. When
-`save_txt = TRUE`, a same-name `.json` sidecar returned as
-`saved_metadata_file` preserves the transcript, diarized transcript, and
-structured metadata. The in-memory `output = "full"` object remains the
-complete regular result.
-
-Models without native speaker labels can opt in to CrispASR's generic
-session-scoped diarization with `diarize_speakers = TRUE`. By default,
-`diarize_embedder = TRUE` combines native GGUF Pyannote segmentation with
-TitaNet clustering, requires no Python, and keeps anonymous speaker IDs stable
-across one input recording. CrispASR downloads the Pyannote (about 6 MB) and
-TitaNet (about 46 MB) models on first use.
-
-Set `diarize_embedder = FALSE` to keep Pyannote speaker-turn detection but skip
-the CPU-heavy TitaNet pass. This is substantially simpler for large
-collections, but the resulting speaker numbers are best-effort and can swap
-within a long recording.
-
-```r
-cohere_meeting <- gen_stt(
-  "meeting.wav",
-  service = "local-native",
-  model = "cohere-transcribe-q8_0.gguf",
-  diarize = TRUE,
-  diarize_speakers = TRUE,
-  diarize_embedder = FALSE,
-  timestamps = FALSE
-)
-
-cohere_meeting$diarized_transcript
-```
-
-The default `diarize_speakers = FALSE` leaves existing native calls unchanged.
-When enabled, CrispASR computes the speaker timeline for the supplied file even
-if its ASR backend slices the audio internally. With
-`diarize_embedder = TRUE`, IDs remain recording-scoped but separate
-backend calls may assign different numbers to the same person. Genflow's
-large-audio reconciler corrects mappings only when boundary evidence is strong.
-Without the embedder, even one long recording can contain label swaps because
-Pyannote's segmentation labels are not globally clustered.
-
-For Granite Speech 4.1 Plus models, `diarize = TRUE` also activates the
-model's native speaker-attributed ASR mode through CrispASR. Genflow recognizes
-the standard Plus filename or recorded Hugging Face source; an explicitly
-selected `native_backend = "granite-4.1-plus"` provides the same signal for a
-renamed or registry-resolved model. Granite base models and unrelated CrispASR
-backends do not receive this model-specific switch. The selected input is kept
-as one continuous CrispASR model window inside each Genflow call, so speaker
-numbering is not reset by the CLI's generic 30-second chunking. If Genflow must
-make multiple calls, its boundary reconciler handles their local labels
-conservatively.
-
-```r
-granite_meeting <- gen_stt(
-  "meeting.wav",
-  service = "local-native",
-  model = "granite-speech-4.1-2b-plus-f16.gguf",
-  diarize = TRUE,
-  timestamps = FALSE
-)
-
-granite_meeting$diarized_transcript
-```
-
-```r
-meeting <- gen_stt(
-  "meeting.wav",
-  service = "local-native",
-  model = "moss-transcribe-diarize-0.9b-q8_0.gguf",
-  diarize = TRUE,
-  timestamps = FALSE
+  output = "transcript",
+  timeout_api = 1800
 )
 
 meeting$response_value
 meeting$diarized_transcript
-meeting$saved_file
 meeting$saved_metadata_file
+meeting$metadata$chunking
+meeting$metadata$reconciliation
 ```
 
-For MOSS Diarize, Genflow keeps each CrispASR input as one continuous stream
-instead of allowing its generic 30-second external chunks. CrispASR speaker
-labels are normalized to stable `S01`, `S02`, and so on, while the original
-label remains in each segment's `speaker_raw` field when it differs.
+`output = "transcript"` is still a structured result — never a character
+shortcut. It keeps the common runtime fields plus normalized transcript,
+segments, diarization, chunking, and reconciliation metadata.
 
-When `max_new_tokens = NULL`, Genflow sizes the MOSS output budget at 20 output
-tokens per audio second and reserves the estimated audio prompt inside MOSS's
-documented 131,072-token total context. In automatic chunking mode, recordings
-over 3,600 seconds are therefore split into overlapping model-safe windows,
-then reconciled. This conservative 60-minute limit leaves room for dense
-speaker/time markup; explicit size or duration limits can make windows smaller.
-Use `chunking = "never"` only when intentionally accepting the model's context
-or truncation risk.
+```mermaid
+flowchart LR
+  A[Original audio] --> B[Prepare and validate]
+  B --> C{Chunking needed?}
+  C -->|No| D[STT adapter]
+  C -->|Yes| E[Overlapping chunks]
+  E --> D
+  D --> F[Validated checkpoints]
+  F --> G[Deduplicate and reconcile]
+  G --> H[Plain transcript]
+  G --> I[Speakers, timestamps, metadata]
+```
 
-Long continuous MOSS runs also need a larger KV cache. With
-`native_kv_quant = NULL`, the effective MOSS Diarize backend now selects
-`"q8_0"` as its model default to reduce KV-cache VRAM. Set
-`native_kv_quant = "f16"` explicitly when speed matters more than memory; on
-the tested Vulkan backend F16 was faster. Explicit `"q8_0"` and `"q4_0"` also
-always win, although `"q4_0"` is not recommended for MOSS Diarize because
-output degradation was observed. Other backends retain their existing runtime
-default. The effective value and its source (`"model-default"` or
-`"explicit"`) are saved in `result$metadata`, including merged chunked
-transcripts. This implicit-default change also changes the semantic STT
-signature, so checkpoints created under the former implicit F16 policy are not
-reused. Set `native_kv_quant = "f16"` explicitly to preserve that policy.
+#### Speaker-aware output
 
-STT timeouts are calculated per input file. The default budget is the
-`timeout_api` base plus one additional minute for every minute (or partial
-minute) of audio. Set `timeout_per_audio_minute = 0` for a fixed timeout, or
-increase it for models that run slower than real time.
+Models with native speaker metadata expose readable turns through
+`diarized_transcript` while preserving the plain text in `response_value`.
+Public labels are normalized to `S01`, `S02`, and so on. With
+`save_txt = TRUE`, a JSON sidecar in `saved_metadata_file` preserves the
+structured transcript and audit metadata.
 
-Orchestration clients can inspect genflow-owned local input constraints with
-`gen_stt_capabilities(service)`. For example, the Replicate adapter currently
-uses a 256 KB data-URL transport limit, while `Inf` means that genflow does not
-impose a smaller adapter-level local-file limit.
-
-The native model selector may be a local model path, `auto`, or a supported
-`hf://OWNER/REPO:FILE` reference. The copy-and-paste forms
-`hf://OWNER/REPO/FILE` and
-`https://huggingface.co/OWNER/REPO/blob/main/FILE` are also accepted and
-normalized; a filename is required. In **Local > Native STT**, the field also
-accepts a copied `hf download hf://OWNER/REPO/FILE` command. Clicking either
-**Verify** or **Download** removes the `hf download` prefix from the field and
-uses the remaining reference. This is not universal Hugging Face compatibility:
-the selected engine must implement the architecture and the exact model
-packaging.
-
-In **Local > Native STT**, paste either reference style into the model search
-field. **Verify** confirms the exact remote file without downloading it;
-**Download** repeats validation in a cancellable background worker with byte
-progress. The transfer uses the repository's immutable revision and verifies
-the Hugging Face LFS SHA-256 before publishing the file. The downloaded table
-shows the recorded Hugging Face `OWNER/REPOSITORY` beside each model and only
-deletes managed cache entries. Models copied manually or downloaded before
-source tracking was introduced show `—` instead of an inferred owner.
-
-After download or deletion, genflow synchronizes `local-native.csv`. Model
-selection remains in **Models**, alongside every other provider. Catalog ids
-are filenames, and the runtime resolves them only inside the managed cache.
-An explicit `model = "auto"` remains a CrispASR registry request; it is not
-replaced by an old model saved in local configuration.
-
-For example, the IBM llama.cpp
-[Granite Speech GGUF repository](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-GGUF/tree/main)
-uses a model GGUF plus a separate `mmproj` file. CrispASR instead needs its
-[single-file Granite Speech conversion](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF).
-Models downloaded by CrispASR normally live under `~/.cache/crispasr`, or the
-directory selected by `CRISPASR_CACHE_DIR`/`CRISPASR_MODELS_DIR`;
-`gen_local_diagnostics()` reports the managed cache inventory. An `hf://`
-reference or supported Hugging Face `/blob/main/FILE` URL is resolved against
-the repository's current metadata, then the transfer is pinned to that exact
-commit and checked against its LFS SHA-256.
-
-CrispASR is currently experimental/beta despite its broader model coverage.
-The pre-release `moss-cpp` service name is retained only as a compatibility
-alias for `local-native` with `native_engine = "moss-transcribe"`.
-
-For any separately managed server implementing the OpenAI multipart
-transcription contract:
+For models without native labels, CrispASR can add its generic
+Pyannote + TitaNet pipeline without Python:
 
 ```r
-server_result <- gen_stt(
-  "meeting.wav",
-  service = "local-openai",
-  base_url = "http://127.0.0.1:8000",
-  model = "local-model",
-  response_format = "verbose_json"
+speaker_result <- gen_stt(
+  "roundtable.wav",
+  service = "local-native",
+  model = "cohere-transcribe-q8_0.gguf",
+  diarize = TRUE,
+  diarize_speakers = TRUE,
+  diarize_embedder = TRUE
 )
+
+speaker_result$diarized_transcript
 ```
 
-genflow does not embed Python or Transformers. If a Python runtime should own
-the model and keep it resident, expose it as an OpenAI-compatible STT server
-and use `service = "local-openai"`.
+Set `diarize_embedder = FALSE` to skip the CPU-heavy clustering pass. That is
+faster, but speaker numbers become best-effort and may swap during a long
+recording.
 
-For AMD GPUs, use a Vulkan-enabled CrispASR build with
-`stt_native_device = "vulkan"`, or a separately managed compatible server.
+<details>
+<summary><strong>What the long-audio pipeline guarantees</strong></summary>
 
-See [Local runtimes](inst/doc/local-inference.md) for configuration precedence,
-native model management, Vulkan, diagnostics, and server mode.
+- **Adaptive preparation:** `chunking = "auto"` combines your limits with
+  adapter transport limits and documented model limits. Segment duration can
+  shrink when encoded bytes still exceed the effective ceiling.
+- **Safe resume:** persistent checkpoints are validated against the source,
+  effective configuration, model/executable signature, size, duration, and
+  chunk fingerprint before reuse.
+- **Bounded ownership:** one run has one writer. Stale locks are recovered
+  conservatively, and cleanup is limited to Genflow-owned files for that source.
+- **Useful retention:** `checkpoint_retention = "results"` removes prepared
+  chunk audio only after final success, while retaining manifests and completed
+  per-part transcript checkpoints.
+- **Conservative stitching:** only exact normalized text overlap can delete
+  duplicated content. Speaker mappings require strong overlap evidence;
+  ambiguous identities remain unresolved in metadata instead of being guessed.
+- **Global output:** chunk timestamps become recording timestamps, and public
+  speaker labels are dense and stable by first appearance in the merged result.
 
-## Images, STT, and TTS
+Checkpoint folders contain prepared audio and transcript data. Treat them as
+sensitive and budget their disk usage accordingly.
 
-Image generation:
+</details>
 
-```r
-image <- gen_img(
-  prompt = "A clean isometric diagram of a reproducible data pipeline",
-  service = "openai",
-  model = "gpt-image-2",
-  h = 1024,
-  y = 1024
-)
-```
+<details>
+<summary><strong>Formats, limits, and native model notes</strong></summary>
 
-Cloud transcription:
+- `chunk_format = "auto"` uses PCM mono 16 kHz WAV for native calls and compact
+  mono 16 kHz MP3 for remote calls. CrispASR also accepts explicit MP3;
+  moss-transcribe.cpp requires WAV.
+- Automatic MOSS Diarize chunking uses conservative model-safe windows for
+  recordings over 60 minutes. `chunking = "never"` explicitly accepts the
+  whole-file truncation or context risk.
+- MOSS Diarize defaults its CrispASR KV cache to `q8_0`. Explicit `f16`,
+  `q8_0`, or `q4_0` wins; `q4_0` is supported but not recommended because
+  degraded output has been observed.
+- The default timeout grows with audio duration. Use
+  `timeout_per_audio_minute = 0` only when you intentionally want a fixed
+  timeout.
+- `gen_stt_capabilities()` exposes adapter-owned input constraints, while
+  `gen_stt_signature()` gives downstream caches a secret-free fingerprint of
+  the effective STT configuration.
 
-```r
-stt <- gen_stt(
-  "audio.ogg",
-  service = "openai",
-  model = "whisper-1"
-)
-```
+</details>
 
-Speech synthesis:
+For the full runtime precedence, model-download workflow, Vulkan notes, and
+security boundaries, see [Local inference](inst/doc/local-inference.md). The
+complete argument and return contract lives in [`gen_stt()`](man/gen_stt.Rd).
 
-```r
-tts <- gen_tts(
-  "The validation run completed successfully.",
-  service = "openai",
-  model = "gpt-4o-mini-tts",
-  voice = "alloy"
-)
-```
+## 🧠 Reusable Agents
 
-Replicate accepts model-specific image input through `replicate_input` and an
-optional `model_version`. Asynchronous Replicate and FAL calls have bounded
-polling through `poll_interval` and `max_poll_seconds`.
-
-## Reusable setups, content, and agents
+Save provider settings and content once, then pipe the resulting agent into
+generators:
 
 ```r
 set_setup(
@@ -525,7 +348,7 @@ set_setup(
 
 set_content(
   cname = "release_notes",
-  context = "Review the supplied release notes for ambiguity and missing risks."
+  context = "Review these release notes for ambiguity and missing risks."
 )
 
 agent <- set_agent(
@@ -535,144 +358,132 @@ agent <- set_agent(
 )
 
 agent |> gen_txt()
-agent |> gen_txt(context_override = "Review this replacement text.")
-```
-
-Agents can also drive other modalities. A saved content `context` becomes the
-default prompt/text for image and TTS agents:
-
-```r
 agent |> gen_img(prompt_override = "A minimal release dashboard")
-agent |> gen_tts(text_override = "The release is ready.")
 ```
 
-Use `audio_override` for one-off STT input. Unknown overrides now raise an
-error instead of being silently ignored.
+Setups, content, and agents persist below
+`tools::R_user_dir("genflow", "cache")` and survive across R sessions.
 
-Setups, content, and agents are stored below
-`tools::R_user_dir("genflow", "cache")`. Filenames include a content hash to
-avoid collisions caused by punctuation, case, or truncation. Renaming a setup
-or content entry updates referencing agents; deleting a referenced entry is
-blocked unless `force = TRUE`.
-
-```r
-list_setups()
-list_content()
-list_agents()
-gen_list()
-```
-
-## Batch execution and checkpoints
-
-```r
-items <- list(
-  list(topic = "catalog refresh"),
-  list(topic = "credential storage"),
-  list(topic = "local STT")
-)
-
-results <- agent |> gen_batch_agent(
-  qty = length(items),
-  one_item_each = items,
-  workers = 2,
-  persist = FALSE,
-  checkpoint_each = file.path(
-    "checkpoints",
-    sprintf("task-%02d.rds", seq_along(items))
-  )
-)
-```
-
-`qty` is task count; `workers` is the concurrency limit. PSOCK is the default
-backend for provider calls on every OS. Unix-like systems can explicitly choose
-`backend = "fork"` for fork-safe work; interrupted fork batches force cleanup
-of blocked child processes. Completed per-task checkpoints remain recoverable;
-genflow does not automatically trust and resume arbitrary checkpoint files.
-
-Pass one `genflow_agent` directly to `gen_batch_agent()`. It is serialized to
-workers without creating temporary per-task objects in `.GlobalEnv`.
-
-## App and viewer
+Launch the manager from R or the **Launch Genflow Agent Interface** RStudio
+addin:
 
 ```r
 gen_interface()
-gen_view(result)
 ```
 
-The app manages setups, content, agents, credentials, model catalogs, custom
-OpenAI-compatible providers, and local-inference settings. It binds to
-`127.0.0.1` by default. A non-loopback host requires
-`allow_remote = TRUE` and emits a warning because the app has no authentication
-layer.
+<p align="center">
+  <img src="./gen_interface.png"
+       alt="Genflow interface for creating and reusing agents"
+       width="900">
+</p>
 
-`gen_view()` renders text and media in the RStudio Viewer and falls back to the
-console. Large media is copied into a bounded Viewer asset history instead of
-being embedded as an unbounded Base64 string. Configure:
+## 👁️ Easy Object Visualization
+
+Pass one or many structured results to `gen_view()`:
 
 ```r
-options(
-  genflow.viewer_inline_max_bytes = 1024^2,
-  genflow.viewer_history = 10L
+gen_view(result, image_result, transcript)
+```
+
+<p align="center">
+  <img src="./gen_view.png"
+       alt="Genflow viewer displaying generated objects"
+       width="900">
+</p>
+
+## ⚡ Parallel Batches
+
+```r
+agent <- get_agent("release_reviewer")
+
+results <- agent |> gen_batch_agent(
+  qty = 12,
+  instructions = "Write a concise release announcement.",
+  workers = 3,
+  persist = FALSE
 )
+
+gen_view(results)
 ```
 
-## Persistence and bundles
+`qty` is the number of tasks; `workers` is the concurrency ceiling. The default
+PSOCK backend is safe for provider networking on every operating system. Use
+`checkpoint_each` for one atomic RDS checkpoint per task when a caller needs
+durable partial progress.
 
-Daily statistics use an inter-process lock and atomic RDS replacement:
+## 🔄 Models and Local Runtimes
 
 ```r
-options(genflow.log_dir = "/absolute/path/to/logs")
-gen_stats()
-gen_stats_rm(Sys.Date() - 30)
+gen_update_models(
+  provider = c("openai", "hf", "local-native"),
+  fail_on_error = TRUE
+)
+
+gen_show_models(provider = "hf", type = "Chat")
+gen_show_models(provider = "local-native", type = "Audio")
 ```
 
-A corrupt existing log is reported and preserved rather than overwritten.
-Generation results remain available if logging fails, with an explicit
-warning.
+Remote Hugging Face inference (`hf`) and downloaded native audio models
+(`local-native`) are intentionally separate catalogs. In the app, use
+**Models** to choose provider/model pairs and **Local** to configure or diagnose
+the runtime that executes them.
 
-Bundle import validates archive paths, entry counts, expanded sizes, allowed
-file types, and serialized schemas before installing anything:
-
-```r
-bundle <- gen_export_bundle()
-gen_import_bundle(bundle, overwrite = FALSE)
-```
-
-## Main functions
+## 🔧 Function Reference
 
 | Function | Purpose |
-| --- | --- |
-| `gen_txt()` | Cloud and local text generation |
-| `gen_img()` | Image generation |
-| `gen_stt()` | Cloud, native GGUF, and local-server transcription |
-| `gen_tts()` | Speech synthesis |
-| `gen_batch()` / `gen_batch_agent()` | Parallel, checkpointable workloads |
-| `gen_local_config()` | Read or update non-secret local settings |
-| `gen_local_diagnostics()` | Check native backends, Vulkan, FFmpeg, and endpoints |
-| `gen_update_models()` / `gen_show_models()` | Refresh and browse catalogs |
-| `set_*()` / `get_*()` / `list_*()` | Persist setups, content, and agents |
-| `mv_*()` / `rm_*()` | Rename or remove persisted entities |
-| `gen_interface()` | Launch the management app |
-| `gen_view()` | Render structured results |
-| `gen_stats()` / `gen_stats_rm()` | Inspect or remove daily logs |
-| `gen_export_bundle()` / `gen_import_bundle()` | Portable validated bundles |
+|---|---|
+| `gen_txt()` | Generate text with cloud and local providers |
+| `gen_img()` | Generate images from prompts |
+| `gen_stt()` | Transcribe audio with cloud, native, or local-server adapters |
+| `gen_stt_capabilities()` | Inspect adapter-owned audio limits |
+| `gen_stt_signature()` | Fingerprint the effective secret-free STT configuration |
+| `gen_tts()` / `gen_tts_voices()` | Synthesize speech and inspect supported voices |
+| `gen_batch()` / `gen_batch_agent()` | Run parallel, checkpointable workloads |
+| `set_*()` / `get_*()` / `list_*()` | Persist setups, content, agents, and providers |
+| `gen_local_config()` | Read or update non-secret local runtime settings |
+| `gen_local_diagnostics()` | Check native executables, devices, and endpoints |
+| `gen_update_models()` / `gen_show_models()` | Refresh and browse model catalogs |
+| `gen_interface()` | Launch the interactive management app |
+| `gen_view()` | View structured generation results |
+| `gen_stats()` / `gen_stats_rm()` | Inspect or remove daily usage logs |
+| `gen_export_bundle()` / `gen_import_bundle()` | Move validated portable bundles |
 | `gen_vote()` | Extract and rank structured vote markers |
 
-## Validation
+See [Architecture and runtime contract](inst/doc/architecture-and-runtime-contract.md)
+for provider boundaries, persistence rules, and the integration checklist.
 
-The repository test suite uses mocked provider HTTP/subprocess boundaries so it
-does not spend API credits or download large models. Release validation should
-include:
+## 🛡️ Best Practices
 
-```r
-devtools::document()
-devtools::test()
-```
+- 🔐 Keep API keys in environment variables, never in agents or source code.
+- 🧪 Pin important models and smoke-test the exact provider path you deploy.
+- 📦 Use persistent checkpoints for expensive ASR and batch workloads.
+- 📊 Inspect `status_api` and `status_msg` instead of assuming a returned object
+  means success.
+- 🧹 Protect transcript/checkpoint directories and remove sensitive artifacts
+  according to your own retention policy.
 
-and a tarball-based `R CMD check`. Real provider credentials, a running local
-server, or a compatible ROCm environment are still required for their
-respective end-to-end smoke tests.
+genflow is experimental. Provider APIs, model schemas, and local engines can
+change independently, so production workflows should validate the exact
+versions they use.
 
-## License
+## 🤝 Contributing
 
-GPL (>= 3), as declared in `DESCRIPTION`.
+Bug reports, focused fixes, documentation improvements, and provider
+integrations are welcome. Please include a reproducible example and avoid real
+credentials or sensitive transcripts.
+
+## 📄 License
+
+GPL (>= 3), as declared in [DESCRIPTION](DESCRIPTION).
+
+## 👨‍💻 About the Author
+
+Hi, I'm Hugo. I build tools around trading, backtesting, and generative models
+in R to iterate faster and create cool stuff. Feedback and ideas are always
+welcome.
+
+---
+
+Project: [github.com/hugorteixeira/genflow](https://github.com/hugorteixeira/genflow)
+
+<p align="center">Flow into the future of AI with ❤️ and ☕ in R</p>
