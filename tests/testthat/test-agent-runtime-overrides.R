@@ -73,16 +73,16 @@ test_that("TTS agents reuse context and STT uses only current runtime fields", {
                                service = "openai",
                                native_engine = NULL,
                                native_backend = NULL,
-                               diarize_speakers = FALSE,
-                               diarize_embedder = TRUE,
+                               diarize = TRUE,
+                               chunk_segment_seconds = NULL,
                                ...) {
       list(
         audio = audio,
         service = service,
         native_engine = native_engine,
         native_backend = native_backend,
-        diarize_speakers = diarize_speakers,
-        diarize_embedder = diarize_embedder
+        diarize = diarize,
+        chunk_segment_seconds = chunk_segment_seconds
       )
     },
     .package = "genflow"
@@ -132,6 +132,8 @@ test_that("TTS agents reuse context and STT uses only current runtime fields", {
       service = "local-native",
       native_engine = "crispasr",
       native_backend = "parakeet",
+      diarize = TRUE,
+      chunk_segment_seconds = 600,
       diarize_speakers = TRUE,
       diarize_embedder = TRUE
     ),
@@ -141,21 +143,29 @@ test_that("TTS agents reuse context and STT uses only current runtime fields", {
     genflow:::gen_stt.genflow_agent(
       native_agent,
       native_backend = "whisper",
-      diarize_embedder = FALSE
+      chunk_segment_seconds = 300
     )[c(
       "service",
       "native_engine",
       "native_backend",
-      "diarize_speakers",
-      "diarize_embedder"
+      "diarize",
+      "chunk_segment_seconds"
     )],
     list(
       service = "local-native",
       native_engine = "crispasr",
       native_backend = "whisper",
-      diarize_speakers = TRUE,
-      diarize_embedder = FALSE
+      diarize = TRUE,
+      chunk_segment_seconds = 300
     )
+  )
+  expect_error(
+    genflow:::gen_stt.genflow_agent(
+      native_agent,
+      diarize_embedder = FALSE
+    ),
+    "Unsupported `gen_stt()` override(s): diarize_embedder.",
+    fixed = TRUE
   )
 })
 

@@ -55,7 +55,7 @@ stt_large_plan_fixture <- function(directory) {
       audio_fingerprint = genflow:::.stt_chunk_file_fingerprint(
         audio_paths[[index]]
       ),
-      start_seconds = c(0, 9)[[index]],
+      start_seconds = c(0, 10)[[index]],
       duration_seconds = 10,
       requested_duration_seconds = 10,
       size_bytes = as.numeric(file.info(audio_paths[[index]])$size[[1]]),
@@ -66,7 +66,7 @@ stt_large_plan_fixture <- function(directory) {
     )
   })
   manifest <- list(
-    schema_version = 2L,
+    schema_version = 3L,
     key = "fixture",
     config_fingerprint = "fixture-config",
     parts = parts
@@ -78,12 +78,12 @@ stt_large_plan_fixture <- function(directory) {
     audio_path = audio_paths[[1]],
     cleanup_dir = NULL,
     prepared = TRUE,
+    chunk_format = "wav",
     prepared_format = "wav",
     prepared_size_bytes = 6,
-    input_duration_seconds = 19,
-    effective_max_bytes = 1024,
+    input_duration_seconds = 20,
     segment_seconds = 10,
-    overlap_seconds = 1,
+    decision_reason = "requested-segment",
     parts = parts,
     manifest = manifest,
     manifest_path = manifest_path,
@@ -92,41 +92,22 @@ stt_large_plan_fixture <- function(directory) {
 }
 
 test_that("large-audio public controls validate without touching a backend", {
-  legacy_formals <- c(
-    "audio", "service", "model", "language", "prompt", "directory", "label",
-    "save_txt", "convert", "diarize", "diarize_speakers",
-    "diarize_embedder", "timestamps", "timeout_api",
-    "timeout_per_audio_minute", "poll_interval", "max_poll_seconds",
-    "executable", "native_engine", "native_backend", "native_quant",
-    "native_kv_quant", "native_device", "max_new_tokens", "base_url",
-    "api_key", "response_format", "chunking", "chunk_max_mb",
-    "chunk_bitrate_kbps", "chunk_segment_seconds", "chunk_overlap_seconds",
-    "checkpoint_dir", "resume", "chunk_retry_forever", "chunk_max_retries",
-    "chunk_retry_wait_seconds", "output"
-  )
   public_formals <- names(formals(genflow:::gen_stt.default))
-  expect_identical(
-    public_formals[seq_along(legacy_formals)],
-    legacy_formals
-  )
-  expect_identical(
-    public_formals[
-      seq.int(length(legacy_formals) + 1L, length(legacy_formals) + 2L)
-    ],
-    c("chunk_format", "checkpoint_retention")
-  )
+  expect_true(all(c(
+    "chunking", "chunk_bitrate_kbps", "chunk_segment_seconds",
+    "checkpoint_dir", "resume", "chunk_retry_forever", "chunk_max_retries",
+    "chunk_retry_wait_seconds", "output", "chunk_format",
+    "checkpoint_retention"
+  ) %in% public_formals))
+  expect_false(any(c(
+    "chunk_max_mb", "chunk_overlap_seconds", "chunk_speaker_linking",
+    "diarize_speakers", "diarize_embedder"
+  ) %in% public_formals))
   expect_identical(utils::tail(public_formals, 1L), "...")
 
   expect_error(
-    genflow:::.stt_chunk_validate_options(chunk_max_mb = 0),
-    "chunk_max_mb"
-  )
-  expect_error(
-    genflow:::.stt_chunk_validate_options(
-      chunk_segment_seconds = 8,
-      chunk_overlap_seconds = 8
-    ),
-    "must be smaller"
+    genflow:::.stt_chunk_validate_options(chunk_segment_seconds = 0),
+    "greater than 0"
   )
   expect_error(
     genflow:::.stt_chunk_validate_options(resume = NA),
@@ -147,24 +128,21 @@ test_that("large-audio public controls validate without touching a backend", {
 
   options <- genflow:::.stt_chunk_validate_options(
     chunking = "auto",
-    chunk_max_mb = "10",
     chunk_bitrate_kbps = "48",
     chunk_segment_seconds = "300",
-    chunk_overlap_seconds = "8",
     chunk_format = "mp3",
     checkpoint_retention = "results",
     output = "transcript"
   )
   expect_identical(options$chunking, "auto")
-  expect_identical(options$chunk_max_mb, 10)
   expect_identical(options$chunk_bitrate_kbps, 48L)
   expect_identical(options$chunk_segment_seconds, 300)
   expect_identical(options$chunk_format, "mp3")
   expect_identical(options$checkpoint_retention, "results")
   expect_identical(options$output, "transcript")
   expect_equal(
-    genflow:::.stt_chunk_starts(1000, 300, 8),
-    c(0, 292, 584, 876)
+    genflow:::.stt_chunk_starts(1000, 300),
+    c(0, 300, 600, 900)
   )
 })
 
@@ -207,8 +185,7 @@ test_that("chunk format auto preserves defaults and explicit MP3 reaches native 
   )
 
   options <- genflow:::.stt_chunk_validate_options(
-    chunk_max_mb = 0.0002,
-    chunk_overlap_seconds = 2,
+    chunk_segment_seconds = 30,
     chunk_format = "mp3",
     checkpoint_dir = checkpoint
   )
@@ -280,8 +257,7 @@ test_that("chunk planning prepares native WAV and validates every chunk", {
   )
 
   options <- genflow:::.stt_chunk_validate_options(
-    chunk_max_mb = 0.0002,
-    chunk_overlap_seconds = 2,
+    chunk_segment_seconds = 30,
     checkpoint_dir = checkpoint
   )
   plan <- genflow:::.stt_chunk_plan_audio(
@@ -312,18 +288,19 @@ test_that("chunk planning prepares native WAV and validates every chunk", {
   expect_true(file.exists(plan$manifest_path))
 })
 
-test_that("persistent prepared runs expose pruning paths even without chunks", {
+test_that("no requested duration leaves audio and checkpoint storage untouched", {
   source <- stt_large_audio_file()
   checkpoint <- tempfile("genflow-prepared-run-")
   on.exit(unlink(c(source, checkpoint), recursive = TRUE), add = TRUE)
+  preparations <- 0L
 
   testthat::local_mocked_bindings(
     .stt_chunk_prepare_media = function(source,
                                         target,
                                         format,
                                         bitrate_kbps) {
-      writeBin(as.raw(rep(2L, 100L)), target)
-      invisible(target)
+      preparations <<- preparations + 1L
+      stop("unexpected preparation")
     },
     .stt_audio_duration_seconds = function(path) 10,
     .package = "genflow"
@@ -333,18 +310,14 @@ test_that("persistent prepared runs expose pruning paths even without chunks", {
     service = "local-native",
     config_fingerprint = "prepared-run",
     options = genflow:::.stt_chunk_validate_options(
-      chunk_max_mb = 1,
       checkpoint_dir = checkpoint
     )
   )
   expect_false(plan$chunked)
-  expect_identical(plan$checkpoint_root, checkpoint)
-  expect_identical(dirname(plan$run_dir), checkpoint)
-  expect_identical(
-    genflow:::.stt_chunk_lock_state(plan$lock$path)$state,
-    "active"
-  )
-  expect_true(genflow:::.stt_chunk_release_lock(plan$lock))
+  expect_identical(plan$audio_path, source)
+  expect_identical(plan$decision_reason, "chunk-duration-not-requested")
+  expect_identical(preparations, 0L)
+  expect_false(dir.exists(checkpoint))
 })
 
 test_that("successful opaque chunk results resume without backend calls", {
@@ -369,7 +342,6 @@ test_that("successful opaque chunk results resume without backend calls", {
   )
   options <- genflow:::.stt_chunk_validate_options(
     checkpoint_dir = checkpoint,
-    chunk_overlap_seconds = 0,
     chunk_retry_wait_seconds = 0
   )
   call_arguments <- list(
@@ -498,13 +470,12 @@ test_that("prepared media and chunks are reused only after full validation", {
       invisible(target)
     },
     .stt_audio_duration_seconds = function(path) {
-      if (grepl("prepared", basename(path), fixed = TRUE)) 100 else 10
+      if (grepl("part_", basename(path), fixed = TRUE)) 10 else 100
     },
     .package = "genflow"
   )
   options <- genflow:::.stt_chunk_validate_options(
-    chunk_max_mb = 0.0002,
-    chunk_overlap_seconds = 2,
+    chunk_segment_seconds = 30,
     checkpoint_dir = checkpoint
   )
   first <- genflow:::.stt_chunk_plan_audio(
@@ -698,12 +669,15 @@ test_that("temporary planning artifacts are removed after preparation failure", 
   on.exit(unlink(c(source, root), recursive = TRUE), add = TRUE)
   testthat::local_mocked_bindings(
     .stt_chunk_temp_root = function() root,
+    .stt_audio_duration_seconds = function(path) 100,
     .stt_chunk_prepare_media = function(...) {
       stop("synthetic preparation failure", call. = FALSE)
     },
     .package = "genflow"
   )
-  options <- genflow:::.stt_chunk_validate_options(chunk_max_mb = 1)
+  options <- genflow:::.stt_chunk_validate_options(
+    chunk_segment_seconds = 30
+  )
   expect_error(
     genflow:::.stt_chunk_plan_audio(
       source,
@@ -860,9 +834,9 @@ test_that("foreign-host locks are never reclaimed automatically", {
   expect_true(genflow:::.stt_chunk_release_lock(recovered))
 })
 
-test_that("oversized chunks shrink adaptively and persist the validated plan", {
+test_that("fixed-duration planning never adapts chunk length to byte size", {
   source <- stt_large_audio_file()
-  checkpoint <- tempfile("genflow-adaptive-plan-")
+  checkpoint <- tempfile("genflow-fixed-plan-")
   on.exit(unlink(c(source, checkpoint), recursive = TRUE), add = TRUE)
   durations <- new.env(parent = emptyenv())
   extract_calls <- 0L
@@ -883,7 +857,7 @@ test_that("oversized chunks shrink adaptively and persist the validated plan", {
                                         format,
                                         bitrate_kbps) {
       extract_calls <<- extract_calls + 1L
-      bytes <- max(1L, as.integer(ceiling(duration_seconds * 20)))
+      bytes <- max(1L, as.integer(ceiling(duration_seconds * 1000)))
       writeBin(as.raw(rep(3L, bytes)), target)
       assign(target, duration_seconds, envir = durations)
       invisible(target)
@@ -894,88 +868,45 @@ test_that("oversized chunks shrink adaptively and persist the validated plan", {
     .package = "genflow"
   )
   options <- genflow:::.stt_chunk_validate_options(
-    chunk_max_mb = 0.0002,
-    chunk_overlap_seconds = 2,
+    chunk_segment_seconds = 30,
     checkpoint_dir = checkpoint
   )
   first <- genflow:::.stt_chunk_plan_audio(
     source,
     service = "local-native",
-    config_fingerprint = "adaptive-config",
-    options = options
+    config_fingerprint = "fixed-config",
+    options = options,
+    input_duration_seconds = 100
   )
-  expect_gt(first$planning_attempts, 1L)
-  expect_lt(first$segment_seconds, 19)
-  expect_true(all(vapply(
-    first$parts,
-    function(part) part$size_bytes <= first$effective_max_bytes,
-    logical(1)
-  )))
+  expect_identical(first$segment_seconds, 30)
+  expect_equal(
+    vapply(first$parts, `[[`, numeric(1), "start_seconds"),
+    c(0, 30, 60, 90)
+  )
+  expect_equal(
+    vapply(first$parts, `[[`, numeric(1), "requested_duration_seconds"),
+    c(30, 30, 30, 10)
+  )
+  expect_identical(extract_calls, 4L)
   manifest <- readRDS(first$manifest_path)
   expect_identical(manifest$segment_seconds, first$segment_seconds)
-  expect_identical(manifest$planning_attempts, first$planning_attempts)
+  expect_false(any(c(
+    "planning_attempts", "effective_max_bytes", "overlap_seconds",
+    "model_segment_seconds"
+  ) %in% names(manifest)))
   calls_after_first <- extract_calls
   expect_true(genflow:::.stt_chunk_release_lock(first$lock))
 
   second <- genflow:::.stt_chunk_plan_audio(
     source,
     service = "local-native",
-    config_fingerprint = "adaptive-config",
-    options = options
+    config_fingerprint = "fixed-config",
+    options = options,
+    input_duration_seconds = 100
   )
   expect_identical(second$segment_seconds, first$segment_seconds)
-  expect_identical(second$planning_attempts, 1L)
   expect_identical(extract_calls, calls_after_first)
   expect_true(genflow:::.stt_chunk_release_lock(second$lock))
-})
-
-test_that("adaptive chunk planning stops after bounded attempts", {
-  source <- stt_large_audio_file()
-  checkpoint <- tempfile("genflow-adaptive-bounded-")
-  on.exit(unlink(c(source, checkpoint), recursive = TRUE), add = TRUE)
-  durations <- new.env(parent = emptyenv())
-  extraction_count <- 0L
-
-  testthat::local_mocked_bindings(
-    .stt_chunk_prepare_media = function(source,
-                                        target,
-                                        format,
-                                        bitrate_kbps) {
-      writeBin(as.raw(rep(2L, 1000L)), target)
-      assign(target, 100, envir = durations)
-      invisible(target)
-    },
-    .stt_chunk_extract_media = function(source,
-                                        target,
-                                        start_seconds,
-                                        duration_seconds,
-                                        format,
-                                        bitrate_kbps) {
-      extraction_count <<- extraction_count + 1L
-      writeBin(as.raw(rep(3L, 220L)), target)
-      assign(target, duration_seconds, envir = durations)
-      invisible(target)
-    },
-    .stt_audio_duration_seconds = function(path) {
-      get(path, envir = durations, inherits = FALSE)
-    },
-    .package = "genflow"
-  )
-  options <- genflow:::.stt_chunk_validate_options(
-    chunk_max_mb = 0.0002,
-    chunk_overlap_seconds = 0,
-    checkpoint_dir = checkpoint
-  )
-  expect_error(
-    genflow:::.stt_chunk_plan_audio(
-      source,
-      service = "local-native",
-      config_fingerprint = "bounded-config",
-      options = options
-    ),
-    "after 6 adaptive planning attempts"
-  )
-  expect_identical(extraction_count, 6L)
 })
 
 test_that("checkpoint pruning keeps current and newest valid previous run", {
@@ -994,7 +925,7 @@ test_that("checkpoint pruning keeps current and newest valid previous run", {
     path <- file.path(checkpoint, paste0("run-", key))
     dir.create(path, recursive = TRUE)
     manifest <- list(
-      schema_version = if (valid) 2L else 99L,
+      schema_version = if (valid) 3L else 99L,
       key = key,
       source_fingerprint = source_fingerprint,
       parts = list(),
@@ -1069,7 +1000,7 @@ test_that("results-only retention removes safe media and preserves checkpoints",
     writeBin(as.raw(c(4, 5, 6)), part)
     saveRDS(list(response_value = "kept"), result)
     manifest <- list(
-      schema_version = 2L,
+      schema_version = 3L,
       key = key,
       source_fingerprint = source_fingerprint,
       prepared_path = prepared,
@@ -1138,7 +1069,7 @@ test_that("results-only retention leaves an active run untouched", {
   prepared <- file.path(run, "prepared.wav")
   writeBin(as.raw(c(1, 2, 3)), prepared)
   manifest <- list(
-    schema_version = 2L,
+    schema_version = 3L,
     key = "aa",
     source_fingerprint = "recording-a",
     prepared_path = prepared,
@@ -1170,7 +1101,7 @@ test_that("results-only retention reports regular files that unlink cannot remov
   prepared <- file.path(run, "prepared.wav")
   writeBin(as.raw(c(1, 2, 3)), prepared)
   manifest <- list(
-    schema_version = 2L,
+    schema_version = 3L,
     key = "aa",
     source_fingerprint = "recording-a",
     prepared_path = prepared,
@@ -1230,7 +1161,7 @@ test_that("results-only retention rejects indeterminate current run state", {
   )
 })
 
-test_that("saved or explicit MOSS Diarize selection resolves a model cap", {
+test_that("MOSS runtime discovery does not create an implicit chunk policy", {
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_model <- "moss-transcribe-diarize-0.9b-q8_0.gguf"
   withr::local_envvar(c(
@@ -1247,30 +1178,16 @@ test_that("saved or explicit MOSS Diarize selection resolves a model cap", {
   runtime <- genflow:::.stt_chunk_runtime_artifacts(
     service = "local-native"
   )
-  policy <- genflow:::.stt_chunk_model_policy(
-    service = "local-native",
-    runtime_artifacts = runtime
-  )
   expect_identical(runtime$model_value, config$stt_native_model)
   expect_identical(runtime$backend, "moss-diarize")
-  expect_identical(policy$model_segment_seconds, 3600)
-  expect_identical(
-    policy$decision_reason,
-    "moss-diarize-context-window"
-  )
-
-  unknown <- genflow:::.stt_chunk_model_policy(
-    service = "local-native",
-    runtime_artifacts = list(
-      backend = NULL,
-      model_value = "unknown-model.gguf"
-    )
-  )
-  expect_null(unknown$model_segment_seconds)
-  expect_null(unknown$decision_reason)
+  expect_false(exists(
+    ".stt_chunk_model_policy",
+    envir = asNamespace("genflow"),
+    inherits = FALSE
+  ))
 })
 
-test_that("MOSS model cap combines with explicit duration by taking the minimum", {
+test_that("only explicit seconds activate fixed-duration chunking", {
   source <- stt_large_audio_file()
   checkpoint <- tempfile("genflow-large-model-cap-")
   on.exit(unlink(c(source, checkpoint), recursive = TRUE), add = TRUE)
@@ -1309,19 +1226,11 @@ test_that("MOSS model cap combines with explicit duration by taking the minimum"
     service = "local-native",
     config_fingerprint = "model-cap",
     options = model_options,
-    model_segment_seconds = 3600,
-    model_decision_reason = "moss-diarize-context-window",
     input_duration_seconds = 7200
   )
-  expect_true(model_plan$chunked)
-  expect_identical(model_plan$model_segment_seconds, 3600)
-  expect_identical(model_plan$segment_seconds, 3600)
-  expect_identical(
-    model_plan$decision_reason,
-    "moss-diarize-context-window"
-  )
-  expect_identical(length(model_plan$parts), 3L)
-  expect_true(genflow:::.stt_chunk_release_lock(model_plan$lock))
+  expect_false(model_plan$chunked)
+  expect_identical(model_plan$audio_path, source)
+  expect_identical(model_plan$decision_reason, "chunk-duration-not-requested")
 
   explicit_options <- genflow:::.stt_chunk_validate_options(
     chunk_segment_seconds = 1800,
@@ -1332,43 +1241,24 @@ test_that("MOSS model cap combines with explicit duration by taking the minimum"
     service = "local-native",
     config_fingerprint = "explicit-and-model-cap",
     options = explicit_options,
-    model_segment_seconds = 3600,
-    model_decision_reason = "moss-diarize-context-window",
     input_duration_seconds = 7200
   )
   expect_identical(explicit_plan$segment_seconds, 1800)
-  expect_match(
-    explicit_plan$decision_reason,
-    "explicit-segment-limit",
-    fixed = TRUE
-  )
-  expect_match(
-    explicit_plan$decision_reason,
-    "moss-diarize-context-window",
-    fixed = TRUE
+  expect_identical(explicit_plan$decision_reason, "requested-segment")
+  expect_equal(
+    vapply(explicit_plan$parts, `[[`, numeric(1), "start_seconds"),
+    c(0, 1800, 3600, 5400)
   )
   expect_true(genflow:::.stt_chunk_release_lock(explicit_plan$lock))
-
-  expect_error(
-    genflow:::.stt_chunk_plan_audio(
-      source,
-      service = "local-native",
-      config_fingerprint = "missing-duration",
-      options = genflow:::.stt_chunk_validate_options(),
-      model_segment_seconds = 3600,
-      model_decision_reason = "moss-diarize-context-window",
-      input_duration_seconds = NA_real_
-    ),
-    "Install `ffprobe`"
-  )
 
   disabled <- genflow:::.stt_chunk_plan_audio(
     source,
     service = "local-native",
     config_fingerprint = "disabled",
-    options = genflow:::.stt_chunk_validate_options(chunking = "never"),
-    model_segment_seconds = 3600,
-    model_decision_reason = "moss-diarize-context-window"
+    options = genflow:::.stt_chunk_validate_options(
+      chunking = "never",
+      chunk_segment_seconds = 1800
+    )
   )
   expect_false(disabled$chunked)
   expect_identical(disabled$audio_path, source)
@@ -1394,26 +1284,13 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
         model_value = "moss-transcribe-diarize-0.9b-q8_0.gguf"
       )
     },
-    .stt_chunk_model_policy = function(service, runtime_artifacts) {
-      expect_identical(runtime_artifacts$backend, "moss-diarize")
-      list(
-        model_segment_seconds = 3600,
-        decision_reason = "moss-diarize-context-window"
-      )
-    },
     .stt_chunk_plan_audio = function(audio_path,
                                      service,
                                      config_fingerprint,
                                      options,
-                                     model_segment_seconds = NULL,
-                                     model_decision_reason = NULL,
                                      input_duration_seconds = NA_real_) {
       expect_identical(service, "local-native")
-      expect_identical(model_segment_seconds, 3600)
-      expect_identical(
-        model_decision_reason,
-        "moss-diarize-context-window"
-      )
+      expect_identical(options$chunk_segment_seconds, 10)
       plan
     },
     .stt_chunk_call_backend = function(audio, arguments) {
@@ -1452,7 +1329,7 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
     model = "mock.gguf",
     directory = checkpoint,
     save_txt = TRUE,
-    chunk_max_mb = 10,
+    chunk_segment_seconds = 10,
     checkpoint_dir = checkpoint,
     checkpoint_retention = "results",
     output = "transcript"
@@ -1537,9 +1414,6 @@ test_that("results-only retention never cleans checkpoint media after failure", 
   testthat::local_mocked_bindings(
     .stt_audio_duration_seconds = function(path) 10,
     .stt_chunk_runtime_artifacts = function(...) list(),
-    .stt_chunk_model_policy = function(...) {
-      list(model_segment_seconds = NULL, decision_reason = NULL)
-    },
     .stt_chunk_plan_audio = function(audio_path, ...) {
       list(
         chunked = FALSE,
@@ -1550,8 +1424,7 @@ test_that("results-only retention never cleans checkpoint media after failure", 
         prepared_format = "mp3",
         prepared_size_bytes = 100,
         input_duration_seconds = 10,
-        decision_reason = "within-configured-limits",
-        model_segment_seconds = NULL,
+        decision_reason = "within-requested-segment",
         checkpoint_root = checkpoint,
         run_dir = file.path(checkpoint, "run-fixture"),
         lock = NULL
@@ -1569,7 +1442,7 @@ test_that("results-only retention never cleans checkpoint media after failure", 
     audio,
     service = "local-openai",
     save_txt = FALSE,
-    chunk_max_mb = 10,
+    chunk_segment_seconds = 10,
     chunk_format = "mp3",
     checkpoint_dir = checkpoint,
     checkpoint_retention = "results"
@@ -1587,9 +1460,6 @@ test_that("results-only retention exposes incomplete cleanup to callers", {
   testthat::local_mocked_bindings(
     .stt_audio_duration_seconds = function(path) 10,
     .stt_chunk_runtime_artifacts = function(...) list(),
-    .stt_chunk_model_policy = function(...) {
-      list(model_segment_seconds = NULL, decision_reason = NULL)
-    },
     .stt_chunk_plan_audio = function(audio_path, ...) {
       list(
         chunked = FALSE,
@@ -1600,8 +1470,7 @@ test_that("results-only retention exposes incomplete cleanup to callers", {
         prepared_format = "mp3",
         prepared_size_bytes = 100,
         input_duration_seconds = 10,
-        decision_reason = "within-configured-limits",
-        model_segment_seconds = NULL,
+        decision_reason = "within-requested-segment",
         checkpoint_root = checkpoint,
         run_dir = file.path(checkpoint, "run-fixture"),
         lock = NULL
@@ -1624,7 +1493,7 @@ test_that("results-only retention exposes incomplete cleanup to callers", {
       audio,
       service = "local-openai",
       save_txt = FALSE,
-      chunk_max_mb = 10,
+      chunk_segment_seconds = 10,
       chunk_format = "mp3",
       checkpoint_dir = checkpoint,
       checkpoint_retention = "results"
@@ -1662,9 +1531,6 @@ test_that("invalid current manifests expose incomplete cleanup to callers", {
   testthat::local_mocked_bindings(
     .stt_audio_duration_seconds = function(path) 10,
     .stt_chunk_runtime_artifacts = function(...) list(),
-    .stt_chunk_model_policy = function(...) {
-      list(model_segment_seconds = NULL, decision_reason = NULL)
-    },
     .stt_chunk_plan_audio = function(audio_path, ...) {
       list(
         chunked = FALSE,
@@ -1675,8 +1541,7 @@ test_that("invalid current manifests expose incomplete cleanup to callers", {
         prepared_format = "mp3",
         prepared_size_bytes = 100,
         input_duration_seconds = 10,
-        decision_reason = "within-configured-limits",
-        model_segment_seconds = NULL,
+        decision_reason = "within-requested-segment",
         checkpoint_root = checkpoint,
         run_dir = run,
         lock = NULL
@@ -1692,7 +1557,7 @@ test_that("invalid current manifests expose incomplete cleanup to callers", {
       audio,
       service = "local-openai",
       save_txt = FALSE,
-      chunk_max_mb = 10,
+      chunk_segment_seconds = 10,
       chunk_format = "mp3",
       checkpoint_dir = checkpoint,
       checkpoint_retention = "results"
@@ -1721,9 +1586,6 @@ test_that("checkpoint fingerprints follow effective endpoint and model", {
   testthat::local_mocked_bindings(
     .stt_audio_duration_seconds = function(path) 19,
     .stt_chunk_runtime_artifacts = function(...) list(),
-    .stt_chunk_model_policy = function(...) {
-      list(model_segment_seconds = NULL, decision_reason = NULL)
-    },
     .stt_chunk_plan_audio = function(audio_path,
                                      service,
                                      config_fingerprint,
@@ -1736,7 +1598,6 @@ test_that("checkpoint fingerprints follow effective endpoint and model", {
         cleanup_dir = NULL,
         prepared = FALSE,
         decision_reason = NULL,
-        model_segment_seconds = NULL,
         lock = NULL
       )
     },
@@ -1778,9 +1639,6 @@ test_that("checkpoint fingerprints follow effective native auto quant", {
       model = NULL,
       executable = NULL
     ),
-    .stt_chunk_model_policy = function(...) {
-      list(model_segment_seconds = NULL, decision_reason = NULL)
-    },
     .stt_chunk_plan_audio = function(audio_path,
                                      service,
                                      config_fingerprint,
@@ -1793,7 +1651,6 @@ test_that("checkpoint fingerprints follow effective native auto quant", {
         cleanup_dir = NULL,
         prepared = FALSE,
         decision_reason = NULL,
-        model_segment_seconds = NULL,
         lock = NULL
       )
     },

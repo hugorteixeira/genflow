@@ -16,11 +16,11 @@ smaller local-file transport limit. It describes genflow's adapter, not
 every possible upstream model or account limit.
 }
 \description{
-Returns stable transport constraints that orchestration clients may need
-before calling \code{\link[=gen_stt]{gen_stt()}}. Provider-specific limits remain owned by
-genflow instead of being duplicated in downstream packages. This is
-informational capability discovery; callers should still pass the original
-recording to \code{\link[=gen_stt]{gen_stt()}} instead of recreating its chunk orchestration.
+Returns stable transport constraints that clients may inspect before
+calling \code{\link[=gen_stt]{gen_stt()}}. This is informational capability discovery only:
+Genflow does not derive a chunk duration from byte limits. Callers that need
+splitting pass the original recording plus an explicit
+\code{chunk_segment_seconds}.
 }
 \examples{
 gen_stt_capabilities("replicate")$max_local_file_bytes

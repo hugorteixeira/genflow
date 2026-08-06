@@ -1,19 +1,22 @@
-# genflow 0.0.8
+# genflow 0.0.8.9000
 
+- Simplified STT chunking to one explicit rule: when
+  `chunk_segment_seconds` is set, Genflow prepares the audio and splits it into
+  contiguous chunks of that duration. There is no overlap, adaptive byte-size
+  planner, or implicit model-duration policy. Without that argument, the
+  recording is sent as one model input.
+- Removed the auxiliary Python/Pyannote/TitaNet speaker paths and all
+  cross-chunk voice linking. Multi-chunk results retain model-provided labels
+  under honest `C01:S01`, `C02:S01`, ... namespaces, rebase timestamps, and
+  concatenate text in source order without boundary deduplication. The merge
+  signature is now `sequential-chunks-v1`.
 - MOSS Diarize now defaults its CrispASR KV cache to `q8_0` when
   `native_kv_quant` is `NULL`, reports the source as `model-default`, and still
   gives priority to explicit `f16`, `q8_0`, or `q4_0`. The new implicit default
   changes the STT signature/checkpoint key; explicit `f16` preserves the former
   policy.
-- Timestamped chunk overlaps now retain strong partial speaker mappings across
-  unequal rosters such as `3 -> 2` and `2 -> 3`. A single boundary-active
-  complement may be inferred only after direct evidence; ambiguous identities
-  remain internally unresolved. Public transcripts use canonical `S01`,
-  `S02`, ... labels and preserve internal `U...` ids in metadata. Public STT
-  signatures version reconciliation separately, allowing final transcripts to
-  refresh without retranscribing valid part checkpoints. Only exact normalized
-  text overlap can delete duplicated content.
 
+# genflow 0.0.8
 # genflow 0.0.7
 
 - Added semantic `chunk_format = "auto"`, `"wav"`, or `"mp3"` selection.

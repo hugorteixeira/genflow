@@ -1,7 +1,7 @@
 Package: genflow
 Type: Package
 Title: Unified Cloud and Local Generative AI Workflows
-Version: 0.0.8
+Version: 0.0.8.9000
 Authors@R: person(
     given = "Hugo",
     family = "Rzepian Teixeira",
@@ -19,8 +19,8 @@ RoxygenNote: 7.3.3
 License: GPL (>= 3)
 URL: https://github.com/hugorteixeira/genflow
 BugReports: https://github.com/hugorteixeira/genflow/issues
-SystemRequirements: FFmpeg and ffprobe (required for large-audio preparation,
-    splitting, and duration validation; otherwise optional), CrispASR or
+SystemRequirements: FFmpeg and ffprobe (required for fixed-duration audio
+    splitting and duration validation; otherwise optional), CrispASR or
     moss-transcribe.cpp CLI (optional, for native speech-to-text inference)
 Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
 Imports: 

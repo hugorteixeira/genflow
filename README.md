@@ -25,7 +25,7 @@ structured results, and a Shiny/RStudio management app.
 - 🚀 **One interface:** a shared result contract across text, image, STT, and TTS
 - 🌐 **Cloud and local:** switch providers without rebuilding your R workflow
 - 🎙️ **Serious ASR:** long-audio chunking, resume, retries, diarization, and
-  cross-chunk speaker continuity
+  explicit chunk-local speaker labels
 - 🧠 **Reusable agents:** save setups and content, then pipe them into generators
 - ⚡ **Parallel batches:** separate task count from worker concurrency and
   checkpoint individual results
@@ -165,10 +165,10 @@ speech <- gen_tts(
 
 ## 🎙️ ASR for real-world recordings
 
-The newest ASR work makes `gen_stt()` an **audio orchestrator**, not just an API
-wrapper. Give it the original recording; genflow can prepare it, split it only
-when needed, resume completed parts, retry transient failures, remove overlap,
-reconcile speaker identities, and return one auditable result.
+`gen_stt()` can prepare a recording, split it into contiguous fixed-duration
+chunks when requested, resume completed parts, retry transient failures,
+namespace independently produced speaker labels, and return one auditable
+result. It does not overlap chunks or guess speaker identity between them.
 
 ### Choose where transcription runs
 
@@ -222,8 +222,8 @@ meeting <- gen_stt(
   diarize = TRUE,
   timestamps = TRUE,
   chunking = "auto",
+  chunk_segment_seconds = 600,
   chunk_format = "mp3",
-  chunk_overlap_seconds = 8,
   checkpoint_dir = "meeting-stt-work",
   checkpoint_retention = "results",
   output = "transcript",
@@ -234,60 +234,49 @@ meeting$response_value
 meeting$diarized_transcript
 meeting$saved_metadata_file
 meeting$metadata$chunking
-meeting$metadata$reconciliation
+meeting$metadata$chunk_merge
 ```
 
 `output = "transcript"` is still a structured result — never a character
 shortcut. It keeps the common runtime fields plus normalized transcript,
-segments, diarization, chunking, and reconciliation metadata.
+segments, diarization, chunking, and chunk-merge metadata.
 
 ```mermaid
 flowchart LR
   A[Original audio] --> B[Prepare and validate]
-  B --> C{Chunking needed?}
+  B --> C{Longer than requested duration?}
   C -->|No| D[STT adapter]
-  C -->|Yes| E[Overlapping chunks]
+  C -->|Yes| E[Contiguous fixed-duration chunks]
   E --> D
   D --> F[Validated checkpoints]
-  F --> G[Deduplicate and reconcile]
+  F --> G[Sequential merge]
   G --> H[Plain transcript]
-  G --> I[Speakers, timestamps, metadata]
+  G --> I[Chunk-local labels, timestamps, metadata]
 ```
 
 #### Speaker-aware output
 
 Models with native speaker metadata expose readable turns through
 `diarized_transcript` while preserving the plain text in `response_value`.
-Public labels are normalized to `S01`, `S02`, and so on. With
+For one input, labels are normalized to `S01`, `S02`, and so on. If Genflow
+must split the recording into independent model inputs, labels become
+`C01:S01`, `C02:S01`, and so on: the prefix states the chunk scope and does not
+claim that equal local numbers are the same person. The original provider label
+remains in `speaker_local`. With
 `save_txt = TRUE`, a JSON sidecar in `saved_metadata_file` preserves the
 structured transcript and audit metadata.
 
-For models without native labels, CrispASR can add its generic
-Pyannote + TitaNet pipeline without Python:
-
-```r
-speaker_result <- gen_stt(
-  "roundtable.wav",
-  service = "local-native",
-  model = "cohere-transcribe-q8_0.gguf",
-  diarize = TRUE,
-  diarize_speakers = TRUE,
-  diarize_embedder = TRUE
-)
-
-speaker_result$diarized_transcript
-```
-
-Set `diarize_embedder = FALSE` to skip the CPU-heavy clustering pass. That is
-faster, but speaker numbers become best-effort and may swap during a long
-recording.
+Only speaker labels returned by the selected provider/model are retained.
+Genflow does not run an auxiliary speaker segmentation or voice-embedding
+pipeline. Each independently transcribed chunk therefore keeps an explicit
+chunk-local namespace.
 
 <details>
 <summary><strong>What the long-audio pipeline guarantees</strong></summary>
 
-- **Adaptive preparation:** `chunking = "auto"` combines your limits with
-  adapter transport limits and documented model limits. Segment duration can
-  shrink when encoded bytes still exceed the effective ceiling.
+- **Explicit splitting:** `chunking = "auto"` splits only when
+  `chunk_segment_seconds` is set and the recording is longer than that value.
+  Chunks are contiguous, have no overlap, and preserve source order.
 - **Safe resume:** persistent checkpoints are validated against the source,
   effective configuration, model/executable signature, size, duration, and
   chunk fingerprint before reuse.
@@ -296,11 +285,12 @@ recording.
 - **Useful retention:** `checkpoint_retention = "results"` removes prepared
   chunk audio only after final success, while retaining manifests and completed
   per-part transcript checkpoints.
-- **Conservative stitching:** only exact normalized text overlap can delete
-  duplicated content. Speaker mappings require strong overlap evidence;
-  ambiguous identities remain unresolved in metadata instead of being guessed.
-- **Global output:** chunk timestamps become recording timestamps, and public
-  speaker labels are dense and stable by first appearance in the merged result.
+- **Mechanical stitching:** every chunk transcript is concatenated in source
+  order. No boundary text is removed and no speaker is mapped from one
+  independently transcribed chunk to another.
+- **Honest output:** chunk timestamps become recording timestamps. Speaker
+  labels stay recording-scoped for one input and explicitly chunk-scoped for
+  multiple inputs.
 
 Checkpoint folders contain prepared audio and transcript data. Treat them as
 sensitive and budget their disk usage accordingly.

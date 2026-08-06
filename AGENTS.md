@@ -23,10 +23,13 @@ Primary goal: keep provider integrations consistent across runtime, batch, model
 - Image runtime entrypoint: `R/image_functions.R` (`gen_img.default()` + provider-specific internals).
 - STT runtime entrypoint: `R/stt_functions.R` (`gen_stt.default()` +
   provider-specific internals).
-  - `R/stt_chunking.R` owns large-audio preparation, model/transport limits,
-    overlap windows, opaque checkpoints, resume/retry, and final orchestration.
-  - `R/stt_reconciliation.R` owns cross-chunk speaker mapping, overlap
-    deduplication, uncertainty, global timestamps, and transcript rendering.
+  - `R/stt_chunking.R` owns fixed-duration contiguous splitting, audio
+    preparation, opaque checkpoints, resume/retry, and final orchestration.
+    Chunking is enabled only by an explicit `chunk_segment_seconds`; there is
+    no overlap, adaptive size planner, or implicit model-duration policy.
+  - `R/stt_reconciliation.R` owns sequential chunk merge, chunk-local speaker
+    namespaces, global timestamps, and transcript rendering. It must not
+    deduplicate boundary text or infer speaker identity across chunks.
   - `R/stt_signature.R` exposes the secret-free effective STT configuration
     fingerprint used by downstream caches; keep it aligned with runtime
     resolution whenever STT semantics, endpoints, or native artifacts change.
@@ -65,7 +68,7 @@ Batch worker code expects list-like responses and uses `status_api` for error ha
 
 `gen_stt(output = "transcript")` is a smaller compatible list, not a character
 shortcut. It must retain the common runtime fields plus normalized transcript,
-diarization, chunking, and reconciliation metadata.
+diarization, chunking, and chunk-merge metadata.
 
 ## Service Naming Rules
 - Service ids are lowercase (examples: `openai`, `openrouter`, `hf`).

@@ -216,25 +216,10 @@ disables CrispASR's generic 30-second chunking so speaker numbering spans the
 complete input passed to `gen_stt()`; orchestration clients should split long
 recordings into model-supported windows before calling it.
 
-For models without native speaker labels, set `diarize_speakers = TRUE` to use
-CrispASR's generic Pyannote speaker segmentation. Its default
-`diarize_embedder = TRUE` also runs TitaNet clustering, which makes anonymous
-speaker IDs stable across the supplied recording but adds a CPU-heavy pass.
-Set `diarize_embedder = FALSE` to omit TitaNet:
-
-```r
-res <- gen_stt(
-  "meeting.wav",
-  service = "local-native",
-  model = "cohere-transcribe-q8_0.gguf",
-  diarize = TRUE,
-  diarize_speakers = TRUE,
-  diarize_embedder = FALSE
-)
-```
-
-This Pyannote-only mode is faster, but its best-effort speaker numbers can swap
-within a long recording because no embedding step globally clusters voices.
+Models without native speaker labels remain plain STT. Genflow does not add an
+auxiliary speaker segmentation or voice-embedding pipeline. For chunked input,
+any model-provided speaker labels remain explicitly scoped to their individual
+chunk.
 
 For the CrispASR `moss-diarize` backend, `max_new_tokens = NULL` is
 duration-aware: genflow forwards an output budget between 2,048 and 65,536

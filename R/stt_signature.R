@@ -13,10 +13,9 @@
 #'
 #' Credentials and operational controls do not affect the fingerprint.
 #' Excluded controls include timeouts, polling/retry settings, checkpoint and
-#' output directories, persistence, and output projection. Large-audio
-#' controls that can change the transcript itself (chunk size, duration,
-#' bitrate, format, and overlap) remain part of the signature and are
-#' normalized with the same validation used by [gen_stt()].
+#' output directories, persistence, and output projection. Fixed-duration
+#' chunking controls that can change the transcript (duration, bitrate, and
+#' format) remain part of the signature and use [gen_stt()] validation.
 #'
 #' @param service STT provider identifier accepted by [gen_stt()].
 #' @param model Optional provider model identifier. `NULL` resolves the same
@@ -64,7 +63,7 @@ gen_stt_signature <- function(service = "openai",
 #'
 #' Public cache consumers include semantic post-processing revisions, while
 #' Genflow's opaque chunk checkpoints intentionally fingerprint only the
-#' provider/runtime work. This lets a reconciliation-only upgrade rebuild the
+#' provider/runtime work. This lets a merge-only upgrade rebuild the
 #' final transcript from successful part checkpoints without retranscribing
 #' their audio.
 #'
@@ -76,6 +75,19 @@ gen_stt_signature <- function(service = "openai",
                                  stt_args = list(),
                                  include_postprocessing = TRUE) {
   stt_args <- .stt_signature_validate_args(stt_args)
+  removed <- intersect(
+    names(stt_args),
+    c(
+      "chunk_max_mb", "chunk_overlap_seconds", "chunk_speaker_linking",
+      "diarize_speakers", "diarize_embedder"
+    )
+  )
+  if (length(removed)) {
+    stop(
+      "Removed STT argument(s): ", paste(removed, collapse = ", "), ".",
+      call. = FALSE
+    )
+  }
   legacy_moss_service <- .stt_is_legacy_moss_service(service)
   service <- .stt_normalize_service(service)
   if (!service %in% .stt_supported_services()) {
@@ -107,10 +119,8 @@ gen_stt_signature <- function(service = "openai",
 
   chunk_options <- .stt_chunk_validate_options(
     chunking = get_arg("chunking", "auto"),
-    chunk_max_mb = get_arg("chunk_max_mb"),
     chunk_bitrate_kbps = get_arg("chunk_bitrate_kbps", 48),
     chunk_segment_seconds = get_arg("chunk_segment_seconds"),
-    chunk_overlap_seconds = get_arg("chunk_overlap_seconds", 8),
     chunk_format = get_arg("chunk_format", "auto"),
     checkpoint_dir = get_arg("checkpoint_dir"),
     checkpoint_retention = get_arg("checkpoint_retention", "all"),
@@ -131,14 +141,6 @@ gen_stt_signature <- function(service = "openai",
       get_arg("diarize", TRUE),
       "diarize"
     ),
-    diarize_speakers = .stt_validate_logical_scalar(
-      get_arg("diarize_speakers", FALSE),
-      "diarize_speakers"
-    ),
-    diarize_embedder = .stt_validate_logical_scalar(
-      get_arg("diarize_embedder", TRUE),
-      "diarize_embedder"
-    ),
     timestamps = .stt_validate_logical_scalar(
       get_arg("timestamps", FALSE),
       "timestamps"
@@ -147,36 +149,17 @@ gen_stt_signature <- function(service = "openai",
       get_arg("max_new_tokens")
     ),
     chunking = chunk_options$chunking,
-    chunk_max_mb = chunk_options$chunk_max_mb,
     chunk_bitrate_kbps = chunk_options$chunk_bitrate_kbps,
     chunk_segment_seconds = chunk_options$chunk_segment_seconds,
-    chunk_overlap_seconds = chunk_options$chunk_overlap_seconds,
     chunk_format = .stt_chunk_resolve_format(
       service,
       chunk_options$chunk_format
     )
   )
-  if (isTRUE(semantic$diarize_speakers) && !isTRUE(semantic$diarize)) {
-    stop(
-      "`diarize_speakers = TRUE` requires `diarize = TRUE` so speaker ",
-      "labels are retained in the result.",
-      call. = FALSE
-    )
-  }
-  if (isTRUE(semantic$diarize_speakers) &&
-      !identical(service, "local-native")) {
-    stop(
-      "`diarize_speakers = TRUE` is available only for ",
-      '`service = "local-native"` with the CrispASR engine.',
-      call. = FALSE
-    )
-  }
-
   consumed <- c(
-    "prompt", "convert", "diarize", "diarize_speakers",
-    "diarize_embedder", "timestamps", "max_new_tokens", "chunking",
-    "chunk_max_mb", "chunk_bitrate_kbps", "chunk_segment_seconds",
-    "chunk_overlap_seconds", "chunk_format", "checkpoint_retention",
+    "prompt", "convert", "diarize", "timestamps", "max_new_tokens",
+    "chunking", "chunk_bitrate_kbps", "chunk_segment_seconds", "chunk_format",
+    "checkpoint_retention",
     "executable", "native_engine",
     "native_backend", "native_quant", "native_kv_quant", "native_device",
     "base_url", "response_format"
@@ -201,7 +184,6 @@ gen_stt_signature <- function(service = "openai",
   effective_model <- model %||% .stt_default_model(service)
   effective_model <- .stt_signature_optional_scalar(effective_model)
   runtime <- NULL
-  model_policy <- NULL
 
   if (identical(service, "local-openai")) {
     response_format <- tolower(trimws(as.character(
@@ -281,14 +263,6 @@ gen_stt_signature <- function(service = "openai",
       engine = engine,
       backend = backend
     )
-    if (isTRUE(semantic$diarize_speakers) &&
-        !identical(engine, "crispasr")) {
-      stop(
-        "`diarize_speakers = TRUE` requires the CrispASR native engine; ",
-        "the selected engine is \"", engine, "\".",
-        call. = FALSE
-      )
-    }
     semantic$native <- list(
       engine = engine,
       backend = backend,
@@ -296,7 +270,6 @@ gen_stt_signature <- function(service = "openai",
       kv_quant = kv_policy$signature_value,
       device = device
     )
-    model_policy <- .stt_chunk_model_policy(service, runtime)
     endpoint <- paste0("local-native://", engine)
   }
 
@@ -308,12 +281,11 @@ gen_stt_signature <- function(service = "openai",
     endpoint = .stt_signature_sanitize_endpoint(endpoint),
     parameters = semantic,
     extras = extras,
-    runtime = runtime,
-    model_policy = model_policy
+    runtime = runtime
   )
   if (isTRUE(include_postprocessing)) {
     payload$postprocessing <- list(
-      speaker_reconciliation = .stt_reconciliation_version()
+      chunk_merge = .stt_reconciliation_version()
     )
   }
   .stt_chunk_object_fingerprint(.stt_signature_canonicalize(payload))

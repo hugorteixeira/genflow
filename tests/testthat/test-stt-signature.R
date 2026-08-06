@@ -34,13 +34,10 @@ test_that("STT signatures normalize semantic defaults and argument order", {
     model = "whisper-1",
     stt_args = list(
       timestamps = FALSE,
-      chunk_overlap_seconds = 8,
       diarize = TRUE,
       chunking = "auto",
       chunk_bitrate_kbps = 48,
-      convert = TRUE,
-      diarize_speakers = FALSE,
-      diarize_embedder = TRUE
+      convert = TRUE
     )
   )
   reordered <- gen_stt_signature(
@@ -91,12 +88,9 @@ test_that("STT signatures preserve runtime-significant scalar whitespace", {
 test_that("chunk controls use the regular STT validation", {
   expect_error(
     gen_stt_signature(
-      stt_args = list(
-        chunk_segment_seconds = 8,
-        chunk_overlap_seconds = 8
-      )
+      stt_args = list(chunk_segment_seconds = 0)
     ),
-    "must be smaller"
+    "greater than 0"
   )
   expect_error(
     gen_stt_signature(stt_args = list(chunk_max_retries = 1.5)),
@@ -107,8 +101,8 @@ test_that("chunk controls use the regular STT validation", {
     "must be TRUE or FALSE"
   )
   expect_false(identical(
-    gen_stt_signature(stt_args = list(chunk_overlap_seconds = 8)),
-    gen_stt_signature(stt_args = list(chunk_overlap_seconds = 4))
+    gen_stt_signature(stt_args = list(chunk_segment_seconds = 8)),
+    gen_stt_signature(stt_args = list(chunk_segment_seconds = 4))
   ))
   expect_false(identical(
     gen_stt_signature(stt_args = list(chunk_format = "wav")),
@@ -132,6 +126,16 @@ test_that("chunk controls use the regular STT validation", {
       )
     )
   )
+  for (removed in c(
+    "chunk_max_mb", "chunk_overlap_seconds", "chunk_speaker_linking",
+    "diarize_speakers", "diarize_embedder"
+  )) {
+    expect_error(
+      gen_stt_signature(stt_args = stats::setNames(list(TRUE), removed)),
+      "Removed STT argument",
+      fixed = TRUE
+    )
+  }
 })
 
 test_that("STT signatures reflect the backend-specific MOSS KV default", {
@@ -220,9 +224,7 @@ test_that("credentials and operational controls never change the signature", {
 
 test_that("public signatures version post-processing without expiring parts", {
   args <- list(
-    chunk_max_mb = 9.9,
     chunk_segment_seconds = 600,
-    chunk_overlap_seconds = 8,
     output = "transcript"
   )
   public <- gen_stt_signature(
@@ -235,11 +237,10 @@ test_that("public signatures version post-processing without expiring parts", {
     model = "local-whisper",
     stt_args = args
   )
-
   expect_false(identical(public, checkpoint))
   expect_identical(
     genflow:::.stt_reconciliation_version(),
-    "deterministic-boundary-v2"
+    "sequential-chunks-v1"
   )
   expect_identical(
     checkpoint,

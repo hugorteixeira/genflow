@@ -41,10 +41,9 @@ successful chunk inference.
 \details{
 Credentials and operational controls do not affect the fingerprint.
 Excluded controls include timeouts, polling/retry settings, checkpoint and
-output directories, persistence, and output projection. Large-audio
-controls that can change the transcript itself (chunk size, duration,
-bitrate, format, and overlap) remain part of the signature and are
-normalized with the same validation used by \code{\link[=gen_stt]{gen_stt()}}.
+output directories, persistence, and output projection. Fixed-duration
+chunking controls that can change the transcript (duration, bitrate, and
+format) remain part of the signature and use \code{\link[=gen_stt]{gen_stt()}} validation.
 }
 \examples{
 a <- gen_stt_signature(

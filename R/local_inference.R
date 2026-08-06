@@ -1122,8 +1122,8 @@ gen_local_diagnostics <- function(config = NULL,
       if (nzchar(ffprobe)) "ok" else "warning",
       if (nzchar(ffprobe)) ffprobe else
         paste0(
-          "ffprobe was not found; duration-aware timeouts and safe ",
-          "large-audio model limits are unavailable."
+          "ffprobe was not found; duration-aware timeouts and explicit ",
+          "fixed-duration STT splitting are unavailable."
         )
     )
   }

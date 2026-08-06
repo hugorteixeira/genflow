@@ -33,26 +33,18 @@
 #'   audio formats on the single-file path. When large-audio chunking is
 #'   required, Genflow still uses ffmpeg to prepare deterministic mono/16 kHz
 #'   media in `chunk_format`.
-#' @param chunking Large-audio orchestration policy: `"auto"` prepares and
-#'   chunks only when an explicit limit, an adapter-owned transport limit, or a
-#'   documented model/runtime limit requires it; `"never"` sends the input
-#'   through the existing single-file path.
-#' @param chunk_max_mb Optional positive maximum chunk size in MiB. `NULL`
-#'   uses the finite local-file transport limit owned by the selected adapter;
-#'   an infinite adapter limit preserves whole-file behavior unless the
-#'   selected model/runtime has a documented duration limit.
+#' @param chunking Audio-splitting policy. `"auto"` splits only when
+#'   `chunk_segment_seconds` is supplied and the recording is longer than that
+#'   duration; `"never"` always sends the original input as one model request.
 #' @param chunk_bitrate_kbps Positive MP3 bitrate used whenever
 #'   `chunk_format = "mp3"`.
-#' @param chunk_segment_seconds Optional positive target duration for each
-#'   chunk. `NULL` derives a duration from the prepared file and size limit.
-#' @param chunk_overlap_seconds Non-negative overlap between adjacent chunks.
-#'   The default eight-second window gives the conservative reconciliation
-#'   step evidence for deduplicating text and aligning speaker labels.
+#' @param chunk_segment_seconds Optional positive duration, in seconds, for
+#'   each contiguous chunk. `NULL` disables Genflow chunking. Chunks never
+#'   overlap and are sent to the selected model in source order.
 #' @param chunk_format Prepared/chunk media format. `"auto"` (the default)
 #'   preserves PCM 16-bit mono 16 kHz WAV for `service = "local-native"` and
 #'   compressed mono 16 kHz MP3 for other services. Explicit `"mp3"` is
-#'   supported by CrispASR and can make a byte-size limit cover much longer
-#'   chunks; moss-transcribe.cpp requires `"wav"`.
+#'   supported by CrispASR; moss-transcribe.cpp requires `"wav"`.
 #' @param checkpoint_dir Optional persistent directory for opaque per-chunk
 #'   media and result checkpoints. Treat its layout as internal to genflow.
 #'   Recoverable per-run locks enforce a single writer and make a concurrent
@@ -79,26 +71,13 @@
 #' @param output Return projection: `"full"` preserves the complete regular
 #'   STT result; `"transcript"` returns a smaller regular result that still
 #'   contains the common status/service/model fields plus text, segments,
-#'   diarization, chunking, and reconciliation metadata.
+#'   diarization, chunking, and chunk-merge metadata.
 #' @param diarize Logical; when `TRUE`, request speaker attribution from native
 #'   adapters that expose a model-native opt-in mode (currently CrispASR
 #'   Granite Speech 4.1 Plus), then expose and save speaker-attributed text
 #'   whenever the selected model/provider returns speaker metadata. This
-#'   output control does not add diarization to a model that lacks it; use
-#'   `diarize_speakers` for CrispASR's generic speaker pipeline.
-#' @param diarize_speakers Logical; explicit opt-in to CrispASR's
-#'   session-scoped speaker diarization for `service = "local-native"`.
-#'   It requires `diarize = TRUE` and the CrispASR engine. The default `FALSE`
-#'   avoids auxiliary model downloads and CPU overhead for callers that do not
-#'   request it.
-#' @param diarize_embedder Logical; controls embedding-based speaker clustering
-#'   when `diarize_speakers = TRUE`. The default `TRUE` uses CrispASR's
-#'   `--diarize-speakers` shortcut: native GGUF Pyannote segmentation plus its
-#'   automatic speaker embedder (currently TitaNet), producing anonymous
-#'   labels that are stable within one input recording. Set `FALSE` to run
-#'   Pyannote segmentation without TitaNet. This avoids the CPU-heavy embedding
-#'   pass, but speaker numbers are best-effort and may swap over a long
-#'   recording. The argument has no effect when `diarize_speakers = FALSE`.
+#'   output control does not add diarization to a model that lacks it. Genflow
+#'   does not run a separate speaker segmentation or voice-embedding pipeline.
 #' @param timestamps Logical; when `TRUE`, include the time range of every
 #'   diarized segment. Defaults to `FALSE`, which merges consecutive segments
 #'   from the same speaker into readable turns while retaining labels such as
@@ -154,18 +133,16 @@
 #'   both are empty.
 #' @param response_format Response format requested from a local
 #'   OpenAI-compatible server, typically `"json"` or `"verbose_json"`.
-#' @param ... Reserved for future provider-specific arguments.
+#' @param ... Must be empty. Unknown or removed STT arguments fail explicitly.
 #'
 #' @return Invisibly returns a plain list with `response_value` (plain
 #'   transcribed text), `status_api`, `status_msg`, `service`, `model`,
 #'   `duration` (elapsed processing seconds), `saved_file`, and metadata such
-#'   as `audio`. A chunked call
-#'   additionally exposes normalized chunking and reconciliation metadata;
-#'   directly supported mappings are preserved across unequal speaker rosters,
-#'   while identities that cannot be reconciled safely remain explicitly
-#'   unresolved in metadata instead of being guessed. Public transcript labels
-#'   are canonical `S01`, `S02`, ... values; segments retain both their local
-#'   and internal reconciled identities. When
+#'   as `audio`. A chunked call additionally exposes normalized chunking and
+#'   chunk-merge metadata. Speaker labels are recording-scoped for one input.
+#'   For multiple independently transcribed chunks they are explicitly
+#'   namespaced as `C01:S01`, `C02:S01`, ... and retain the provider label in
+#'   `speaker_local`; no cross-chunk speaker identity is inferred. When
 #'   `diarize = TRUE`, diarized results additionally include
 #'   `diarized_transcript` and `saved_metadata_file` when saving is enabled.
 #'   Timestamps are optional and disabled by default. As with the other
@@ -184,11 +161,11 @@ gen_stt <- function(audio, ...) {
 
 #' Inspect STT provider input capabilities
 #'
-#' Returns stable transport constraints that orchestration clients may need
-#' before calling [gen_stt()]. Provider-specific limits remain owned by
-#' genflow instead of being duplicated in downstream packages. This is
-#' informational capability discovery; callers should still pass the original
-#' recording to [gen_stt()] instead of recreating its chunk orchestration.
+#' Returns stable transport constraints that clients may inspect before
+#' calling [gen_stt()]. This is informational capability discovery only:
+#' Genflow does not derive a chunk duration from byte limits. Callers that need
+#' splitting pass the original recording plus an explicit
+#' `chunk_segment_seconds`.
 #'
 #' @param service STT provider identifier accepted by [gen_stt()].
 #'
@@ -224,8 +201,6 @@ gen_stt.default <- function(
   save_txt = TRUE,
   convert = TRUE,
   diarize = TRUE,
-  diarize_speakers = FALSE,
-  diarize_embedder = TRUE,
   timestamps = FALSE,
   timeout_api = 240,
   timeout_per_audio_minute = 60,
@@ -242,10 +217,8 @@ gen_stt.default <- function(
   api_key = NULL,
   response_format = "json",
   chunking = c("auto", "never"),
-  chunk_max_mb = NULL,
   chunk_bitrate_kbps = 48,
   chunk_segment_seconds = NULL,
-  chunk_overlap_seconds = 8,
   checkpoint_dir = NULL,
   resume = TRUE,
   chunk_retry_forever = TRUE,
@@ -258,14 +231,22 @@ gen_stt.default <- function(
 ) {
   start_time <- Sys.time()
   dots <- list(...)
+  if (length(dots)) {
+    dot_names <- names(dots)
+    if (is.null(dot_names)) dot_names <- rep("", length(dots))
+    shown <- ifelse(nzchar(dot_names), dot_names, "<unnamed>")
+    stop(
+      "Unused STT argument(s): ", paste(unique(shown), collapse = ", "),
+      ".",
+      call. = FALSE
+    )
+  }
   save_txt <- .stt_validate_logical_scalar(save_txt, "save_txt")
   convert <- .stt_validate_logical_scalar(convert, "convert")
   chunk_options <- .stt_chunk_validate_options(
     chunking = chunking,
-    chunk_max_mb = chunk_max_mb,
     chunk_bitrate_kbps = chunk_bitrate_kbps,
     chunk_segment_seconds = chunk_segment_seconds,
-    chunk_overlap_seconds = chunk_overlap_seconds,
     chunk_format = chunk_format,
     checkpoint_dir = checkpoint_dir,
     checkpoint_retention = checkpoint_retention,
@@ -276,14 +257,6 @@ gen_stt.default <- function(
     output = output
   )
   diarize <- .stt_validate_logical_scalar(diarize, "diarize")
-  diarize_speakers <- .stt_validate_logical_scalar(
-    diarize_speakers,
-    "diarize_speakers"
-  )
-  diarize_embedder <- .stt_validate_logical_scalar(
-    diarize_embedder,
-    "diarize_embedder"
-  )
   timestamps <- .stt_validate_logical_scalar(timestamps, "timestamps")
   timeout_api <- .stt_validate_positive_number(timeout_api, "timeout_api")
   timeout_api_base <- timeout_api
@@ -332,20 +305,6 @@ gen_stt.default <- function(
   if (is.vector(language)) language <- as.character(language[1])
 
   service <- .stt_normalize_service(service)
-  if (isTRUE(diarize_speakers) && !isTRUE(diarize)) {
-    stop(
-      "`diarize_speakers = TRUE` requires `diarize = TRUE` so speaker ",
-      "labels are retained in the result.",
-      call. = FALSE
-    )
-  }
-  if (isTRUE(diarize_speakers) && !identical(service, "local-native")) {
-    stop(
-      "`diarize_speakers = TRUE` is available only for ",
-      '`service = "local-native"` with the CrispASR engine.',
-      call. = FALSE
-    )
-  }
   model <- if (!is.null(model)) as.character(model)[1] else NULL
   if (is.null(model) || length(model) == 0L || is.na(model) || !nzchar(model)) {
     model <- NULL
@@ -366,8 +325,7 @@ gen_stt.default <- function(
   }
 
   explicit_chunk_input <- identical(chunk_options$chunking, "auto") &&
-    (!is.null(chunk_options$chunk_max_mb) ||
-      !is.null(chunk_options$chunk_segment_seconds))
+    !is.null(chunk_options$chunk_segment_seconds)
   if (identical(service, "voicegain") && isTRUE(explicit_chunk_input)) {
     stop(
       "Voicegain requires one externally hosted audio URL and cannot accept ",
@@ -421,16 +379,10 @@ gen_stt.default <- function(
     format = resolved_chunk_format,
     engine = chunk_runtime_artifacts$engine
   )
-  chunk_model_policy <- .stt_chunk_model_policy(
-    service = service,
-    runtime_artifacts = chunk_runtime_artifacts
-  )
-  signature_args <- c(list(
+  signature_args <- list(
     prompt = prompt,
     convert = convert,
     diarize = diarize,
-    diarize_speakers = diarize_speakers,
-    diarize_embedder = diarize_embedder,
     timestamps = timestamps,
     directory = directory,
     label = label,
@@ -450,10 +402,8 @@ gen_stt.default <- function(
     api_key = api_key,
     response_format = response_format,
     chunking = chunk_options$chunking,
-    chunk_max_mb = chunk_options$chunk_max_mb,
     chunk_bitrate_kbps = chunk_options$chunk_bitrate_kbps,
     chunk_segment_seconds = chunk_options$chunk_segment_seconds,
-    chunk_overlap_seconds = chunk_options$chunk_overlap_seconds,
     chunk_format = chunk_options$chunk_format,
     checkpoint_dir = chunk_options$checkpoint_dir,
     checkpoint_retention = chunk_options$checkpoint_retention,
@@ -462,7 +412,7 @@ gen_stt.default <- function(
     chunk_max_retries = chunk_options$chunk_max_retries,
     chunk_retry_wait_seconds = chunk_options$chunk_retry_wait_seconds,
     output = chunk_options$output
-  ), dots)
+  )
   chunk_config_fingerprint <- if (service %in% .stt_supported_services()) {
     .stt_checkpoint_signature(
       service = service,
@@ -483,8 +433,6 @@ gen_stt.default <- function(
     service = service,
     config_fingerprint = chunk_config_fingerprint,
     options = chunk_options,
-    model_segment_seconds = chunk_model_policy$model_segment_seconds,
-    model_decision_reason = chunk_model_policy$decision_reason,
     input_duration_seconds = input_duration_seconds
   )
   on.exit(.stt_chunk_release_lock(chunk_plan$lock), add = TRUE)
@@ -516,8 +464,6 @@ gen_stt.default <- function(
           label = label_base,
           convert = convert,
           diarize = diarize,
-          diarize_speakers = diarize_speakers,
-          diarize_embedder = diarize_embedder,
           timestamps = timestamps,
           timeout_api = timeout_api_base,
           timeout_per_audio_minute = timeout_per_audio_minute,
@@ -533,8 +479,7 @@ gen_stt.default <- function(
           base_url = base_url,
           api_key = api_key,
           response_format = response_format
-        ),
-        dots
+        )
       )
       .stt_chunk_transcribe_parts(
         plan = chunk_plan,
@@ -576,8 +521,6 @@ gen_stt.default <- function(
         native_device = native_device,
         convert = convert,
         diarize = diarize,
-        diarize_speakers = diarize_speakers,
-        diarize_embedder = diarize_embedder,
         max_new_tokens = max_new_tokens,
         legacy_service = legacy_moss_service
       ),
@@ -598,7 +541,6 @@ gen_stt.default <- function(
       schema_version = 1L,
       enabled = FALSE,
       decision_reason = chunk_plan$decision_reason,
-      model_segment_seconds = chunk_plan$model_segment_seconds,
       chunk_format = chunk_plan$chunk_format,
       prepared_format = chunk_plan$prepared_format,
       prepared_size_bytes = chunk_plan$prepared_size_bytes,
@@ -892,27 +834,29 @@ gen_stt.genflow_agent <- function(audio, ...) {
     result$metadata$segments %||% list()
   )
   if (isTRUE(diarization$has_diarization)) {
-    cat(sprintf(
-      "   -> Diarization: %d speaker%s (%s) | %d segment%s%s\n",
-      diarization$speaker_count,
-      if (identical(diarization$speaker_count, 1L)) "" else "s",
-      paste(diarization$speakers, collapse = ", "),
-      diarization$segment_count,
-      if (identical(diarization$segment_count, 1L)) "" else "s",
-      if (diarization$unresolved_speaker_count > 0L) {
-        sprintf(
-          " | %d cross-chunk identit%s unresolved",
-          diarization$unresolved_speaker_count,
-          if (identical(diarization$unresolved_speaker_count, 1L)) {
-            "y"
-          } else {
-            "ies"
-          }
-        )
-      } else {
-        ""
-      }
-    ))
+    if (identical(diarization$speaker_scope, "chunk-local")) {
+      cat(sprintf(
+        paste0(
+          "   -> Diarization: %d chunk-local label%s across %d chunk%s | ",
+          "%d segment%s | cross-chunk identity tracking disabled\n"
+        ),
+        diarization$speaker_count,
+        if (identical(diarization$speaker_count, 1L)) "" else "s",
+        diarization$chunk_count,
+        if (identical(diarization$chunk_count, 1L)) "" else "s",
+        diarization$segment_count,
+        if (identical(diarization$segment_count, 1L)) "" else "s"
+      ))
+    } else {
+      cat(sprintf(
+        "   -> Diarization: %d speaker%s (%s) | %d segment%s\n",
+        diarization$speaker_count,
+        if (identical(diarization$speaker_count, 1L)) "" else "s",
+        paste(diarization$speakers, collapse = ", "),
+        diarization$segment_count,
+        if (identical(diarization$segment_count, 1L)) "" else "s"
+      ))
+    }
     saved_metadata_file <- scalar_text(result$saved_metadata_file, "")
     if (nzchar(saved_metadata_file)) {
       cat(
@@ -1236,7 +1180,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   if (!is.list(segments) || inherits(segments, "data.frame")) {
     segments <- list()
   }
-  speakers <- if (length(segments)) {
+  segment_speakers <- if (length(segments)) {
     vapply(
       segments,
       function(segment) {
@@ -1251,34 +1195,71 @@ gen_stt.genflow_agent <- function(audio, ...) {
   } else {
     character()
   }
-  speakers <- unique(speakers[nzchar(speakers)])
-  unresolved <- if (length(segments)) {
+  speakers <- unique(segment_speakers[nzchar(segment_speakers)])
+  segment_scopes <- if (length(segments)) {
     vapply(
       segments,
       function(segment) {
         if (!is.list(segment)) return("")
-        reconciled <- .stt_normalize_speaker_label(
-          segment$speaker_reconciled
-        )
-        if (grepl("^U[0-9]{4}_", reconciled)) {
-          .stt_normalize_speaker_label(segment$speaker)
-        } else {
-          ""
-        }
+        trimws(as.character(segment$speaker_scope %||% "")[1])
       },
       character(1)
     )
   } else {
     character()
   }
-  unresolved <- unique(unresolved[nzchar(unresolved)])
+  chunk_local_speakers <- unique(segment_speakers[
+    segment_scopes == "chunk-local" & nzchar(segment_speakers)
+  ])
+  has_chunk_local <- length(chunk_local_speakers) > 0L
+  speaker_scope <- if (has_chunk_local) {
+    "chunk-local"
+  } else if (length(speakers)) {
+    "recording"
+  } else {
+    "none"
+  }
+  chunk_indices <- if (length(segments)) {
+    suppressWarnings(vapply(
+      segments,
+      function(segment) {
+        if (!is.list(segment)) return(NA_integer_)
+        as.integer(segment$chunk_index %||% NA_integer_)[1]
+      },
+      integer(1)
+    ))
+  } else {
+    integer()
+  }
+  chunk_indices <- unique(chunk_indices[is.finite(chunk_indices)])
+  chunk_count <- if (identical(speaker_scope, "chunk-local")) {
+    length(chunk_indices)
+  } else if (length(speakers)) {
+    1L
+  } else {
+    0L
+  }
   list(
     has_diarization = length(speakers) > 0L,
     speaker_count = as.integer(length(speakers)),
     segment_count = as.integer(length(segments)),
     speakers = speakers,
-    unresolved_speaker_count = as.integer(length(unresolved)),
-    unresolved_speakers = unresolved
+    speaker_scope = speaker_scope,
+    chunk_count = as.integer(chunk_count),
+    recording_speakers = if (identical(speaker_scope, "recording")) {
+      speakers
+    } else {
+      character()
+    },
+    recording_speaker_count = if (identical(speaker_scope, "recording")) {
+      as.integer(length(speakers))
+    } else {
+      0L
+    },
+    chunk_local_speakers = chunk_local_speakers,
+    chunk_local_speaker_count = as.integer(length(chunk_local_speakers)),
+    cross_chunk_identity_tracking = FALSE,
+    cross_chunk_identity_method = NULL
   )
 }
 
@@ -1960,9 +1941,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' Infer architecture controls that are required before CrispASR runs
 #'
 #' CrispASR can inspect a GGUF file to select most backends. MOSS Diarize is
-#' special because its speaker identities must span the complete input, so
-#' genflow needs to disable the CLI's generic external chunking before the
-#' result JSON exists.
+#' special because it emits structured speaker turns for each complete CLI
+#' input, so genflow needs to disable the CLI's opaque generic chunking before
+#' the result JSON exists.
 #'
 #' @keywords internal
 #' @noRd
@@ -2536,8 +2517,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
                               native_device = NULL,
                               convert = TRUE,
                               diarize = TRUE,
-                              diarize_speakers = FALSE,
-                              diarize_embedder = TRUE,
                               max_new_tokens = NULL,
                               legacy_service = FALSE,
                               runner = .stt_run_process) {
@@ -2582,13 +2561,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
     native_backend = backend_input,
     config = config
   )
-  if (isTRUE(diarize_speakers) && !identical(engine, "crispasr")) {
-    stop(
-      "`diarize_speakers = TRUE` requires the CrispASR native engine; ",
-      "the selected engine is \"", engine, "\".",
-      call. = FALSE
-    )
-  }
   kv_quant <- .stt_validate_native_kv_quant(native_kv_quant)
   if (!is.null(kv_quant) && !identical(engine, "crispasr")) {
     stop(
@@ -2673,8 +2645,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
       native_kv_quant = kv_quant,
       native_device = device,
       diarize = diarize,
-      diarize_speakers = diarize_speakers,
-      diarize_embedder = diarize_embedder,
       max_new_tokens = max_new_tokens,
       runner = runner
     ),
@@ -2731,8 +2701,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
                                  native_kv_quant = NULL,
                                  native_device = "auto",
                                  diarize = FALSE,
-                                 diarize_speakers = FALSE,
-                                 diarize_embedder = TRUE,
                                  max_new_tokens = NULL,
                                  runner = .stt_run_process) {
   if (!file.exists(audio_path) || dir.exists(audio_path)) {
@@ -2745,20 +2713,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
   requested_kv_quant <- .stt_validate_native_kv_quant(native_kv_quant)
   device <- .stt_validate_native_device(native_device)
   diarize <- .stt_validate_logical_scalar(diarize, "diarize")
-  diarize_speakers <- .stt_validate_logical_scalar(
-    diarize_speakers,
-    "diarize_speakers"
-  )
-  diarize_embedder <- .stt_validate_logical_scalar(
-    diarize_embedder,
-    "diarize_embedder"
-  )
-  if (isTRUE(diarize_speakers) && !isTRUE(diarize)) {
-    stop(
-      "`diarize_speakers = TRUE` requires `diarize = TRUE`.",
-      call. = FALSE
-    )
-  }
   max_new_tokens <- .stt_validate_max_new_tokens(max_new_tokens)
 
   model_value <- trimws(as.character(model %||% "")[1])
@@ -2972,15 +2926,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     model_args,
     if (nzchar(backend)) c("--backend", backend),
     if (isTRUE(continuous_model_window)) c("--chunk-seconds", "0"),
-    if (isTRUE(diarize_speakers) && isTRUE(diarize_embedder)) {
-      "--diarize-speakers"
-    } else if (isTRUE(diarize_speakers)) {
-      c(
-        "--diarize",
-        "--diarize-method", "pyannote",
-        "--sherpa-segment-model", "auto"
-      )
-    } else if (isTRUE(native_speaker_attribution)) {
+    if (isTRUE(native_speaker_attribution)) {
       "--diarize"
     },
     "-f", audio_path,
@@ -3140,17 +3086,6 @@ gen_stt.genflow_agent <- function(audio, ...) {
   }
   if (isTRUE(native_speaker_attribution)) {
     metadata$native_speaker_attribution <- TRUE
-  }
-  if (isTRUE(diarize_speakers)) {
-    metadata$diarize_speakers <- TRUE
-    metadata$diarize_embedder <- diarize_embedder
-    metadata$speaker_diarization_scope <- "recording"
-    metadata$speaker_diarization_method <- "pyannote"
-    metadata$speaker_diarization_embedder <- if (isTRUE(diarize_embedder)) {
-      "auto"
-    } else {
-      "none"
-    }
   }
   if (length(ignored_arguments)) {
     metadata$ignored_arguments <- ignored_arguments

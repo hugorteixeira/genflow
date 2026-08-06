@@ -19,8 +19,6 @@ gen_stt(audio, ...)
   save_txt = TRUE,
   convert = TRUE,
   diarize = TRUE,
-  diarize_speakers = FALSE,
-  diarize_embedder = TRUE,
   timestamps = FALSE,
   timeout_api = 240,
   timeout_per_audio_minute = 60,
@@ -37,10 +35,8 @@ gen_stt(audio, ...)
   api_key = NULL,
   response_format = "json",
   chunking = c("auto", "never"),
-  chunk_max_mb = NULL,
   chunk_bitrate_kbps = 48,
   chunk_segment_seconds = NULL,
-  chunk_overlap_seconds = 8,
   checkpoint_dir = NULL,
   resume = TRUE,
   chunk_retry_forever = TRUE,
@@ -57,7 +53,7 @@ gen_stt(audio, ...)
 \arguments{
 \item{audio}{Character path or URL to an audio file (e.g., .mp3, .ogg, .wav).}
 
-\item{...}{Reserved for future provider-specific arguments.}
+\item{...}{Must be empty. Unknown or removed STT arguments fail explicitly.}
 
 \item{service}{Provider identifier (e.g., "openai", "groq", "assemblyai",
 "cloudflare", "voicegain", "hf", "replicate", \code{"local-native"}, or
@@ -95,23 +91,8 @@ media in \code{chunk_format}.}
 adapters that expose a model-native opt-in mode (currently CrispASR
 Granite Speech 4.1 Plus), then expose and save speaker-attributed text
 whenever the selected model/provider returns speaker metadata. This
-output control does not add diarization to a model that lacks it; use
-\code{diarize_speakers} for CrispASR's generic speaker pipeline.}
-
-\item{diarize_speakers}{Logical; explicit opt-in to CrispASR's
-session-scoped speaker diarization for \code{service = "local-native"}.
-It requires \code{diarize = TRUE} and the CrispASR engine. The default \code{FALSE}
-avoids auxiliary model downloads and CPU overhead for callers that do not
-request it.}
-
-\item{diarize_embedder}{Logical; controls embedding-based speaker clustering
-when \code{diarize_speakers = TRUE}. The default \code{TRUE} uses CrispASR's
-\code{--diarize-speakers} shortcut: native GGUF Pyannote segmentation plus its
-automatic speaker embedder (currently TitaNet), producing anonymous
-labels that are stable within one input recording. Set \code{FALSE} to run
-Pyannote segmentation without TitaNet. This avoids the CPU-heavy embedding
-pass, but speaker numbers are best-effort and may swap over a long
-recording. The argument has no effect when \code{diarize_speakers = FALSE}.}
+output control does not add diarization to a model that lacks it. Genflow
+does not run a separate speaker segmentation or voice-embedding pipeline.}
 
 \item{timestamps}{Logical; when \code{TRUE}, include the time range of every
 diarized segment. Defaults to \code{FALSE}, which merges consecutive segments
@@ -183,25 +164,16 @@ both are empty.}
 \item{response_format}{Response format requested from a local
 OpenAI-compatible server, typically \code{"json"} or \code{"verbose_json"}.}
 
-\item{chunking}{Large-audio orchestration policy: \code{"auto"} prepares and
-chunks only when an explicit limit, an adapter-owned transport limit, or a
-documented model/runtime limit requires it; \code{"never"} sends the input
-through the existing single-file path.}
-
-\item{chunk_max_mb}{Optional positive maximum chunk size in MiB. \code{NULL}
-uses the finite local-file transport limit owned by the selected adapter;
-an infinite adapter limit preserves whole-file behavior unless the
-selected model/runtime has a documented duration limit.}
+\item{chunking}{Audio-splitting policy. \code{"auto"} splits only when
+\code{chunk_segment_seconds} is supplied and the recording is longer than that
+duration; \code{"never"} always sends the original input as one model request.}
 
 \item{chunk_bitrate_kbps}{Positive MP3 bitrate used whenever
 \code{chunk_format = "mp3"}.}
 
-\item{chunk_segment_seconds}{Optional positive target duration for each
-chunk. \code{NULL} derives a duration from the prepared file and size limit.}
-
-\item{chunk_overlap_seconds}{Non-negative overlap between adjacent chunks.
-The default eight-second window gives the conservative reconciliation
-step evidence for deduplicating text and aligning speaker labels.}
+\item{chunk_segment_seconds}{Optional positive duration, in seconds, for
+each contiguous chunk. \code{NULL} disables Genflow chunking. Chunks never
+overlap and are sent to the selected model in source order.}
 
 \item{checkpoint_dir}{Optional persistent directory for opaque per-chunk
 media and result checkpoints. Treat its layout as internal to genflow.
@@ -226,13 +198,12 @@ subsequent transient retries use capped exponential backoff.}
 \item{output}{Return projection: \code{"full"} preserves the complete regular
 STT result; \code{"transcript"} returns a smaller regular result that still
 contains the common status/service/model fields plus text, segments,
-diarization, chunking, and reconciliation metadata.}
+diarization, chunking, and chunk-merge metadata.}
 
 \item{chunk_format}{Prepared/chunk media format. \code{"auto"} (the default)
 preserves PCM 16-bit mono 16 kHz WAV for \code{service = "local-native"} and
 compressed mono 16 kHz MP3 for other services. Explicit \code{"mp3"} is
-supported by CrispASR and can make a byte-size limit cover much longer
-chunks; moss-transcribe.cpp requires \code{"wav"}.}
+supported by CrispASR; moss-transcribe.cpp requires \code{"wav"}.}
 
 \item{checkpoint_retention}{Persistent checkpoint media policy. \code{"all"}
 retains prepared/chunk audio plus result checkpoints. \code{"results"} removes
@@ -247,13 +218,11 @@ when all eligible managed media was removed.}
 Invisibly returns a plain list with \code{response_value} (plain
 transcribed text), \code{status_api}, \code{status_msg}, \code{service}, \code{model},
 \code{duration} (elapsed processing seconds), \code{saved_file}, and metadata such
-as \code{audio}. A chunked call
-additionally exposes normalized chunking and reconciliation metadata;
-directly supported mappings are preserved across unequal speaker rosters,
-while identities that cannot be reconciled safely remain explicitly
-unresolved in metadata instead of being guessed. Public transcript labels
-are canonical \code{S01}, \code{S02}, ... values; segments retain both their local
-and internal reconciled identities. When
+as \code{audio}. A chunked call additionally exposes normalized chunking and
+chunk-merge metadata. Speaker labels are recording-scoped for one input.
+For multiple independently transcribed chunks they are explicitly
+namespaced as \code{C01:S01}, \code{C02:S01}, ... and retain the provider label in
+\code{speaker_local}; no cross-chunk speaker identity is inferred. When
 \code{diarize = TRUE}, diarized results additionally include
 \code{diarized_transcript} and \code{saved_metadata_file} when saving is enabled.
 Timestamps are optional and disabled by default. As with the other

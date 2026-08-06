@@ -1,16 +1,14 @@
 # Large-audio STT orchestration ---------------------------------------------
 
-# This file owns only media preparation, chunk persistence, retry/resume, and
-# orchestration. Interpretation of speaker labels and overlap text belongs to
-# `.stt_reconcile_chunk_results()` in the STT reconciliation module.
+# This file owns only fixed-duration media splitting, chunk persistence,
+# retry/resume, and orchestration. Sequential merge and chunk-local label
+# namespacing belong to `.stt_reconcile_chunk_results()`.
 
 #' @keywords internal
 #' @noRd
 .stt_chunk_validate_options <- function(chunking = c("auto", "never"),
-                                        chunk_max_mb = NULL,
                                         chunk_bitrate_kbps = 48,
                                         chunk_segment_seconds = NULL,
-                                        chunk_overlap_seconds = 8,
                                         chunk_format = c("auto", "wav", "mp3"),
                                         checkpoint_dir = NULL,
                                         checkpoint_retention = c("all", "results"),
@@ -43,14 +41,6 @@
     value
   }
 
-  if (!is.null(chunk_max_mb)) {
-    chunk_max_mb <- scalar_number(
-      chunk_max_mb,
-      "chunk_max_mb",
-      minimum = 0,
-      strict = TRUE
-    )
-  }
   chunk_bitrate_kbps <- scalar_number(
     chunk_bitrate_kbps,
     "chunk_bitrate_kbps",
@@ -63,19 +53,6 @@
       "chunk_segment_seconds",
       minimum = 0,
       strict = TRUE
-    )
-  }
-  chunk_overlap_seconds <- scalar_number(
-    chunk_overlap_seconds,
-    "chunk_overlap_seconds",
-    minimum = 0
-  )
-  if (!is.null(chunk_segment_seconds) &&
-      chunk_overlap_seconds >= chunk_segment_seconds) {
-    stop(
-      "`chunk_overlap_seconds` must be smaller than ",
-      "`chunk_segment_seconds`.",
-      call. = FALSE
     )
   }
 
@@ -111,10 +88,8 @@
 
   list(
     chunking = chunking,
-    chunk_max_mb = chunk_max_mb,
     chunk_bitrate_kbps = as.integer(round(chunk_bitrate_kbps)),
     chunk_segment_seconds = chunk_segment_seconds,
-    chunk_overlap_seconds = chunk_overlap_seconds,
     chunk_format = chunk_format,
     checkpoint_dir = checkpoint_dir,
     checkpoint_retention = checkpoint_retention,
@@ -325,37 +300,6 @@
   )
 }
 
-#' Resolve model-owned chunk duration limits
-#'
-#' Keep these limits separate from transport size limits. Unknown backends
-#' deliberately retain whole-file behavior.
-#'
-#' @keywords internal
-#' @noRd
-.stt_chunk_model_policy <- function(service, runtime_artifacts) {
-  backend <- tolower(trimws(as.character(
-    runtime_artifacts$backend %||% ""
-  )[1]))
-  model_value <- as.character(runtime_artifacts$model_value %||% "")[1]
-  model_backend <- tryCatch(
-    .stt_crispasr_backend_from_model(model_value),
-    error = function(e) ""
-  )
-  is_moss_diarize <- identical(service, "local-native") &&
-    (identical(backend, "moss-diarize") ||
-      identical(model_backend, "moss-diarize"))
-  if (is_moss_diarize) {
-    return(list(
-      model_segment_seconds = 3600,
-      decision_reason = "moss-diarize-context-window"
-    ))
-  }
-  list(
-    model_segment_seconds = NULL,
-    decision_reason = NULL
-  )
-}
-
 #' @keywords internal
 #' @noRd
 .stt_chunk_file_fingerprint <- function(path) {
@@ -379,15 +323,6 @@
   }
   size <- suppressWarnings(as.numeric(file.info(path)$size[[1]]))
   is.finite(size) && size > 0
-}
-
-#' @keywords internal
-#' @noRd
-.stt_chunk_transport_limit <- function(service, chunk_max_mb = NULL) {
-  if (!is.null(chunk_max_mb)) {
-    return(as.numeric(chunk_max_mb) * 1024^2)
-  }
-  as.numeric(.stt_max_local_file_bytes(service))
 }
 
 #' @keywords internal
@@ -515,29 +450,15 @@
 
 #' @keywords internal
 #' @noRd
-.stt_chunk_starts <- function(duration_seconds,
-                              segment_seconds,
-                              overlap_seconds) {
+.stt_chunk_starts <- function(duration_seconds, segment_seconds) {
   duration_seconds <- as.numeric(duration_seconds)
   segment_seconds <- as.numeric(segment_seconds)
-  overlap_seconds <- as.numeric(overlap_seconds)
   if (!is.finite(duration_seconds) || duration_seconds <= 0 ||
-      !is.finite(segment_seconds) || segment_seconds <= 0 ||
-      !is.finite(overlap_seconds) || overlap_seconds < 0 ||
-      overlap_seconds >= segment_seconds) {
-    stop("Invalid duration or overlap for STT chunking.", call. = FALSE)
+      !is.finite(segment_seconds) || segment_seconds <= 0) {
+    stop("Invalid duration for STT chunking.", call. = FALSE)
   }
-
-  starts <- 0
-  while (utils::tail(starts, 1L) + segment_seconds < duration_seconds) {
-    next_start <- utils::tail(starts, 1L) +
-      segment_seconds - overlap_seconds
-    if (next_start <= utils::tail(starts, 1L)) {
-      stop("STT chunk overlap does not advance the input.", call. = FALSE)
-    }
-    starts <- c(starts, next_start)
-  }
-  starts
+  chunk_count <- as.integer(ceiling(duration_seconds / segment_seconds))
+  (seq_len(chunk_count) - 1L) * segment_seconds
 }
 
 #' @keywords internal
@@ -793,7 +714,7 @@
 #' @noRd
 .stt_chunk_manifest_valid <- function(manifest, key) {
   is.list(manifest) &&
-    identical(manifest$schema_version, 2L) &&
+    identical(manifest$schema_version, 3L) &&
     identical(as.character(manifest$key %||% ""), as.character(key)) &&
     is.list(manifest$parts)
 }
@@ -1237,25 +1158,12 @@
                                   service,
                                   config_fingerprint,
                                   options,
-                                  model_segment_seconds = NULL,
-                                  model_decision_reason = NULL,
                                   input_duration_seconds = NA_real_) {
   input_duration_seconds <- suppressWarnings(
     as.numeric(input_duration_seconds)[1]
   )
   if (!is.finite(input_duration_seconds) || input_duration_seconds <= 0) {
     input_duration_seconds <- NA_real_
-  }
-  if (!is.null(model_segment_seconds)) {
-    model_segment_seconds <- suppressWarnings(
-      as.numeric(model_segment_seconds)[1]
-    )
-    if (!is.finite(model_segment_seconds) || model_segment_seconds <= 0) {
-      stop(
-        "`model_segment_seconds` must be NULL or a positive finite number.",
-        call. = FALSE
-      )
-    }
   }
   if (identical(options$chunking, "never")) {
     return(list(
@@ -1264,7 +1172,6 @@
       cleanup_dir = NULL,
       prepared = FALSE,
       decision_reason = "chunking-disabled",
-      model_segment_seconds = model_segment_seconds,
       input_duration_seconds = input_duration_seconds
     ))
   }
@@ -1276,45 +1183,35 @@
       prepared = FALSE
     ))
   }
-
-  max_bytes <- .stt_chunk_transport_limit(
-    service,
-    options$chunk_max_mb
-  )
-  explicitly_segmented <- !is.null(options$chunk_segment_seconds)
-  model_segmented <- !is.null(model_segment_seconds)
-  only_model_policy <- !is.finite(max_bytes) &&
-    !isTRUE(explicitly_segmented) &&
-    isTRUE(model_segmented)
-  if (only_model_policy && is.na(input_duration_seconds)) {
-    stop(
-      "Could not determine audio duration required to enforce the selected ",
-      "model's safe segment limit. Install `ffprobe` and ensure the input ",
-      "media is readable, or set `chunking = \"never\"` to accept the ",
-      "model-context risk explicitly.",
-      call. = FALSE
-    )
-  }
-  if (only_model_policy &&
-      input_duration_seconds <= model_segment_seconds) {
+  if (is.null(options$chunk_segment_seconds)) {
     return(list(
       chunked = FALSE,
       audio_path = audio_path,
       cleanup_dir = NULL,
       prepared = FALSE,
-      decision_reason = "within-model-context-window",
-      model_segment_seconds = model_segment_seconds,
+      decision_reason = "chunk-duration-not-requested",
       input_duration_seconds = input_duration_seconds
     ))
   }
-  if (!is.finite(max_bytes) &&
-      !isTRUE(explicitly_segmented) &&
-      !isTRUE(model_segmented)) {
+  if (is.na(input_duration_seconds)) {
+    input_duration_seconds <- .stt_audio_duration_seconds(audio_path)
+  }
+  if (!is.finite(input_duration_seconds) || input_duration_seconds <= 0) {
+    stop(
+      "Could not determine audio duration required by ",
+      "`chunk_segment_seconds`. Install `ffprobe` and ensure the input media ",
+      "is readable, or set `chunking = \"never\"`.",
+      call. = FALSE
+    )
+  }
+  if (input_duration_seconds <= options$chunk_segment_seconds) {
     return(list(
       chunked = FALSE,
       audio_path = audio_path,
       cleanup_dir = NULL,
-      prepared = FALSE
+      prepared = FALSE,
+      decision_reason = "within-requested-segment",
+      input_duration_seconds = input_duration_seconds
     ))
   }
 
@@ -1324,18 +1221,14 @@
   }
   format <- .stt_chunk_resolve_format(service, options$chunk_format)
   key <- .stt_chunk_object_fingerprint(list(
-    schema_version = 2L,
+    schema_version = 3L,
     source_fingerprint = source_fingerprint,
     source_size = as.numeric(file.info(audio_path)$size[[1]]),
     service = service,
     config_fingerprint = config_fingerprint,
     format = format,
-    max_bytes = max_bytes,
     bitrate_kbps = options$chunk_bitrate_kbps,
-    segment_seconds = options$chunk_segment_seconds,
-    overlap_seconds = options$chunk_overlap_seconds,
-    model_segment_seconds = model_segment_seconds,
-    model_decision_reason = model_decision_reason
+    segment_seconds = options$chunk_segment_seconds
   ))
 
   temporary_root <- is.null(options$checkpoint_dir)
@@ -1397,239 +1290,87 @@
     )
   }
 
-  size_requires_chunking <- is.finite(max_bytes) &&
-    prepared_size > max_bytes
-  duration_requires_chunking <- isTRUE(explicitly_segmented) &&
-    duration_seconds > options$chunk_segment_seconds
-  model_requires_chunking <- isTRUE(model_segmented) &&
-    duration_seconds > model_segment_seconds
-  needs_chunking <- size_requires_chunking ||
-    duration_requires_chunking ||
-    model_requires_chunking
-  active_reasons <- c(
-    if (size_requires_chunking) "transport-size-limit",
-    if (duration_requires_chunking) "explicit-segment-limit",
-    if (model_requires_chunking) {
-      model_decision_reason %||% "model-segment-limit"
-    }
-  )
-  decision_reason <- if (length(active_reasons)) {
-    paste(unique(active_reasons), collapse = "+")
-  } else if (isTRUE(model_segmented)) {
-    "within-model-context-window"
-  } else {
-    "within-configured-limits"
-  }
-  if (!needs_chunking) {
-    manifest <- list(
-      schema_version = 2L,
-      key = key,
-      source_fingerprint = source_fingerprint,
-      config_fingerprint = config_fingerprint,
-      prepared_path = prepared_path,
-      chunk_format = options$chunk_format,
-      prepared_format = format,
-      prepared_fingerprint = prepared_fingerprint,
-      prepared_size_bytes = prepared_size,
-      input_duration_seconds = duration_seconds,
-      effective_max_bytes = max_bytes,
-      requested_segment_seconds = options$chunk_segment_seconds,
-      model_segment_seconds = model_segment_seconds,
-      decision_reason = decision_reason,
-      segment_seconds = NULL,
-      overlap_seconds = options$chunk_overlap_seconds,
-      parts = list()
-    )
-    .stt_chunk_write_manifest(manifest, manifest_path)
-    plan_succeeded <- TRUE
-    return(list(
-      chunked = FALSE,
-      audio_path = prepared_path,
-      cleanup_dir = if (temporary_root) run_dir else NULL,
-      prepared = TRUE,
-      chunk_format = options$chunk_format,
-      prepared_format = format,
-      prepared_size_bytes = prepared_size,
-      input_duration_seconds = duration_seconds,
-      decision_reason = decision_reason,
-      model_segment_seconds = model_segment_seconds,
-      checkpoint_root = if (temporary_root) NULL else root,
-      run_dir = run_dir,
-      lock = run_lock
-    ))
-  }
-
-  capacity_seconds <- if (is.finite(max_bytes)) {
-    floor(duration_seconds * (max_bytes / prepared_size) * 0.92)
-  } else {
-    Inf
-  }
-  requested_segment <- options$chunk_segment_seconds %||% Inf
-  model_segment <- model_segment_seconds %||% Inf
-  calculated_segment <- min(
-    requested_segment,
-    capacity_seconds,
-    model_segment
-  )
-  previous_segment <- suppressWarnings(
-    as.numeric(previous$segment_seconds %||% NA_real_)[1]
-  )
-  previous_segment_valid <- is.finite(previous_segment) &&
-    previous_segment > options$chunk_overlap_seconds &&
-    previous_segment <= requested_segment &&
-    previous_segment <= model_segment
-  effective_segment <- if (isTRUE(options$resume) &&
-      previous_segment_valid) {
-    previous_segment
-  } else {
-    calculated_segment
-  }
-  if (!is.finite(effective_segment) ||
-      effective_segment <= options$chunk_overlap_seconds) {
-    stop(
-      "The effective STT chunk duration is not larger than its overlap. ",
-      "Increase `chunk_max_mb`, lower `chunk_overlap_seconds`, or lower ",
-      "`chunk_bitrate_kbps`.",
-      call. = FALSE
-    )
-  }
+  effective_segment <- options$chunk_segment_seconds
+  decision_reason <- "requested-segment"
 
   extension <- if (identical(format, "wav")) "wav" else "mp3"
   previous_parts <- previous$parts %||% list()
-  max_plan_attempts <- 6L
-  planning_attempt <- 0L
-  parts <- NULL
+  starts <- .stt_chunk_starts(duration_seconds, effective_segment)
+  durations <- pmin(effective_segment, duration_seconds - starts)
+  part_paths <- file.path(
+    run_dir,
+    sprintf("part_%04d.%s", seq_along(starts), extension)
+  )
+  parts <- vector("list", length(starts))
 
-  repeat {
-    planning_attempt <- planning_attempt + 1L
-    starts <- .stt_chunk_starts(
-      duration_seconds,
-      effective_segment,
-      options$chunk_overlap_seconds
-    )
-    durations <- pmin(effective_segment, duration_seconds - starts)
-    part_paths <- file.path(
+  for (index in seq_along(starts)) {
+    path <- part_paths[[index]]
+    old <- if (length(previous_parts) >= index) {
+      previous_parts[[index]]
+    } else {
+      NULL
+    }
+    reuse_part <- isTRUE(options$resume) &&
+      .stt_chunk_part_reusable(
+        previous_part = old,
+        path = path,
+        start_seconds = starts[[index]],
+        requested_duration_seconds = durations[[index]]
+      )
+    if (!reuse_part) {
+      .stt_chunk_extract_media(
+        source = prepared_path,
+        target = path,
+        start_seconds = starts[[index]],
+        duration_seconds = durations[[index]],
+        format = format,
+        bitrate_kbps = options$chunk_bitrate_kbps
+      )
+    }
+    size <- as.numeric(file.info(path)$size[[1]])
+    fingerprint <- .stt_chunk_file_fingerprint(path)
+    actual_duration <- .stt_audio_duration_seconds(path)
+    if (!is.finite(size) || size <= 0 || !nzchar(fingerprint) ||
+        !is.finite(actual_duration) || actual_duration <= 0) {
+      stop(
+        sprintf("Prepared STT chunk %d could not be validated.", index),
+        call. = FALSE
+      )
+    }
+    reusable_result <- is.list(old) &&
+      identical(old$audio_fingerprint, fingerprint)
+    result_path <- file.path(
       run_dir,
-      sprintf("part_%04d.%s", seq_along(starts), extension)
+      sprintf("part_%04d.result.rds", index)
     )
-    candidate_parts <- vector("list", length(starts))
-    oversize <- NULL
-
-    for (index in seq_along(starts)) {
-      path <- part_paths[[index]]
-      old <- if (length(previous_parts) >= index) {
-        previous_parts[[index]]
+    parts[[index]] <- list(
+      index = as.integer(index),
+      audio_path = path,
+      audio_fingerprint = fingerprint,
+      start_seconds = as.numeric(starts[[index]]),
+      duration_seconds = as.numeric(actual_duration),
+      requested_duration_seconds = as.numeric(durations[[index]]),
+      size_bytes = as.numeric(size),
+      result_path = result_path,
+      status = if (reusable_result) {
+        old$status %||% "pending"
       } else {
-        NULL
-      }
-      reuse_part <- isTRUE(options$resume) &&
-        .stt_chunk_part_reusable(
-          previous_part = old,
-          path = path,
-          start_seconds = starts[[index]],
-          requested_duration_seconds = durations[[index]]
-        )
-      if (!reuse_part) {
-        .stt_chunk_extract_media(
-          source = prepared_path,
-          target = path,
-          start_seconds = starts[[index]],
-          duration_seconds = durations[[index]],
-          format = format,
-          bitrate_kbps = options$chunk_bitrate_kbps
-        )
-      }
-      size <- as.numeric(file.info(path)$size[[1]])
-      fingerprint <- .stt_chunk_file_fingerprint(path)
-      actual_duration <- .stt_audio_duration_seconds(path)
-      if (!is.finite(size) || size <= 0 || !nzchar(fingerprint) ||
-          !is.finite(actual_duration) || actual_duration <= 0) {
-        stop(
-          sprintf("Prepared STT chunk %d could not be validated.", index),
-          call. = FALSE
-        )
-      }
-      if (is.finite(max_bytes) && size > max_bytes) {
-        oversize <- list(
-          index = index,
-          size_bytes = size,
-          requested_duration_seconds = durations[[index]]
-        )
-        break
-      }
-      reusable_result <- is.list(old) &&
-        identical(old$audio_fingerprint, fingerprint)
-      result_path <- file.path(
-        run_dir,
-        sprintf("part_%04d.result.rds", index)
-      )
-      candidate_parts[[index]] <- list(
-        index = as.integer(index),
-        audio_path = path,
-        audio_fingerprint = fingerprint,
-        start_seconds = as.numeric(starts[[index]]),
-        duration_seconds = as.numeric(actual_duration),
-        requested_duration_seconds = as.numeric(durations[[index]]),
-        size_bytes = as.numeric(size),
-        result_path = result_path,
-        status = if (reusable_result) {
-          old$status %||% "pending"
-        } else {
-          "pending"
-        },
-        attempts = if (reusable_result) {
-          as.integer(old$attempts %||% 0L)
-        } else {
-          0L
-        },
-        last_error = if (reusable_result) old$last_error %||% "" else ""
-      )
-      if (!reusable_result && file.exists(result_path)) {
-        unlink(result_path, force = TRUE)
-      }
-    }
-
-    if (is.null(oversize)) {
-      parts <- candidate_parts
-      break
-    }
-    if (planning_attempt >= max_plan_attempts) {
-      stop(
-        sprintf(
-          paste0(
-            "Prepared STT chunks still exceed the effective %.2f MB limit ",
-            "after %d adaptive planning attempts."
-          ),
-          max_bytes / 1024^2,
-          planning_attempt
-        ),
-        call. = FALSE
-      )
-    }
-
-    shrink_ratio <- max_bytes / oversize$size_bytes
-    smaller_segment <- floor(
-      oversize$requested_duration_seconds * shrink_ratio * 0.9
+        "pending"
+      },
+      attempts = if (reusable_result) {
+        as.integer(old$attempts %||% 0L)
+      } else {
+        0L
+      },
+      last_error = if (reusable_result) old$last_error %||% "" else ""
     )
-    smaller_segment <- min(
-      smaller_segment,
-      effective_segment - max(1, effective_segment * 0.01)
-    )
-    if (!is.finite(smaller_segment) ||
-        smaller_segment <= options$chunk_overlap_seconds) {
-      stop(
-        paste0(
-          "Adaptive STT chunk shrinking cannot fit the effective size ",
-          "limit while retaining the requested overlap."
-        ),
-        call. = FALSE
-      )
+    if (!reusable_result && file.exists(result_path)) {
+      unlink(result_path, force = TRUE)
     }
-    effective_segment <- smaller_segment
   }
 
   manifest <- list(
-    schema_version = 2L,
+    schema_version = 3L,
     key = key,
     source_fingerprint = source_fingerprint,
     config_fingerprint = config_fingerprint,
@@ -1639,13 +1380,9 @@
     prepared_fingerprint = prepared_fingerprint,
     prepared_size_bytes = prepared_size,
     input_duration_seconds = duration_seconds,
-    effective_max_bytes = max_bytes,
     requested_segment_seconds = options$chunk_segment_seconds,
-    model_segment_seconds = model_segment_seconds,
     decision_reason = decision_reason,
     segment_seconds = as.numeric(effective_segment),
-    planning_attempts = as.integer(planning_attempt),
-    overlap_seconds = options$chunk_overlap_seconds,
     parts = parts
   )
   .stt_chunk_write_manifest(manifest, manifest_path)
@@ -1660,12 +1397,8 @@
     prepared_format = format,
     prepared_size_bytes = prepared_size,
     input_duration_seconds = duration_seconds,
-    effective_max_bytes = max_bytes,
     segment_seconds = as.numeric(effective_segment),
-    planning_attempts = as.integer(planning_attempt),
-    overlap_seconds = options$chunk_overlap_seconds,
     decision_reason = decision_reason,
-    model_segment_seconds = model_segment_seconds,
     parts = parts,
     manifest = manifest,
     manifest_path = manifest_path,
@@ -1867,7 +1600,7 @@
 
 #' Require one common scalar metadata value across STT parts
 #'
-#' Chunk reconciliation must not silently report one runtime policy when
+#' Chunk merging must not silently report one runtime policy when
 #' resumed or newly processed parts disagree. All-missing values are allowed
 #' for backends that do not expose the field.
 #'
@@ -2076,12 +1809,11 @@
   reconciled <- .stt_reconcile_chunk_results(
     results = results,
     chunk_starts_seconds = starts,
-    chunk_overlap_seconds = plan$overlap_seconds,
     include_timestamps = timestamps
   )
   normalized <- .stt_normalize_result(reconciled)
   if (is.null(normalized$text) || !nzchar(trimws(normalized$text))) {
-    stop("STT chunk reconciliation returned an empty transcript.", call. = FALSE)
+    stop("STT chunk merge returned an empty transcript.", call. = FALSE)
   }
   metadata <- normalized$metadata %||% list()
   native_kv_quant <- .stt_chunk_common_metadata_scalar(
@@ -2114,12 +1846,8 @@
     prepared_format = plan$prepared_format,
     prepared_size_bytes = plan$prepared_size_bytes,
     input_duration_seconds = plan$input_duration_seconds,
-    effective_max_bytes = plan$effective_max_bytes,
     segment_seconds = plan$segment_seconds,
-    planning_attempts = plan$planning_attempts %||% 1L,
-    overlap_seconds = plan$overlap_seconds,
     decision_reason = plan$decision_reason,
-    model_segment_seconds = plan$model_segment_seconds,
     checkpoint_dir = plan$checkpoint_dir,
     checkpoint_retention = options$checkpoint_retention
   )
@@ -2133,25 +1861,11 @@
   if (identical(output, "full")) return(result)
   metadata <- result$metadata %||% list()
   segments <- metadata$segments %||% list()
-  reconciliation <- metadata$reconciliation %||%
-    metadata$chunk_reconciliation %||% NULL
-  if (!is.null(metadata$speaker_maps) || !is.null(metadata$boundaries)) {
-    reconciliation <- list(
-      method = reconciliation,
-      speaker_maps = metadata$speaker_maps %||% list(),
-      boundaries = metadata$boundaries %||% list(),
-      canonical_speaker_map = metadata$canonical_speaker_map %||% character(),
-      unresolved_global_speakers =
-        metadata$unresolved_global_speakers %||% character(),
-      unresolved_public_speakers =
-        metadata$unresolved_public_speakers %||% character()
-    )
-  }
   projected_metadata <- list(
     segments = segments,
     diarization = .stt_diarization_summary(segments),
     chunking = metadata$chunking %||% NULL,
-    reconciliation = reconciliation,
+    chunk_merge = metadata$chunk_merge %||% NULL,
     native_kv_quant = metadata$native_kv_quant %||% NULL,
     native_kv_quant_source = metadata$native_kv_quant_source %||% NULL
   )

@@ -182,11 +182,6 @@ test_that("gen_stt validates public scalar controls before dispatch", {
     convert = list(convert = NA),
     convert_vector = list(convert = c(TRUE, FALSE)),
     diarize = list(diarize = NA),
-    diarize_speakers = list(diarize_speakers = NA),
-    diarize_speakers_number = list(diarize_speakers = 1),
-    diarize_embedder = list(diarize_embedder = NA),
-    diarize_embedder_vector = list(diarize_embedder = c(TRUE, FALSE)),
-    diarize_embedder_number = list(diarize_embedder = 1),
     timestamps = list(timestamps = 1)
   )
   for (case in logical_cases) {
@@ -201,26 +196,6 @@ test_that("gen_stt validates public scalar controls before dispatch", {
       "must be TRUE or FALSE"
     )
   }
-  expect_error(
-    gen_stt(
-      audio,
-      service = "local-native",
-      save_txt = FALSE,
-      diarize = FALSE,
-      diarize_speakers = TRUE
-    ),
-    "requires `diarize = TRUE`"
-  )
-  expect_error(
-    gen_stt(
-      audio,
-      service = "local-openai",
-      save_txt = FALSE,
-      diarize_speakers = TRUE
-    ),
-    "available only"
-  )
-
   numeric_cases <- list(
     list(timeout_api = 0),
     list(timeout_api = Inf),
