@@ -44,9 +44,13 @@ stt_large_plan_fixture <- function(directory) {
   lapply(audio_paths, function(path) {
     writeBin(as.raw(rep(c(1, 2, 3), length.out = 9000L)), path)
   })
-  result_paths <- file.path(
+  checkpoint_paths <- file.path(
     directory,
-    c("part_0001.result.rds", "part_0002.result.rds")
+    c(".part_0001.checkpoint.rds", ".part_0002.checkpoint.rds")
+  )
+  transcript_paths <- file.path(
+    directory,
+    c("part_0001.txt", "part_0002.txt")
   )
   parts <- lapply(seq_along(audio_paths), function(index) {
     list(
@@ -59,14 +63,15 @@ stt_large_plan_fixture <- function(directory) {
       duration_seconds = 10,
       requested_duration_seconds = 10,
       size_bytes = as.numeric(file.info(audio_paths[[index]])$size[[1]]),
-      result_path = result_paths[[index]],
+      checkpoint_path = checkpoint_paths[[index]],
+      transcript_path = transcript_paths[[index]],
       status = "pending",
       attempts = 0L,
       last_error = ""
     )
   })
   manifest <- list(
-    schema_version = 3L,
+    schema_version = 4L,
     key = "fixture",
     config_fingerprint = "fixture-config",
     parts = parts
@@ -264,11 +269,24 @@ test_that("chunk planning prepares native WAV and validates every chunk", {
     source,
     service = "local-native",
     config_fingerprint = "config",
-    options = options
+    options = options,
+    model = "cohere-transcribe-q8_0.gguf",
+    service_label = "native-stt"
   )
   on.exit(genflow:::.stt_chunk_release_lock(plan$lock), add = TRUE)
 
   expect_true(plan$chunked)
+  expect_match(
+    basename(plan$run_dir),
+    paste0(
+      "^run-native-stt-cohere-transcribe-q8-0-",
+      "[0-9]{8}t[0-9]{6}-[0-9a-f]{8}$"
+    )
+  )
+  expect_identical(plan$manifest$service, "local-native")
+  expect_identical(plan$manifest$service_label, "native-stt")
+  expect_identical(plan$manifest$model, "cohere-transcribe-q8_0.gguf")
+  expect_identical(plan$manifest$schema_version, 4L)
   expect_identical(
     genflow:::.stt_chunk_lock_state(plan$lock$path)$state,
     "active"
@@ -359,6 +377,24 @@ test_that("successful opaque chunk results resume without backend calls", {
   expect_identical(calls, 2L)
   expect_match(first$text, "continued here", fixed = TRUE)
   expect_identical(first$metadata$chunking$resumed_part_count, 0L)
+  expect_true(all(file.exists(vapply(
+    plan$manifest$parts,
+    `[[`,
+    character(1),
+    "transcript_path"
+  ))))
+  expect_true(all(file.exists(vapply(
+    plan$manifest$parts,
+    `[[`,
+    character(1),
+    "checkpoint_path"
+  ))))
+  expect_length(list.files(checkpoint, pattern = "[.]result[.]rds$"), 0L)
+  expect_match(
+    readLines(plan$manifest$parts[[1]]$transcript_path, warn = FALSE),
+    "The first sentence is",
+    fixed = TRUE
+  )
 
   plan$manifest <- readRDS(plan$manifest_path)
   second <- genflow:::.stt_chunk_transcribe_parts(
@@ -389,7 +425,7 @@ test_that("result checkpoints recover the crash window and bind to audio", {
   )
   genflow:::.genflow_atomic_save_rds(
     envelope,
-    plan$manifest$parts[[1]]$result_path
+    plan$manifest$parts[[1]]$checkpoint_path
   )
   calls <- 0L
   testthat::local_mocked_bindings(
@@ -412,6 +448,10 @@ test_that("result checkpoints recover the crash window and bind to audio", {
   expect_identical(recovered$text, "Recovered without rerunning.")
   expect_identical(recovered$metadata$chunking$resumed_part_count, 1L)
   expect_identical(
+    readLines(plan$manifest$parts[[1]]$transcript_path, warn = FALSE),
+    "Recovered without rerunning."
+  )
+  expect_identical(
     readRDS(plan$manifest_path)$parts[[1]]$status,
     "done"
   )
@@ -431,7 +471,7 @@ test_that("result checkpoints recover the crash window and bind to audio", {
   envelope$audio_fingerprint <- "different-audio"
   genflow:::.genflow_atomic_save_rds(
     envelope,
-    plan$manifest$parts[[1]]$result_path
+    plan$manifest$parts[[1]]$checkpoint_path
   )
   calls <- 0L
   rerun <- genflow:::.stt_chunk_transcribe_parts(
@@ -441,6 +481,55 @@ test_that("result checkpoints recover the crash window and bind to audio", {
   )
   expect_identical(calls, 1L)
   expect_identical(rerun$text, "Unexpected rerun.")
+})
+
+test_that("legacy visible part checkpoints migrate to TXT plus hidden state", {
+  checkpoint <- tempfile("genflow-large-legacy-result-")
+  on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
+  plan <- stt_large_plan_fixture(checkpoint)
+  plan$manifest$parts <- plan$manifest$parts[1]
+  plan$parts <- plan$parts[1]
+  part <- plan$manifest$parts[[1]]
+  legacy_path <- file.path(checkpoint, "part_0001.result.rds")
+  part$legacy_checkpoint_path <- legacy_path
+  plan$manifest$parts[[1]] <- part
+  plan$parts[[1]] <- part
+  genflow:::.stt_chunk_write_manifest(plan$manifest, plan$manifest_path)
+
+  envelope <- genflow:::.stt_chunk_result_checkpoint(
+    result = stt_large_result("Legacy transcript.", "S01"),
+    status = "done",
+    manifest = plan$manifest,
+    part = part,
+    attempts = 1L
+  )
+  genflow:::.genflow_atomic_save_rds(envelope, legacy_path)
+  calls <- 0L
+  testthat::local_mocked_bindings(
+    .stt_chunk_call_backend = function(...) {
+      calls <<- calls + 1L
+      stt_large_result("Unexpected rerun.", "S01")
+    },
+    .package = "genflow"
+  )
+
+  result <- genflow:::.stt_chunk_transcribe_parts(
+    plan,
+    list(service = "local-native", model = "mock.gguf", label = "legacy"),
+    genflow:::.stt_chunk_validate_options(
+      checkpoint_dir = checkpoint,
+      chunk_retry_wait_seconds = 0
+    )
+  )
+
+  expect_identical(calls, 0L)
+  expect_identical(result$text, "Legacy transcript.")
+  expect_false(file.exists(legacy_path))
+  expect_true(file.exists(part$checkpoint_path))
+  expect_identical(
+    readLines(part$transcript_path, warn = FALSE),
+    "Legacy transcript."
+  )
 })
 
 test_that("prepared media and chunks are reused only after full validation", {
@@ -495,6 +584,7 @@ test_that("prepared media and chunks are reused only after full validation", {
     config_fingerprint = "validation-config",
     options = options
   )
+  expect_identical(second$run_dir, first$run_dir)
   expect_identical(prepare_calls, 1L)
   expect_identical(extract_calls, initial_extracts)
   expect_identical(
@@ -983,6 +1073,28 @@ test_that("checkpoint pruning keeps current and newest valid previous run", {
   if (linked) expect_true(file.exists(marker))
 })
 
+test_that("readable run resolution still resumes a legacy full-key directory", {
+  checkpoint <- tempfile("genflow-run-resolution-")
+  dir.create(checkpoint, recursive = TRUE)
+  on.exit(unlink(checkpoint, recursive = TRUE), add = TRUE)
+  key <- paste(rep("a", 32L), collapse = "")
+  legacy <- file.path(checkpoint, paste0("run-", key))
+  dir.create(legacy)
+  genflow:::.genflow_atomic_save_rds(
+    list(schema_version = 3L, key = key, parts = list()),
+    file.path(legacy, "manifest.rds")
+  )
+
+  resolved <- genflow:::.stt_chunk_resolve_run_dir(
+    checkpoint,
+    service = "native-stt",
+    model = "cohere-transcribe-q8_0.gguf",
+    key = key
+  )
+
+  expect_identical(resolved, normalizePath(legacy, winslash = "/"))
+})
+
 test_that("results-only retention removes safe media and preserves checkpoints", {
   checkpoint <- tempfile("genflow-results-retention-")
   outside <- tempfile("genflow-results-retention-outside-")
@@ -1288,8 +1400,12 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
                                      service,
                                      config_fingerprint,
                                      options,
-                                     input_duration_seconds = NA_real_) {
+                                     input_duration_seconds = NA_real_,
+                                     model = NULL,
+                                     service_label = service) {
       expect_identical(service, "local-native")
+      expect_identical(service_label, "native-stt")
+      expect_identical(model, "moss-transcribe-diarize-0.9b-q8_0.gguf")
       expect_identical(options$chunk_segment_seconds, 10)
       plan
     },
@@ -1325,7 +1441,7 @@ test_that("gen_stt integrates chunk orchestration and transcript projection", {
 
   capture.output(result <- gen_stt(
     audio,
-    service = "local-native",
+    service = "native-stt",
     model = "mock.gguf",
     directory = checkpoint,
     save_txt = TRUE,

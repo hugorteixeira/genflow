@@ -55,9 +55,12 @@
 #' @param checkpoint_retention Persistent checkpoint media policy. `"all"`
 #'   retains prepared/chunk audio plus result checkpoints. `"results"` removes
 #'   only Genflow-owned prepared/chunk audio from valid runs for the same source
-#'   after the final transcription succeeds, while preserving manifests and
-#'   per-part result RDS files for resume. It never deletes the caller's
-#'   original input and does nothing after a failed/interrupted call. Inspect
+#'   after the final transcription succeeds. Each part keeps a readable
+#'   `part_NNNN.txt`; structured resume state stays in a hidden
+#'   `.part_NNNN.checkpoint.rds`, and the run manifest remains machine-owned.
+#'   Persistent run names include service, model, creation time, and a short
+#'   code. This policy never deletes the caller's original input and does
+#'   nothing after a failed/interrupted call. Inspect
 #'   `metadata$chunking$checkpoint_media_cleanup_complete`; it is `TRUE` only
 #'   when all eligible managed media was removed.
 #' @param resume Logical; reuse valid chunk media and successful opaque result
@@ -279,6 +282,7 @@ gen_stt.default <- function(
     service <- service$service %||% if (length(service)) service[[1]] else NULL
   }
   if (is.vector(service)) service <- as.character(service[1])
+  checkpoint_service_label <- service
   legacy_moss_service <- .stt_is_legacy_moss_service(service)
   if (legacy_moss_service) {
     if (is.null(native_engine)) {
@@ -433,7 +437,9 @@ gen_stt.default <- function(
     service = service,
     config_fingerprint = chunk_config_fingerprint,
     options = chunk_options,
-    input_duration_seconds = input_duration_seconds
+    input_duration_seconds = input_duration_seconds,
+    model = chunk_runtime_artifacts$model_value %||% model,
+    service_label = checkpoint_service_label
   )
   on.exit(.stt_chunk_release_lock(chunk_plan$lock), add = TRUE)
   if (!is.null(chunk_plan$cleanup_dir)) {

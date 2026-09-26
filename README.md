@@ -283,8 +283,8 @@ chunk-local namespace.
 - **Bounded ownership:** one run has one writer. Stale locks are recovered
   conservatively, and cleanup is limited to Genflow-owned files for that source.
 - **Useful retention:** `checkpoint_retention = "results"` removes prepared
-  chunk audio only after final success, while retaining manifests and completed
-  per-part transcript checkpoints.
+  chunk audio only after final success. Completed parts remain easy to inspect
+  as `part_NNNN.txt`, while hidden structured checkpoints preserve safe resume.
 - **Mechanical stitching:** every chunk transcript is concatenated in source
   order. No boundary text is removed and no speaker is mapped from one
   independently transcribed chunk to another.
@@ -292,8 +292,10 @@ chunk-local namespace.
   labels stay recording-scoped for one input and explicitly chunk-scoped for
   multiple inputs.
 
-Checkpoint folders contain prepared audio and transcript data. Treat them as
-sensitive and budget their disk usage accordingly.
+Persistent runs use readable names containing the requested service, effective
+model, creation time, and an eight-character code. The full collision-resistant
+key remains inside `manifest.rds`. Checkpoint folders contain prepared audio and
+transcript data; treat them as sensitive and budget their disk usage accordingly.
 
 </details>
 

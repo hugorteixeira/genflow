@@ -208,9 +208,12 @@ supported by CrispASR; moss-transcribe.cpp requires \code{"wav"}.}
 \item{checkpoint_retention}{Persistent checkpoint media policy. \code{"all"}
 retains prepared/chunk audio plus result checkpoints. \code{"results"} removes
 only Genflow-owned prepared/chunk audio from valid runs for the same source
-after the final transcription succeeds, while preserving manifests and
-per-part result RDS files for resume. It never deletes the caller's
-original input and does nothing after a failed/interrupted call. Inspect
+after the final transcription succeeds. Each part keeps a readable
+\code{part_NNNN.txt}; structured resume state stays in a hidden
+\code{.part_NNNN.checkpoint.rds}, and the run manifest remains machine-owned.
+Persistent run names include service, model, creation time, and a short
+code. This policy never deletes the caller's original input and does
+nothing after a failed/interrupted call. Inspect
 \code{metadata$chunking$checkpoint_media_cleanup_complete}; it is \code{TRUE} only
 when all eligible managed media was removed.}
 }

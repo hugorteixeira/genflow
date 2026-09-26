@@ -467,6 +467,141 @@
   file.path(run_dir, "manifest.rds")
 }
 
+#' Build a readable, filesystem-safe token for an STT checkpoint run
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_run_slug <- function(value,
+                                fallback,
+                                max_chars = 48L,
+                                strip_model_extension = FALSE) {
+  value <- trimws(as.character(value %||% "")[1])
+  if (is.na(value) || !nzchar(value)) value <- fallback
+  value <- basename(value)
+  if (isTRUE(strip_model_extension)) {
+    value <- sub("\\.(?:gguf|bin)$", "", value, ignore.case = TRUE, perl = TRUE)
+  }
+  value <- tolower(value)
+  value <- gsub("[^a-z0-9]+", "-", value, perl = TRUE)
+  value <- gsub("^-+|-+$", "", value, perl = TRUE)
+  if (!nzchar(value)) value <- fallback
+  value <- substr(value, 1L, as.integer(max_chars))
+  value <- sub("-+$", "", value, perl = TRUE)
+  if (nzchar(value)) value else fallback
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_run_name <- function(service,
+                                model,
+                                key,
+                                created_at = Sys.time(),
+                                code_chars = 8L) {
+  service_slug <- .stt_chunk_run_slug(service, "stt", max_chars = 24L)
+  model_slug <- .stt_chunk_run_slug(
+    model,
+    "default-model",
+    max_chars = 48L,
+    strip_model_extension = TRUE
+  )
+  stamp <- format(as.POSIXct(created_at), "%Y%m%dt%H%M%S")
+  code_chars <- max(8L, min(as.integer(code_chars), nchar(key)))
+  paste(
+    "run",
+    service_slug,
+    model_slug,
+    stamp,
+    substr(key, 1L, code_chars),
+    sep = "-"
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_run_name_safe <- function(name) {
+  is.character(name) && length(name) == 1L && !is.na(name) &&
+    grepl("^run-[a-z0-9]+(?:-[a-z0-9]+)*$", name, perl = TRUE)
+}
+
+#' Check whether a safe run name is bound to its manifest key
+#'
+#' Legacy `run-<full-key>` directories remain valid. Readable names end in a
+#' shortened prefix of the full key, which remains authoritative in the
+#' manifest and protects resume/pruning from short-code collisions.
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_run_matches_manifest <- function(run_dir, manifest) {
+  name <- basename(run_dir)
+  if (!.stt_chunk_run_name_safe(name) ||
+      !.stt_chunk_manifest_valid(manifest)) {
+    return(FALSE)
+  }
+  key <- as.character(manifest$key %||% "")[1]
+  if (identical(name, paste0("run-", key))) return(TRUE)
+  short_code <- sub("^.*-", "", name)
+  grepl("^[0-9a-f]{8,32}$", short_code, perl = TRUE) &&
+    startsWith(key, short_code)
+}
+
+#' Resolve an existing run by its full manifest key or create a readable name
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_resolve_run_dir <- function(root, service, model, key) {
+  root <- normalizePath(root, winslash = "/", mustWork = TRUE)
+  entries <- list.files(
+    root,
+    all.files = TRUE,
+    full.names = TRUE,
+    no.. = TRUE
+  )
+  matches <- Filter(Negate(is.null), lapply(entries, function(path) {
+    info <- suppressWarnings(file.info(path))
+    if (!nrow(info) || !isTRUE(info$isdir[[1]]) ||
+        nzchar(Sys.readlink(path)) ||
+        !.stt_chunk_run_name_safe(basename(path))) {
+      return(NULL)
+    }
+    path <- normalizePath(path, winslash = "/", mustWork = TRUE)
+    if (!identical(dirname(path), root)) return(NULL)
+    manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(path))
+    if (!.stt_chunk_manifest_valid(manifest, key) ||
+        !.stt_chunk_run_matches_manifest(path, manifest)) {
+      return(NULL)
+    }
+    list(
+      path = path,
+      readable = !identical(basename(path), paste0("run-", key)),
+      updated_at = as.character(manifest$updated_at %||% "")[1]
+    )
+  }))
+  if (length(matches)) {
+    readable <- vapply(matches, `[[`, logical(1), "readable")
+    updated <- vapply(matches, `[[`, character(1), "updated_at")
+    order_index <- order(readable, updated, decreasing = TRUE)
+    return(matches[[order_index[[1]]]]$path)
+  }
+
+  created_at <- Sys.time()
+  for (code_chars in c(8L, 12L, 16L, 24L, 32L)) {
+    candidate <- file.path(root, .stt_chunk_run_name(
+      service = service,
+      model = model,
+      key = key,
+      created_at = created_at,
+      code_chars = code_chars
+    ))
+    if (!file.exists(candidate)) return(candidate)
+    manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(candidate))
+    if (.stt_chunk_manifest_valid(manifest, key) &&
+        .stt_chunk_run_matches_manifest(candidate, manifest)) {
+      return(candidate)
+    }
+  }
+  stop("Could not allocate a unique STT checkpoint run name.", call. = FALSE)
+}
+
 #' @keywords internal
 #' @noRd
 .stt_chunk_lock_path <- function(run_dir) {
@@ -712,19 +847,25 @@
 
 #' @keywords internal
 #' @noRd
-.stt_chunk_manifest_valid <- function(manifest, key) {
-  is.list(manifest) &&
-    identical(manifest$schema_version, 3L) &&
-    identical(as.character(manifest$key %||% ""), as.character(key)) &&
+.stt_chunk_manifest_valid <- function(manifest, key = NULL) {
+  if (!is.list(manifest)) return(FALSE)
+  schema_version <- suppressWarnings(as.integer(
+    manifest$schema_version %||% NA_integer_
+  )[1])
+  schema_version %in% c(3L, 4L) &&
+    (is.null(key) || identical(
+      as.character(manifest$key %||% ""),
+      as.character(key)
+    )) &&
     is.list(manifest$parts)
 }
 
 #' Prune superseded STT checkpoint runs after a successful transcription
 #'
-#' Only direct child directories named exactly `run-<hex>` with a matching,
-#' valid manifest for the same source recording are eligible. The current run
-#' and the requested number of newest previous runs are retained. Symbolic
-#' links and actively locked runs are always skipped.
+#' Only safe direct `run-*` children whose readable or legacy name matches a
+#' valid manifest are eligible. The current run and the requested number of
+#' newest previous runs are retained. Symbolic links and actively locked runs
+#' are always skipped.
 #'
 #' @keywords internal
 #' @noRd
@@ -752,15 +893,11 @@
     winslash = "/",
     mustWork = TRUE
   )
-  if (!identical(dirname(current_run_dir), checkpoint_dir) ||
-      !grepl("^run-[0-9a-f]+$", basename(current_run_dir), perl = TRUE)) {
-    return(invisible(character()))
-  }
-  current_key <- sub("^run-", "", basename(current_run_dir))
   current_manifest <- .stt_chunk_read_rds(
     .stt_chunk_manifest_path(current_run_dir)
   )
-  if (!.stt_chunk_manifest_valid(current_manifest, current_key)) {
+  if (!identical(dirname(current_run_dir), checkpoint_dir) ||
+      !.stt_chunk_run_matches_manifest(current_run_dir, current_manifest)) {
     return(invisible(character()))
   }
   current_source <- as.character(
@@ -777,14 +914,13 @@
   records <- lapply(entries, function(path) {
     name <- basename(path)
     info <- suppressWarnings(file.info(path))
-    if (!grepl("^run-[0-9a-f]+$", name, perl = TRUE) ||
+    if (!.stt_chunk_run_name_safe(name) ||
         !nrow(info) || !isTRUE(info$isdir[[1]]) ||
         nzchar(Sys.readlink(path))) {
       return(NULL)
     }
-    key <- sub("^run-", "", name)
     manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(path))
-    if (!.stt_chunk_manifest_valid(manifest, key)) return(NULL)
+    if (!.stt_chunk_run_matches_manifest(path, manifest)) return(NULL)
     source_fingerprint <- as.character(
       manifest$source_fingerprint %||% ""
     )[1]
@@ -831,11 +967,10 @@
       error = function(e) NULL
     )
     if (!is.list(lock)) next
-    key <- sub("^run-", "", basename(path))
     manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(path))
     safe <- !nzchar(Sys.readlink(path)) &&
       identical(dirname(path), checkpoint_dir) &&
-      .stt_chunk_manifest_valid(manifest, key) &&
+      .stt_chunk_run_matches_manifest(path, manifest) &&
       identical(
         as.character(manifest$source_fingerprint %||% "")[1],
         current_source
@@ -857,8 +992,8 @@
 #' The current run identifies the source recording. Every eligible run must be
 #' a direct, non-symlink child of the checkpoint root with a valid manifest for
 #' that same source fingerprint. Only the exact manifest-owned `prepared.*`
-#' and `part_NNNN.*` regular files are removed; manifests and result RDS files
-#' remain reusable.
+#' and `part_NNNN.*` audio files are removed; manifests, readable transcripts,
+#' and internal result checkpoints remain reusable.
 #'
 #' @keywords internal
 #' @noRd
@@ -891,17 +1026,16 @@
     winslash = "/",
     mustWork = TRUE
   )
+  current_manifest <- .stt_chunk_read_rds(
+    .stt_chunk_manifest_path(current_run_dir)
+  )
   if (!identical(dirname(current_run_dir), checkpoint_dir) ||
-      !grepl("^run-[0-9a-f]+$", basename(current_run_dir), perl = TRUE)) {
+      !.stt_chunk_run_name_safe(basename(current_run_dir))) {
     stop(
       "The current STT checkpoint run is not a safe direct run-* child."
     )
   }
-  current_key <- sub("^run-", "", basename(current_run_dir))
-  current_manifest <- .stt_chunk_read_rds(
-    .stt_chunk_manifest_path(current_run_dir)
-  )
-  if (!.stt_chunk_manifest_valid(current_manifest, current_key)) {
+  if (!.stt_chunk_run_matches_manifest(current_run_dir, current_manifest)) {
     stop("The current STT checkpoint manifest is invalid.")
   }
   source_fingerprint <- as.character(
@@ -920,16 +1054,15 @@
   runs <- Filter(Negate(is.null), lapply(entries, function(path) {
     name <- basename(path)
     info <- suppressWarnings(file.info(path))
-    if (!grepl("^run-[0-9a-f]+$", name, perl = TRUE) ||
+    if (!.stt_chunk_run_name_safe(name) ||
         !nrow(info) || !isTRUE(info$isdir[[1]]) ||
         nzchar(Sys.readlink(path))) {
       return(NULL)
     }
     normalized <- normalizePath(path, winslash = "/", mustWork = TRUE)
     if (!identical(dirname(normalized), checkpoint_dir)) return(NULL)
-    key <- sub("^run-", "", name)
     manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(normalized))
-    if (!.stt_chunk_manifest_valid(manifest, key) ||
+    if (!.stt_chunk_run_matches_manifest(normalized, manifest) ||
         !identical(
           as.character(manifest$source_fingerprint %||% "")[1],
           source_fingerprint
@@ -944,11 +1077,10 @@
 
   cleanup_run <- function(run_dir, lock) {
     on.exit(.stt_chunk_release_lock(lock), add = TRUE)
-    key <- sub("^run-", "", basename(run_dir))
     manifest <- .stt_chunk_read_rds(.stt_chunk_manifest_path(run_dir))
     valid <- !nzchar(Sys.readlink(run_dir)) &&
       identical(dirname(run_dir), checkpoint_dir) &&
-      .stt_chunk_manifest_valid(manifest, key) &&
+      .stt_chunk_run_matches_manifest(run_dir, manifest) &&
       identical(
         as.character(manifest$source_fingerprint %||% "")[1],
         source_fingerprint
@@ -1158,7 +1290,9 @@
                                   service,
                                   config_fingerprint,
                                   options,
-                                  input_duration_seconds = NA_real_) {
+                                  input_duration_seconds = NA_real_,
+                                  model = NULL,
+                                  service_label = service) {
   input_duration_seconds <- suppressWarnings(
     as.numeric(input_duration_seconds)[1]
   )
@@ -1251,7 +1385,16 @@
   if (!dir.exists(root)) {
     stop("Could not create the STT checkpoint directory.", call. = FALSE)
   }
-  run_dir <- if (temporary_root) root else file.path(root, paste0("run-", key))
+  run_dir <- if (temporary_root) {
+    root
+  } else {
+    .stt_chunk_resolve_run_dir(
+      root = root,
+      service = service_label,
+      model = model,
+      key = key
+    )
+  }
   dir.create(run_dir, recursive = TRUE, showWarnings = FALSE)
   if (!dir.exists(run_dir)) {
     stop("Could not create the STT checkpoint run directory.", call. = FALSE)
@@ -1339,10 +1482,20 @@
     }
     reusable_result <- is.list(old) &&
       identical(old$audio_fingerprint, fingerprint)
-    result_path <- file.path(
+    checkpoint_path <- file.path(
       run_dir,
-      sprintf("part_%04d.result.rds", index)
+      sprintf(".part_%04d.checkpoint.rds", index)
     )
+    transcript_path <- file.path(run_dir, sprintf("part_%04d.txt", index))
+    legacy_checkpoint_path <- if (reusable_result && is.list(old)) {
+      as.character(old$checkpoint_path %||% old$result_path %||% "")[1]
+    } else {
+      ""
+    }
+    if (!nzchar(legacy_checkpoint_path) ||
+        identical(legacy_checkpoint_path, checkpoint_path)) {
+      legacy_checkpoint_path <- NULL
+    }
     parts[[index]] <- list(
       index = as.integer(index),
       audio_path = path,
@@ -1351,7 +1504,9 @@
       duration_seconds = as.numeric(actual_duration),
       requested_duration_seconds = as.numeric(durations[[index]]),
       size_bytes = as.numeric(size),
-      result_path = result_path,
+      checkpoint_path = checkpoint_path,
+      transcript_path = transcript_path,
+      legacy_checkpoint_path = legacy_checkpoint_path,
       status = if (reusable_result) {
         old$status %||% "pending"
       } else {
@@ -1364,14 +1519,39 @@
       },
       last_error = if (reusable_result) old$last_error %||% "" else ""
     )
-    if (!reusable_result && file.exists(result_path)) {
-      unlink(result_path, force = TRUE)
+    if (!reusable_result) {
+      stale_paths <- unique(c(checkpoint_path, transcript_path))
+      old_checkpoint <- as.character(
+        old$checkpoint_path %||% old$result_path %||% ""
+      )[1]
+      old_part <- old
+      if (is.list(old_part)) {
+        old_part$index <- as.integer(index)
+        old_part$audio_path <- path
+      }
+      if (is.list(old_part) && .stt_chunk_part_owned_path(
+        old_checkpoint,
+        old_part,
+        "checkpoint"
+      )) {
+        stale_paths <- c(stale_paths, old_checkpoint)
+      }
+      stale_paths <- stale_paths[nzchar(stale_paths)]
+      if (length(stale_paths)) unlink(stale_paths, force = TRUE)
     }
   }
 
   manifest <- list(
-    schema_version = 3L,
+    schema_version = 4L,
     key = key,
+    run_name = basename(run_dir),
+    service = service,
+    service_label = service_label,
+    model = model,
+    created_at = previous$created_at %||% format(
+      as.POSIXct(Sys.time(), tz = "UTC"),
+      "%Y-%m-%dT%H:%M:%SZ"
+    ),
     source_fingerprint = source_fingerprint,
     config_fingerprint = config_fingerprint,
     prepared_path = prepared_path,
@@ -1447,6 +1627,95 @@
     attempts = as.integer(attempts),
     result = result
   )
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_part_owned_path <- function(path, part, type = c("checkpoint", "text")) {
+  type <- match.arg(type)
+  path <- as.character(path %||% "")[1]
+  index <- suppressWarnings(as.integer(part$index %||% NA_integer_)[1])
+  audio_path <- as.character(part$audio_path %||% "")[1]
+  if (is.na(path) || !nzchar(path) || is.na(index) || index < 1L ||
+      is.na(audio_path) || !nzchar(audio_path) ||
+      !dir.exists(dirname(audio_path))) {
+    return(FALSE)
+  }
+  parent <- normalizePath(dirname(path), winslash = "/", mustWork = FALSE)
+  run_dir <- normalizePath(dirname(audio_path), winslash = "/", mustWork = TRUE)
+  if (!identical(parent, run_dir)) return(FALSE)
+  allowed <- if (identical(type, "checkpoint")) {
+    c(
+      sprintf(".part_%04d.checkpoint.rds", index),
+      sprintf("part_%04d.result.rds", index)
+    )
+  } else {
+    sprintf("part_%04d.txt", index)
+  }
+  basename(path) %in% allowed
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_part_checkpoint_paths <- function(part) {
+  paths <- unique(as.character(c(
+    part$checkpoint_path,
+    part$legacy_checkpoint_path,
+    part$result_path
+  )))
+  paths <- paths[!is.na(paths) & nzchar(paths)]
+  paths[vapply(
+    paths,
+    .stt_chunk_part_owned_path,
+    logical(1),
+    part = part,
+    type = "checkpoint"
+  )]
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_part_transcript_text <- function(result) {
+  text <- result$diarized_transcript %||%
+    result$response_value %||%
+    result$text %||%
+    ""
+  text <- as.character(text)[1]
+  if (is.na(text)) "" else text
+}
+
+#' Save the structured resume checkpoint and its readable transcript
+#'
+#' The hidden RDS preserves provider metadata and fingerprints needed by
+#' resume/merge. The adjacent TXT is intentionally human-readable and is not
+#' parsed as machine state.
+#'
+#' @keywords internal
+#' @noRd
+.stt_chunk_write_part_checkpoint <- function(checkpoint, part) {
+  checkpoint_path <- as.character(part$checkpoint_path %||% "")[1]
+  transcript_path <- as.character(part$transcript_path %||% "")[1]
+  if (!.stt_chunk_part_owned_path(checkpoint_path, part, "checkpoint") ||
+      !.stt_chunk_part_owned_path(transcript_path, part, "text")) {
+    stop("Invalid STT part checkpoint path.", call. = FALSE)
+  }
+  .genflow_atomic_save_rds(checkpoint, checkpoint_path)
+  .stt_atomic_write_lines(
+    .stt_chunk_part_transcript_text(checkpoint$result),
+    transcript_path
+  )
+  .genflow_set_private_file_mode(transcript_path)
+  invisible(checkpoint_path)
+}
+
+#' @keywords internal
+#' @noRd
+.stt_chunk_remove_legacy_part_checkpoints <- function(part) {
+  primary <- as.character(part$checkpoint_path %||% "")[1]
+  paths <- setdiff(.stt_chunk_part_checkpoint_paths(part), primary)
+  existing <- paths[file.exists(paths) | nzchar(Sys.readlink(paths))]
+  if (length(existing)) unlink(existing, force = TRUE)
+  invisible(existing)
 }
 
 #' @keywords internal
@@ -1680,19 +1949,39 @@
       index = index,
       part_count = length(manifest$parts)
     )
-    cached <- if (isTRUE(options$resume)) {
-      .stt_chunk_read_result_checkpoint(
-        part$result_path,
-        manifest = manifest,
-        part = part,
-        allow_empty = tiny_tail
-      )
-    } else {
-      NULL
+    cached <- NULL
+    cached_path <- NULL
+    if (isTRUE(options$resume)) {
+      for (candidate in .stt_chunk_part_checkpoint_paths(part)) {
+        candidate_checkpoint <- .stt_chunk_read_result_checkpoint(
+          candidate,
+          manifest = manifest,
+          part = part,
+          allow_empty = tiny_tail
+        )
+        if (is.list(candidate_checkpoint)) {
+          cached <- candidate_checkpoint
+          cached_path <- candidate
+          break
+        }
+      }
     }
     if (is.list(cached)) {
+      primary_checkpoint <- as.character(part$checkpoint_path %||% "")[1]
+      if (!identical(cached_path, primary_checkpoint)) {
+        .stt_chunk_write_part_checkpoint(cached, part)
+        .stt_chunk_remove_legacy_part_checkpoints(part)
+      } else if (!file.exists(part$transcript_path)) {
+        .stt_atomic_write_lines(
+          .stt_chunk_part_transcript_text(cached$result),
+          part$transcript_path
+        )
+        .genflow_set_private_file_mode(part$transcript_path)
+      }
       results[[index]] <- cached$result
       resumed[[index]] <- TRUE
+      manifest$parts[[index]]$legacy_checkpoint_path <- NULL
+      manifest$parts[[index]]$result_path <- NULL
       manifest$parts[[index]]$status <- cached$status
       manifest$parts[[index]]$attempts <- as.integer(
         cached$attempts %||% part$attempts %||% 0L
@@ -1731,7 +2020,10 @@
           part = part,
           attempts = attempts
         )
-        .genflow_atomic_save_rds(checkpoint, part$result_path)
+        .stt_chunk_write_part_checkpoint(checkpoint, part)
+        .stt_chunk_remove_legacy_part_checkpoints(part)
+        manifest$parts[[index]]$legacy_checkpoint_path <- NULL
+        manifest$parts[[index]]$result_path <- NULL
         manifest$parts[[index]]$status <- "done"
         manifest$parts[[index]]$attempts <- attempts
         manifest$parts[[index]]$last_error <- ""
@@ -1753,7 +2045,10 @@
           part = part,
           attempts = attempts
         )
-        .genflow_atomic_save_rds(checkpoint, part$result_path)
+        .stt_chunk_write_part_checkpoint(checkpoint, part)
+        .stt_chunk_remove_legacy_part_checkpoints(part)
+        manifest$parts[[index]]$legacy_checkpoint_path <- NULL
+        manifest$parts[[index]]$result_path <- NULL
         manifest$parts[[index]]$status <- "done_empty"
         manifest$parts[[index]]$attempts <- attempts
         manifest$parts[[index]]$last_error <- ""

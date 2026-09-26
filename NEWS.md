@@ -1,5 +1,9 @@
 # genflow 0.0.8.9000
 
+- Persistent STT run folders now identify their service, model, creation time,
+  and a short code. Each completed chunk publishes a readable
+  `part_NNNN.txt`; the structured resume envelope is retained as the hidden
+  `.part_NNNN.checkpoint.rds`, and legacy opaque runs remain resumable.
 - Simplified STT chunking to one explicit rule: when
   `chunk_segment_seconds` is set, Genflow prepares the audio and splits it into
   contiguous chunks of that duration. There is no overlap, adaptive byte-size
