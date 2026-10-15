@@ -101,6 +101,12 @@ result$status_api
 result$response_value
 ```
 
+OpenAI text calls accept `max_output_tokens` to cap generated tokens, including
+reasoning. For example, use `reasoning = "minimal", max_output_tokens = 1024`
+for a small test. This cap also works in saved agents and batches; inspect
+`truncated` before using incomplete output. Other services currently reject
+this explicit parameter. `NULL` keeps the provider default.
+
 Every high-level generator returns a list with `response_value`, `service`,
 `model`, `duration`, `status_api`, and `status_msg`. Text adds token estimates;
 successful media calls add saved-file information.

@@ -70,6 +70,43 @@ test_that("chat and Responses refusals and empty output do not become successes"
   expect_identical(empty$error$code, "EMPTY_OR_NULL_RESPONSE")
 })
 
+test_that("OpenAI output caps reach both endpoints through direct, agent and batch calls", {
+  withr::local_envvar(OPENAI_API_KEY = "fixture-key")
+  seen <- list()
+  testthat::local_mocked_bindings(POST = function(url, ..., body, encode, config) {
+    seen[[length(seen) + 1L]] <<- list(url = url, body = jsonlite::fromJSON(body, simplifyVector = FALSE))
+    payload <- if (grepl("responses$", url)) list(output_text = "short", status = "completed") else
+      list(choices = list(list(message = list(content = "short"))))
+    structure(list(status_code = 200L, headers = list(`content-type` = "application/json"),
+      content = charToRaw(jsonlite::toJSON(payload, auto_unbox = TRUE))), class = "response")
+  }, .package = "httr")
+  setup <- set_setup("capped", service = "openai", model = "gpt-5-mini", type = "Chat",
+    reasoning = "minimal", max_output_tokens = 512L, save = FALSE, assign = FALSE)
+  agent <- set_agent("capped", setup = setup, content = list(context = "Be brief."), save = FALSE, assign = FALSE)
+  direct <- gen_txt("Be brief.", model = "gpt-5-mini", max_output_tokens = 256L, persist = FALSE)
+  via_agent <- gen_txt(agent, persist = FALSE)
+  batch <- gen_batch_agent(agent, qty = 1, workers = 1, persist = FALSE, verbose = FALSE, always_fix_errors = FALSE)
+  expect_identical(direct$status_api, "SUCCESS")
+  expect_identical(via_agent$status_api, "SUCCESS")
+  expect_identical(batch[[1]]$status_api, "SUCCESS")
+  expect_length(seen, 3L)
+  expect_equal(seen[[1]]$body$max_completion_tokens, 256L)
+  expect_null(seen[[1]]$body$max_output_tokens)
+  for (i in 2:3) {
+    expect_match(seen[[i]]$url, "/responses$")
+    expect_equal(seen[[i]]$body$max_output_tokens, 512L)
+    expect_null(seen[[i]]$body$max_completion_tokens)
+    expect_identical(seen[[i]]$body$reasoning$effort, "minimal")
+  }
+  expect_true(gen_capabilities("openai")$adapter_features[["max_output_tokens"]])
+  expect_false(gen_capabilities("openrouter")$adapter_features[["max_output_tokens"]])
+  for (value in list(0, -1, 1.5, Inf, NA_real_, "512", c(1, 2))) {
+    expect_error(gen_txt("prompt", max_output_tokens = value, persist = FALSE), "positive integer")
+  }
+  expect_error(gen_txt("prompt", service = "openrouter", max_output_tokens = 512, persist = FALSE), "only by service")
+  expect_length(seen, 3L)
+})
+
 test_that("HF non-chat catalog entries match executable adapter routes", {
   model <- function(id, task, provider) list(id = id, pipeline_tag = task,
     inferenceProviderMapping = list(list(provider = provider, status = "live")))

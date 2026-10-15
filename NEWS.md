@@ -1,3 +1,10 @@
+# genflow 0.0.10
+
+- Added an explicit OpenAI `max_output_tokens` cap for direct, agent, and batch
+  text calls, including reasoning tokens. Chat Completions uses
+  `max_completion_tokens`; Responses uses `max_output_tokens`. Unsupported
+  providers reject the parameter before inference.
+
 # genflow 0.0.9
 
 - Unified direct/agent/batch request preparation, complete-field overrides,

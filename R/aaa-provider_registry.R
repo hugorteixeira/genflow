@@ -118,7 +118,8 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
   text <- if (is.null(custom)) isTRUE(spec$modalities[["text"]]) else TRUE
   features <- c(vision = text, tools = text && id != "ollama",
                 reasoning = id %in% c("openai", "openrouter", "hf"), plugins = id == "openrouter",
-                structured_output = FALSE, streaming = FALSE, durable_jobs = FALSE)
+                structured_output = FALSE, streaming = FALSE, durable_jobs = FALSE,
+                max_output_tokens = id == "openai")
   if (!is.null(custom)) {
     features[c("vision", "tools", "reasoning", "plugins")] <- vapply(
       c("supports_vision", "supports_tools", "supports_reasoning", "supports_plugins"),

@@ -28,6 +28,7 @@ gen_txt(context, ...)
   persist = TRUE,
   retry_delays = c(2, 5, 10),
   retry_deadline = NULL,
+  max_output_tokens = NULL,
   ...
 )
 
@@ -97,6 +98,11 @@ attempts. \code{numeric()} disables retries. Default: \code{c(2, 5, 10)}.}
 \item{retry_deadline}{Optional positive limit in seconds for the inference
 attempts and waits, after model resolution. Each attempt's timeout is
 bounded by the remaining time. NULL uses only the attempt count limit.}
+
+\item{max_output_tokens}{Optional positive integer cap on generated tokens,
+including reasoning tokens. Currently supported by \code{service = "openai"};
+other services reject an explicit cap rather than silently ignoring it.
+NULL retains the provider default. A cap may produce truncated output.}
 }
 \value{
 A list with elements: \code{response_value}, \code{label}, \code{label_cat},

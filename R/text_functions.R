@@ -86,7 +86,8 @@
                             tools = FALSE,
                             my_tools = NULL,
                             plugins = NULL,
-                            timeout_secs = 80) {
+                            timeout_secs = 80,
+                            max_output_tokens = NULL) {
   use_responses <- !is.null(reasoning)
   api_url <- if (use_responses) {
     "https://api.openai.com/v1/responses"
@@ -171,6 +172,9 @@
 
   # --- API call with httr::timeout() and tryCatch ---
   if (!.genflow_openai_sampling(model, reasoning)) body$temperature <- NULL
+  if (!is.null(max_output_tokens)) {
+    body[[if (use_responses) "max_output_tokens" else "max_completion_tokens"]] <- max_output_tokens
+  }
 
   response <- tryCatch(
     {
@@ -2325,6 +2329,10 @@
 #' @param retry_deadline Optional positive limit in seconds for the inference
 #'   attempts and waits, after model resolution. Each attempt's timeout is
 #'   bounded by the remaining time. NULL uses only the attempt count limit.
+#' @param max_output_tokens Optional positive integer cap on generated tokens,
+#'   including reasoning tokens. Currently supported by `service = "openai"`;
+#'   other services reject an explicit cap rather than silently ignoring it.
+#'   NULL retains the provider default. A cap may produce truncated output.
 #' @param ... Reserved for future provider-specific arguments. Supplying values
 #'   currently raises an error instead of silently ignoring them.
 #' @return A list with elements: `response_value`, `label`, `label_cat`,
@@ -2371,6 +2379,7 @@ gen_txt.default <- function(
   persist = TRUE,
   retry_delays = c(2, 5, 10),
   retry_deadline = NULL,
+  max_output_tokens = NULL,
   ...
 ) {
   model_was_default <- missing(model)
@@ -2395,6 +2404,18 @@ gen_txt.default <- function(
   if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
   service <- .genflow_normalize_service_alias(service)
   service_lower <- tolower(service)
+  if (!is.null(max_output_tokens)) {
+    if (!is.numeric(max_output_tokens) || length(max_output_tokens) != 1L ||
+        is.na(max_output_tokens) || !is.finite(max_output_tokens) ||
+        max_output_tokens < 1 || max_output_tokens > .Machine$integer.max ||
+        max_output_tokens != floor(max_output_tokens)) {
+      stop("`max_output_tokens` must be NULL or a positive integer.", call. = FALSE)
+    }
+    if (!identical(service_lower, "openai")) {
+      stop("`max_output_tokens` is currently supported only by service = 'openai'.", call. = FALSE)
+    }
+    max_output_tokens <- as.integer(max_output_tokens)
+  }
 
   base_url_value <- as.character(base_url %||% "")[1]
   if (is.na(base_url_value)) {
@@ -2525,6 +2546,7 @@ gen_txt.default <- function(
                  add_img = add_img, tools = tools, my_tools = my_tools,
                  plugins = plugins, timeout_secs = timeout_api)
     if (service %in% c("ollama", "llamacpp")) args["base_url"] <- list(base_url)
+    if (!is.null(max_output_tokens)) args$max_output_tokens <- max_output_tokens
     do.call(get(spec$text_function, envir = asNamespace("genflow")), args)
 
   }

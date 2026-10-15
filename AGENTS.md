@@ -4,6 +4,14 @@
 This file documents how to work inside `genflow` as a coding agent or maintainer.
 Primary goal: keep provider integrations consistent across runtime, batch, model catalog, and UI.
 
+## Repository Boundary
+- This public repository contains only the `genflow` R package, including its
+  RStudio/Shiny agent manager.
+- Keep separate applications, private planning documents, builds, runtime data
+  and migration backups outside this repository and its R package archives.
+- Applications consuming this library should use its installed package and
+  exported R API.
+
 ## Git Workflow: Main Only
 - This repository uses `main` as its only working and publication branch.
 - Make changes, commits, and pushes directly on `main`; do not create

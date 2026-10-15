@@ -5,3 +5,5 @@
 genflow.Rproj
 __pycache__/
 *.py[cod]
+/.tmp/
+/app/
