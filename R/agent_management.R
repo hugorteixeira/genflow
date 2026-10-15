@@ -106,6 +106,7 @@
 }
 
 .genflow_save_entity <- function(object, type, name, overwrite) {
+  .genflow_validate_portable(object)
   existing_path <- .genflow_entity_path(type, name, existing = TRUE)
   target_path <- .genflow_entity_path(type, name, existing = FALSE)
   if (!isTRUE(overwrite) && file.exists(existing_path)) {
@@ -334,7 +335,7 @@ set_setup <- function(sname,
     stop("`model` must be provided.", call. = FALSE)
   }
 
-  setup <- .genflow_drop_null(c(
+  setup <- .genflow_drop_null(.genflow_merge_fields(
     list(
       sname = sname,
       service = service,
@@ -683,7 +684,7 @@ set_agent <- function(name,
   content_info <- .genflow_coerce_content(content)
   extra_fields <- list(...)
 
-  setup_fields <- setup_info$data
+  setup_fields <- .genflow_merge_fields(setup_info$data)
   sname <- setup_info$sname
   if (length(setup_fields) == 0L) {
     setup_fields <- list()
@@ -691,7 +692,6 @@ set_agent <- function(name,
   if (!is.null(names(setup_fields))) {
     setup_fields <- setup_fields[setdiff(names(setup_fields), c("sname", "name"))]
   }
-  setup_fields <- .genflow_drop_null(setup_fields)
 
   content_fields <- content_info$data
   cname <- content_info$cname
@@ -701,21 +701,19 @@ set_agent <- function(name,
     if (is.null(names(content_fields))) {
       names(content_fields) <- paste0("content", seq_along(content_fields))
     }
+    content_fields <- .genflow_merge_fields(content_fields)
     content_fields <- content_fields[setdiff(names(content_fields), "cname")]
-    content_fields <- .genflow_drop_null(content_fields)
   }
 
-  extra_fields <- .genflow_drop_null(extra_fields)
-
-  agent <- .genflow_drop_null(c(
+  agent <- .genflow_drop_null(.genflow_merge_fields(
+    setup_fields,
+    content_fields,
+    extra_fields,
     list(
       name = name,
       sname = if (!is.null(sname) && !is.na(sname)) sname else NULL,
       cname = if (!is.null(cname) && !is.na(cname)) cname else NULL
-    ),
-    setup_fields,
-    content_fields,
-    extra_fields
+    )
   ))
 
   class(agent) <- unique(c("genflow_agent", class(agent)))

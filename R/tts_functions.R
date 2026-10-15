@@ -5,7 +5,8 @@
 #'
 #' @param text Character. The text to synthesize.
 #' @param add Optional character appended to `text`.
-#' @param directory Optional output directory. Defaults to `getwd()/audios` if NULL.
+#' @param directory Optional output directory. Defaults to the configured
+#'   Genflow output directory's `audios` subdirectory.
 #' @param label Optional short label used for filenames. If NULL, derived from text.
 #' @param service Provider identifier (e.g., "openai", "replicate").
 #' @param model Provider model identifier. Defaults to `gpt-4o-mini-tts`.
@@ -18,6 +19,9 @@
 #' @param instructions Optional instructions to style the voice (OpenAI only).
 #' @param preview Logical; attempt to open audio after save if interactive.
 #' @param timeout_api Numeric; request timeout in seconds.
+#' @param persist Logical; save to the output directory. FALSE returns a
+#'   temporary file in `response_value` and sets `saved_file` to NA. The caller
+#'   owns moving or deleting that file before the R session ends.
 #' @param ... Reserved for future provider-specific arguments.
 #'
 #' @return Invisibly returns a list with `response_value` (saved file path),
@@ -28,8 +32,10 @@
 #'
 #' @details Replicate model metadata is fetched at most once per `gen_tts()`
 #'   call and reused for voice validation plus prediction construction.
-#'   Provider temporaries are removed after the final file is copied, including
-#'   error paths.
+#'   Provider temporaries are removed after successful publication. If saving
+#'   fails after synthesis, the generated temporary is retained and returned;
+#'   `status_api` is ERROR, `inference_status` is SUCCESS, and `error$stage` is
+#'   `"persistence"`.
 #'
 #' @examples
 #' # Minimal example (requires OpenAI API key)
@@ -57,9 +63,12 @@ gen_tts.default <- function(
   instructions = NULL,
   preview = FALSE,
   timeout_api = 240,
+  persist = TRUE,
   ...
 ) {
   start_time <- Sys.time()
+  .genflow_validate_dots(list(...), "gen_tts")
+  .genflow_validate_flag(persist, "persist")
 
   if (is.null(text) || length(text) == 0) {
     stop("`text` must be a non-empty character string.")
@@ -160,9 +169,7 @@ gen_tts.default <- function(
     cat("Using voice: ", voice, "\n", sep = "")
   }
 
-  if (is.null(directory)) {
-    directory <- .genflow_default_dir("audios")
-  }
+  directory <- .genflow_media_directory(directory, "audios", persist)
   if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
 
   label_processed <- label
@@ -177,10 +184,11 @@ gen_tts.default <- function(
 
   audio_tmp <- NULL
   error_message <- NULL
+  persistence_error <- NULL
   on.exit(
     {
       tmp_path <- as.character(audio_tmp %||% "")[1]
-      if (!is.na(tmp_path) && nzchar(tmp_path) && file.exists(tmp_path)) {
+      if (is.null(persistence_error) && !is.na(tmp_path) && nzchar(tmp_path) && file.exists(tmp_path)) {
         try(unlink(tmp_path), silent = TRUE)
       }
     },
@@ -239,29 +247,17 @@ gen_tts.default <- function(
     } else {
       actual_format <- audio_meta$format
       actual_content_type <- audio_meta$content_type
-      dt <- format(Sys.time(), "%Y%m%d_%H%M%S")
-      filename <- sprintf(
-        "%s_%s_%s_%s.%s",
-        label_sanitized,
-        service,
-        model_sanitized,
-        dt,
-        actual_format
-      )
-      final_path <- file.path(directory, filename)
-      ok <- file.copy(audio_tmp, final_path, overwrite = TRUE)
-      if (!ok || !file.exists(final_path)) {
-        final_status <- "ERROR"
-        final_msg <- sprintf("Failed to copy audio to '%s'", final_path)
-        if (file.exists(final_path)) {
-          try(unlink(final_path), silent = TRUE)
+      final_path <- tryCatch(
+        .genflow_copy_artifact(audio_tmp, directory, label_sanitized, service, model, actual_format),
+        error = function(e) {
+          persistence_error <<- e
+          NA_character_
         }
-        final_path <- NA_character_
-      }
+      )
     }
   }
 
-  if (preview && final_status == "SUCCESS") {
+  if (preview && final_status == "SUCCESS" && is.null(persistence_error)) {
     if (interactive()) browseURL(final_path)
     else message("Preview not available in non-interactive mode.")
   }
@@ -286,6 +282,10 @@ gen_tts.default <- function(
     mime_type = if (final_status == "SUCCESS") actual_content_type else NA_character_
   )
 
+  persistence <- .genflow_persistence(final_path, requested = persist, error = persistence_error)
+  result <- .genflow_complete_result(result, persistence = persistence)
+  if (!is.null(persistence_error)) result$response_value <- audio_tmp
+  if (!persist) result$saved_file <- NA_character_
   return(invisible(result))
 }
 

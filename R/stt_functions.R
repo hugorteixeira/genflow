@@ -593,24 +593,20 @@ gen_stt.default <- function(
 
   saved_file <- NA_character_
   saved_metadata_file <- NA_character_
+  inference_status <- final_status
+  persistence_error <- NULL
   if (isTRUE(save_txt) && final_status == "SUCCESS") {
-    if (is.null(directory) || is.na(directory)) {
-      directory <- .genflow_default_dir("transcripts")
-    }
-    if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-    dt <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    model_tag <- .sanitize_filename(basename(effective_model))
-    filename <- sprintf("%s_%s_%s_%s.txt", label_sanitized, service, model_tag, dt)
-    saved_file <- file.path(directory, filename)
-    transcript_to_save <- diarized_transcript %||% transcribed_text
-    write_result <- try(
-      .stt_atomic_write_lines(transcript_to_save, saved_file),
-      silent = TRUE
+    saved_file <- tryCatch(
+      .genflow_write_artifact(diarized_transcript %||% transcribed_text,
+        directory %||% .genflow_default_dir("transcripts"), label_sanitized,
+        service, basename(effective_model), "txt"),
+      error = function(e) {
+        persistence_error <<- e
+        final_status <<- "ERROR"
+        final_msg <<- paste0("PERSISTENCE_ERROR: ", conditionMessage(e))
+        NA_character_
+      }
     )
-    if (inherits(write_result, "try-error") || !file.exists(saved_file)) {
-      saved_file <- NA_character_
-    }
-
     if (!is.null(diarized_transcript) && !is.na(saved_file)) {
       saved_metadata_file <- sub("\\.txt$", ".json", saved_file)
     }
@@ -737,6 +733,7 @@ gen_stt.default <- function(
     result$metadata$chunking$checkpoint_media_removed_count <- 0L
   }
 
+
   if (!is.null(diarized_transcript) &&
       isTRUE(save_txt) &&
       !is.na(saved_file) &&
@@ -762,11 +759,16 @@ gen_stt.default <- function(
         "metadata sidecar could not be written.",
         call. = FALSE
       )
+      persistence_error <- simpleError("Could not publish the diarization metadata sidecar.")
+      final_status <- "ERROR"
       saved_metadata_file <- NA_character_
       result$saved_metadata_file <- NA_character_
     }
   }
 
+
+  result <- .genflow_complete_result(result, inference_status = inference_status,
+    persistence = .genflow_persistence(saved_file, requested = save_txt, error = persistence_error))
   .stt_report_result(result)
   return(invisible(.stt_project_output(result, chunk_options$output)))
 }
@@ -1335,14 +1337,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @keywords internal
 #' @noRd
 .stt_atomic_replace <- function(temp_path, target_path) {
-  replaced <- isTRUE(file.rename(temp_path, target_path))
-  if (!replaced) {
-    replaced <- isTRUE(file.copy(temp_path, target_path, overwrite = TRUE))
-    if (replaced) unlink(temp_path)
-  }
-  if (!replaced || !file.exists(target_path)) {
-    stop("Could not save STT output: ", target_path, call. = FALSE)
-  }
+  .genflow_replace_file(temp_path, target_path)
   invisible(target_path)
 }
 
@@ -1744,7 +1739,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   if (!nzchar(token)) stop("HUGGINGFACE_API_TOKEN must be set.")
 
   model_id <- model %||% .stt_default_model("hf")
-  url <- paste0("https://api-inference.hf.co/models/", model_id)
+  url <- paste0("https://router.huggingface.co/hf-inference/models/", model_id)
   binary_data <- readBin(audio_path, what = "raw", n = file.info(audio_path)$size)
 
   response <- httr::POST(

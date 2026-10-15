@@ -1,30 +1,6 @@
 #' @keywords internal
 #' @noRd
-.genflow_builtin_provider_labels <- function() {
-  c(
-    openai = "OpenAI",
-    openrouter = "OpenRouter",
-    anthropic = "Anthropic",
-    groq = "Groq",
-    cerebras = "Cerebras",
-    together = "Together",
-    sambanova = "SambaNova",
-    nebius = "Nebius",
-    deepseek = "DeepSeek",
-    perplexity = "Perplexity",
-    fireworks = "Fireworks",
-    deepinfra = "DeepInfra",
-    hyperbolic = "Hyperbolic",
-    hf = "Hugging Face",
-    `local-native` = "Native STT (local)",
-    `local-openai` = "OpenAI-compatible STT (local)",
-    ollama = "Ollama",
-    llamacpp = "llama-cpp",
-    gemini = "Gemini",
-    fal = "FAL",
-    replicate = "Replicate"
-  )
-}
+.genflow_builtin_provider_labels <- function() .GENFLOW_PROVIDER_LABELS
 
 #' @keywords internal
 #' @noRd
@@ -319,7 +295,9 @@
 
 #' @keywords internal
 #' @noRd
-.genflow_load_custom_providers <- function() {
+.genflow_load_custom_providers <- function(snapshot = TRUE) {
+  current <- getOption("genflow.runtime_snapshot")
+  if (snapshot && !is.null(current$providers)) return(current$providers)
   path <- .genflow_provider_registry_path()
   if (!file.exists(path)) {
     return(list())
@@ -381,7 +359,7 @@
 
 #' @keywords internal
 #' @noRd
-.genflow_save_custom_providers <- function(providers) {
+.genflow_save_custom_providers <- function(providers, locked = FALSE) {
   providers <- providers %||% list()
   providers <- providers[vapply(providers, is.list, logical(1))]
 
@@ -389,7 +367,12 @@
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   payload <- list(schema_version = 1L, providers = providers)
   json_txt <- jsonlite::toJSON(payload, auto_unbox = TRUE, pretty = TRUE, null = "null")
-  writeLines(enc2utf8(json_txt), path, useBytes = TRUE)
+  if (!locked) {
+    lock <- .genflow_acquire_file_lock(path)
+    on.exit(.genflow_release_file_lock(lock), add = TRUE)
+  }
+  .genflow_validate_portable(providers, "providers")
+  .genflow_atomic_write_lines(enc2utf8(json_txt), path)
   invisible(path)
 }
 
@@ -698,13 +681,15 @@ set_provider_openai_compat <- function(id,
     strict = TRUE
   )
 
-  providers <- .genflow_load_custom_providers()
+  lock <- .genflow_acquire_file_lock(.genflow_provider_registry_path())
+  on.exit(.genflow_release_file_lock(lock), add = TRUE)
+  providers <- .genflow_load_custom_providers(snapshot = FALSE)
   if (!isTRUE(overwrite) && cfg$id %in% names(providers)) {
     stop("Custom provider '", cfg$id, "' already exists. Set overwrite = TRUE to replace it.", call. = FALSE)
   }
 
   providers[[cfg$id]] <- cfg
-  .genflow_save_custom_providers(providers)
+  .genflow_save_custom_providers(providers, locked = TRUE)
   invisible(cfg)
 }
 
@@ -783,6 +768,7 @@ get_provider <- function(id) {
   id_norm <- .genflow_normalize_provider_id(.genflow_normalize_service_alias(id))
   custom_cfg <- .genflow_get_custom_provider(id_norm)
   if (!is.null(custom_cfg)) {
+    custom_cfg$capabilities <- gen_capabilities(id_norm)
     return(custom_cfg)
   }
 
@@ -791,7 +777,8 @@ get_provider <- function(id) {
     return(list(
       id = id_norm,
       label = builtins[[id_norm]],
-      kind = "builtin"
+      kind = "builtin",
+      capabilities = gen_capabilities(id_norm)
     ))
   }
 
@@ -816,7 +803,9 @@ rm_provider <- function(id, missing_ok = FALSE) {
     stop("Cannot remove built-in provider '", id_norm, "'.", call. = FALSE)
   }
 
-  providers <- .genflow_load_custom_providers()
+  lock <- .genflow_acquire_file_lock(.genflow_provider_registry_path())
+  on.exit(.genflow_release_file_lock(lock), add = TRUE)
+  providers <- .genflow_load_custom_providers(snapshot = FALSE)
   if (!id_norm %in% names(providers)) {
     if (isTRUE(missing_ok)) {
       return(invisible(FALSE))
@@ -825,7 +814,7 @@ rm_provider <- function(id, missing_ok = FALSE) {
   }
 
   providers[[id_norm]] <- NULL
-  .genflow_save_custom_providers(providers)
+  .genflow_save_custom_providers(providers, locked = TRUE)
   invisible(TRUE)
 }
 

@@ -1,26 +1,4 @@
-.MODEL_PROVIDER_LABELS <- c(
-  openai = "OpenAI",
-  openrouter = "OpenRouter",
-  anthropic = "Anthropic",
-  groq = "Groq",
-  cerebras = "Cerebras",
-  together = "Together",
-  sambanova = "SambaNova",
-  nebius = "Nebius",
-  deepseek = "DeepSeek",
-  perplexity = "Perplexity",
-  fireworks = "Fireworks",
-  deepinfra = "DeepInfra",
-  hyperbolic = "Hyperbolic",
-  hf = "Hugging Face",
-  `local-native` = "Native STT (local)",
-  `local-openai` = "OpenAI-compatible STT (local)",
-  gemini = "Gemini",
-  fal = "FAL",
-  replicate = "Replicate",
-  ollama = "Ollama",
-  llamacpp = "llama-cpp"
-)
+.MODEL_PROVIDER_LABELS <- .GENFLOW_PROVIDER_LABELS
 
 .MODEL_SPECIAL_LABELS <- c(
   all = "All providers",
@@ -117,7 +95,8 @@
 }
 
 .model_update_provider_ids <- function() {
-  setdiff(.model_provider_ids(), "local-openai")
+  registry <- .genflow_provider_registry()
+  c(names(Filter(function(spec) !is.null(spec$catalog_function), registry)), names(.genflow_list_custom_provider_configs()))
 }
 
 .default_models_dir <- function() {
@@ -2123,8 +2102,6 @@
 
   invisible(config)
 }
-
-ui <- .app_ui()
 
 server <- function(input, output, session) {
   setup_state <- reactiveValues(
@@ -7104,4 +7081,4 @@ server <- function(input, output, session) {
   output$agent_override_fields <- renderUI(.render_kv_fields(agent_state$overrides, "agent_override", input, session))
 }
 
-genflow_agent_app <- shinyApp(ui = ui, server = server)
+.genflow_agent_app <- function() shinyApp(ui = .app_ui(), server = server)

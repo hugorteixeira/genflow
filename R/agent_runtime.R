@@ -2,6 +2,20 @@
 #' @noRd
 .genflow_is_agent <- function(x) inherits(x, "genflow_agent")
 
+# Merge complete fields, rather than recursively combining provider payloads.
+# Later layers replace earlier values, including explicit NULL overrides.
+.genflow_merge_fields <- function(...) {
+  out <- list()
+  for (fields in list(...)) {
+    if (!length(fields)) next
+    if (is.null(names(fields)) || anyNA(names(fields)) || any(!nzchar(names(fields)))) {
+      stop("Configuration fields must be named.", call. = FALSE)
+    }
+    for (i in seq_along(fields)) out[names(fields)[i]] <- fields[i]
+  }
+  out
+}
+
 #' @noRd
 .genflow_agent_label <- function(agent) {
   agent$label %||% agent$name %||% agent$sname %||% agent$cname
@@ -9,7 +23,7 @@
 
 #' @noRd
 .genflow_agent_clean_fields <- function(agent) {
-  args <- as.list(agent)
+  args <- .genflow_normalize_agent_fields(as.list(agent))
   args$label <- args$label %||% .genflow_agent_label(agent)
   args$name <- NULL
   args$sname <- NULL
@@ -84,7 +98,7 @@
     }
   }
 
-  combined <- modifyList(base_args, overrides)
+  combined <- .genflow_merge_fields(base_args, overrides)
 
   if (length(required) > 0) {
     missing_required <- required[!required %in% names(combined)]

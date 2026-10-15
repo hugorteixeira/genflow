@@ -170,6 +170,8 @@
 
 
   # --- API call with httr::timeout() and tryCatch ---
+  if (!.genflow_openai_sampling(model, reasoning)) body$temperature <- NULL
+
   response <- tryCatch(
     {
       httr::POST(
@@ -204,70 +206,11 @@
     error_msg <- paste("OpenAI API error:", http_status(response)$reason, "-", error_content)
     warning(error_msg)
     error_details <- tryCatch(fromJSON(error_content)$error$message, error = function(e) error_content)
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details)) # Keep API error details
+    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details)) # Keep API error details
   }
 
   result <- content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-  if (use_responses) {
-    if (!is.null(result$output_text)) {
-      return(result$output_text)
-    }
-    if (!is.null(result$output)) {
-      extract_segment <- function(seg) {
-        if (is.null(seg)) {
-          return("")
-        }
-        if (!is.null(seg$text)) {
-          return(seg$text)
-        }
-        if (!is.null(seg$content)) {
-          nested <- vapply(seg$content, function(item) {
-            if (!is.null(item$text)) {
-              item$text
-            } else {
-              ""
-            }
-          }, character(1), USE.NAMES = FALSE)
-          return(paste(nested[nzchar(nested)], collapse = ""))
-        }
-        ""
-      }
-      pieces <- vapply(result$output, extract_segment, character(1), USE.NAMES = FALSE)
-      pieces <- pieces[nzchar(pieces)]
-      if (length(pieces) > 0) {
-        return(paste(pieces, collapse = "\n"))
-      }
-    }
-    if (!is.null(result$response) && !is.null(result$response$output_text)) {
-      return(result$response$output_text)
-    }
-    warning("Unexpected OpenAI responses payload; returning raw structure.")
-    return(result)
-  } else {
-    message_content <- result$choices[[1]]$message
-    function_result <- NULL
-    if (!is.null(message_content$tool_calls)) {
-      function_result <- result
-    } else if (!is.null(message_content$function_call)) {
-      function_result <- result
-    }
-
-    if (!is.null(function_result)) {
-      if (inherits(function_result, "htmlwidget")) {
-        return(as.character(function_result))
-      } else {
-        return(function_result)
-      }
-    } else if (!is.null(message_content$content)) {
-      return(message_content$content)
-    } else if (!is.null(result$choices[[1]]$finish_reason) && result$choices[[1]]$finish_reason == "content_filter") {
-      warning("Content blocked by OpenAI content filter.")
-      return("CONTENT_FILTERED: Response blocked by OpenAI content filter.")
-    } else {
-      warning("Unexpected OpenAI API response. Finish reason: ", result$choices[[1]]$finish_reason)
-      return("API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found.")
-    }
-  }
+  if (use_responses) .genflow_responses_result(result) else .genflow_chat_result(result)
 }
 #' Internal: OpenRouter chat completions call
 #'
@@ -376,119 +319,23 @@
     error_msg <- paste("OpenRouter API error:", http_status(response)$reason, "-", error_content)
     warning(error_msg)
     error_details <- tryCatch(fromJSON(error_content)$error$message, error = function(e) error_content)
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details)) # Keep API error details
+    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details)) # Keep API error details
   }
   result <- content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-  message_content <- result$choices[[1]]$message
-  function_result <- NULL
-  if (!is.null(message_content$tool_calls)) {
-    function_result <- result
-  }
-  if (!is.null(function_result)) {
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    } else {
-      return(function_result)
-    }
-  } else if (!is.null(message_content$content)) {
-    return(message_content$content)
-  } else if (!is.null(result$choices[[1]]$finish_reason) && result$choices[[1]]$finish_reason == "content_filter") {
-    warning("Content blocked by filter (OpenRouter/model).")
-    return("CONTENT_FILTERED: Response blocked by content filter.")
-  } else {
-    warning("Unexpected OpenRouter API response. Finish reason: ", result$choices[[1]]$finish_reason)
-    return("API_RESPONSE_ERRORR: No valid content or tool_calls found.")
-  }
+  .genflow_chat_result(result)
 }
 
 #' @keywords internal
 #' @noRd
-.groq_base_url <- function() {
-  base_url <- Sys.getenv("GROQ_BASE_URL", "https://api.groq.com")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.groq.com"
-  }
-  sub("/+$", "", base_url)
-}
+.groq_base_url <- function() .genflow_compat_base_url("groq")
 
 #' @keywords internal
 #' @noRd
-.groq_api_key <- function() {
-  trimws(Sys.getenv("GROQ_API_KEY", ""))
-}
+.groq_api_key <- function() .genflow_compat_key("groq")
 
 #' @keywords internal
 #' @noRd
-.groq_resolve_model <- function(model, timeout_secs = 10) {
-  model_chr <- as.character(model %||% "")[1]
-  model_chr <- trimws(model_chr)
-  if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
-    return(model_chr)
-  }
-
-  model_env <- trimws(Sys.getenv("GROQ_MODEL", ""))
-  if (nzchar(model_env)) {
-    return(model_env)
-  }
-
-  api_key <- .groq_api_key()
-  if (!nzchar(api_key)) {
-    return("llama-3.3-70b-versatile")
-  }
-
-  discovery_timeout <- if (is.numeric(timeout_secs) && length(timeout_secs) == 1 && !is.na(timeout_secs) && timeout_secs > 0) {
-    min(timeout_secs, 10)
-  } else {
-    10
-  }
-
-  base_url <- .groq_base_url()
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  discovered_model <- tryCatch(
-    {
-      models_response <- httr::GET(
-        url = paste0(base_url, "/openai/v1/models"),
-        headers,
-        httr::timeout(discovery_timeout)
-      )
-      if (httr::status_code(models_response) != 200) {
-        stop(
-          "Groq model discovery returned HTTP ",
-          httr::status_code(models_response),
-          call. = FALSE
-        )
-      }
-
-      models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
-      models <- models_content$data %||% models_content$models
-      model_values <- character()
-      if (is.data.frame(models) && nrow(models) > 0) {
-        model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
-      } else if (is.list(models) && length(models) > 0) {
-        model_values <- vapply(models, function(entry) {
-          if (!is.list(entry)) {
-            return("")
-          }
-          as.character(entry$id %||% entry$model %||% entry$name %||% "")
-        }, character(1), USE.NAMES = FALSE)
-      }
-      model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
-      if (length(model_values) == 0) {
-        ""
-      } else {
-        model_values[[1]]
-      }
-    },
-    error = function(e) ""
-  )
-
-  if (nzchar(discovered_model)) discovered_model else "llama-3.3-70b-versatile"
-}
+.groq_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("groq", model, timeout_secs)
 
 #' Internal: Groq OpenAI-compatible chat call
 #'
@@ -497,237 +344,22 @@
 #'
 #' @keywords internal
 #' @noRd
-.gen_txt_groq <- function(prompt,
-                          model,
-                          temp_v,
-                          reasoning,
-                          add_img,
-                          tools = FALSE,
-                          my_tools = NULL,
-                          plugins = NULL,
-                          timeout_secs = 80) {
-  base_url <- .groq_base_url()
-  api_key <- .groq_api_key()
-  if (!nzchar(api_key)) {
-    stop("Environment variable GROQ_API_KEY not set.")
-  }
-  model <- .groq_resolve_model(model, timeout_secs = timeout_secs)
-  api_url <- paste0(base_url, "/openai/v1/chat/completions")
-
-  if (!is.null(reasoning)) {
-    warning("`reasoning` is currently ignored for service = 'groq'.")
-  }
-  if (!is.null(plugins)) {
-    warning("`plugins` is currently ignored for service = 'groq'.")
-  }
-
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(
-      list(type = "text", text = prompt),
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    prompt
-  })
-
-  body <- list(
-    model = model,
-    messages = list(initial_message),
-    temperature = temp_v
-  )
-  if (isTRUE(tools)) {
-    tools_payload <- NULL
-    if (is.function(my_tools)) {
-      tools_payload <- tryCatch(my_tools(), error = function(e) {
-        warning("Error while building tools for Groq: ", conditionMessage(e))
-        NULL
-      })
-    } else if (!is.null(my_tools)) {
-      tools_payload <- my_tools
-    }
-    if (!is.null(tools_payload)) {
-      body$tools <- tools_payload
-      body$tool_choice <- "auto"
-    }
-  }
-
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  response <- tryCatch(
-    {
-      httr::POST(
-        url = api_url,
-        headers,
-        body = toJSON(body, auto_unbox = TRUE, null = "null"),
-        encode = "json",
-        config = httr::timeout(timeout_secs)
-      )
-    },
-    error = function(e) {
-      err_msg <- conditionMessage(e)
-      if (grepl("Timeout was reached|Operation timed out", err_msg, ignore.case = TRUE)) {
-        warning(paste("HTTR timeout in .gen_txt_groq after", timeout_secs, "seconds:", err_msg))
-        return(paste0("TIMEOUT_ERRORR_HTTR: API call exceeded ", timeout_secs, " seconds."))
-      }
-      warning(paste("HTTR error in .gen_txt_groq:", err_msg))
-      paste0("HTTR_ERRORR: ", err_msg)
-    }
-  )
-
-  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
-    return(response)
-  }
-
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
-  }
-
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse Groq response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
-
-  if (is.null(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by Groq.")
-  }
-
-  first_choice <- NULL
-  if (is.list(result$choices) && length(result$choices) >= 1) {
-    first_choice <- result$choices[[1]]
-  }
-
-  message_content <- first_choice$message %||% result$message
-  function_result <- NULL
-  if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
-    function_result <- result
-  }
-
-  if (!is.null(function_result)) {
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    }
-    return(function_result)
-  }
-
-  response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
-  if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
-    return(response_text)
-  }
-
-  finish_reason <- first_choice$finish_reason %||% ""
-  if (identical(finish_reason, "content_filter")) {
-    warning("Content blocked by filter (Groq/model).")
-    return("CONTENT_FILTERED: Response blocked by content filter.")
-  }
-
-  warning("Unexpected Groq API response. Finish reason: ", finish_reason)
-  "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+.gen_txt_groq <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("groq", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.cerebras_base_url <- function() {
-  base_url <- Sys.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.cerebras.ai"
-  }
-  sub("/+$", "", base_url)
-}
+.cerebras_base_url <- function() .genflow_compat_base_url("cerebras")
 
 #' @keywords internal
 #' @noRd
-.cerebras_api_key <- function() {
-  trimws(Sys.getenv("CEREBRAS_API_KEY", ""))
-}
+.cerebras_api_key <- function() .genflow_compat_key("cerebras")
 
 #' @keywords internal
 #' @noRd
-.cerebras_resolve_model <- function(model, timeout_secs = 10) {
-  model_chr <- as.character(model %||% "")[1]
-  model_chr <- trimws(model_chr)
-  if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
-    return(model_chr)
-  }
-
-  model_env <- trimws(Sys.getenv("CEREBRAS_MODEL", ""))
-  if (nzchar(model_env)) {
-    return(model_env)
-  }
-
-  api_key <- .cerebras_api_key()
-  if (!nzchar(api_key)) {
-    return("llama-3.3-70b")
-  }
-
-  discovery_timeout <- if (is.numeric(timeout_secs) && length(timeout_secs) == 1 && !is.na(timeout_secs) && timeout_secs > 0) {
-    min(timeout_secs, 10)
-  } else {
-    10
-  }
-
-  base_url <- .cerebras_base_url()
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  discovered_model <- tryCatch(
-    {
-      models_response <- httr::GET(
-        url = paste0(base_url, "/v1/models"),
-        headers,
-        httr::timeout(discovery_timeout)
-      )
-      if (httr::status_code(models_response) != 200) {
-        stop(
-          "Cerebras model discovery returned HTTP ",
-          httr::status_code(models_response),
-          call. = FALSE
-        )
-      }
-
-      models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
-      models <- models_content$data %||% models_content$models
-      model_values <- character()
-      if (is.data.frame(models) && nrow(models) > 0) {
-        model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
-      } else if (is.list(models) && length(models) > 0) {
-        model_values <- vapply(models, function(entry) {
-          if (!is.list(entry)) {
-            return("")
-          }
-          as.character(entry$id %||% entry$model %||% entry$name %||% "")
-        }, character(1), USE.NAMES = FALSE)
-      }
-      model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
-      if (length(model_values) == 0) {
-        ""
-      } else {
-        model_values[[1]]
-      }
-    },
-    error = function(e) ""
-  )
-
-  if (nzchar(discovered_model)) discovered_model else "llama-3.3-70b"
-}
+.cerebras_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("cerebras", model, timeout_secs)
 
 #' Internal: Cerebras OpenAI-compatible chat call
 #'
@@ -736,237 +368,22 @@
 #'
 #' @keywords internal
 #' @noRd
-.gen_txt_cerebras <- function(prompt,
-                              model,
-                              temp_v,
-                              reasoning,
-                              add_img,
-                              tools = FALSE,
-                              my_tools = NULL,
-                              plugins = NULL,
-                              timeout_secs = 80) {
-  base_url <- .cerebras_base_url()
-  api_key <- .cerebras_api_key()
-  if (!nzchar(api_key)) {
-    stop("Environment variable CEREBRAS_API_KEY not set.")
-  }
-  model <- .cerebras_resolve_model(model, timeout_secs = timeout_secs)
-  api_url <- paste0(base_url, "/v1/chat/completions")
-
-  if (!is.null(reasoning)) {
-    warning("`reasoning` is currently ignored for service = 'cerebras'.")
-  }
-  if (!is.null(plugins)) {
-    warning("`plugins` is currently ignored for service = 'cerebras'.")
-  }
-
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(
-      list(type = "text", text = prompt),
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    prompt
-  })
-
-  body <- list(
-    model = model,
-    messages = list(initial_message),
-    temperature = temp_v
-  )
-  if (isTRUE(tools)) {
-    tools_payload <- NULL
-    if (is.function(my_tools)) {
-      tools_payload <- tryCatch(my_tools(), error = function(e) {
-        warning("Error while building tools for Cerebras: ", conditionMessage(e))
-        NULL
-      })
-    } else if (!is.null(my_tools)) {
-      tools_payload <- my_tools
-    }
-    if (!is.null(tools_payload)) {
-      body$tools <- tools_payload
-      body$tool_choice <- "auto"
-    }
-  }
-
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  response <- tryCatch(
-    {
-      httr::POST(
-        url = api_url,
-        headers,
-        body = toJSON(body, auto_unbox = TRUE, null = "null"),
-        encode = "json",
-        config = httr::timeout(timeout_secs)
-      )
-    },
-    error = function(e) {
-      err_msg <- conditionMessage(e)
-      if (grepl("Timeout was reached|Operation timed out", err_msg, ignore.case = TRUE)) {
-        warning(paste("HTTR timeout in .gen_txt_cerebras after", timeout_secs, "seconds:", err_msg))
-        return(paste0("TIMEOUT_ERRORR_HTTR: API call exceeded ", timeout_secs, " seconds."))
-      }
-      warning(paste("HTTR error in .gen_txt_cerebras:", err_msg))
-      paste0("HTTR_ERRORR: ", err_msg)
-    }
-  )
-
-  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
-    return(response)
-  }
-
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
-  }
-
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse Cerebras response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
-
-  if (is.null(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by Cerebras.")
-  }
-
-  first_choice <- NULL
-  if (is.list(result$choices) && length(result$choices) >= 1) {
-    first_choice <- result$choices[[1]]
-  }
-
-  message_content <- first_choice$message %||% result$message
-  function_result <- NULL
-  if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
-    function_result <- result
-  }
-
-  if (!is.null(function_result)) {
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    }
-    return(function_result)
-  }
-
-  response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
-  if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
-    return(response_text)
-  }
-
-  finish_reason <- first_choice$finish_reason %||% ""
-  if (identical(finish_reason, "content_filter")) {
-    warning("Content blocked by filter (Cerebras/model).")
-    return("CONTENT_FILTERED: Response blocked by content filter.")
-  }
-
-  warning("Unexpected Cerebras API response. Finish reason: ", finish_reason)
-  "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+.gen_txt_cerebras <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("cerebras", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.together_base_url <- function() {
-  base_url <- Sys.getenv("TOGETHER_BASE_URL", "https://api.together.xyz")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.together.xyz"
-  }
-  sub("/+$", "", base_url)
-}
+.together_base_url <- function() .genflow_compat_base_url("together")
 
 #' @keywords internal
 #' @noRd
-.together_api_key <- function() {
-  trimws(Sys.getenv("TOGETHER_API_KEY", ""))
-}
+.together_api_key <- function() .genflow_compat_key("together")
 
 #' @keywords internal
 #' @noRd
-.together_resolve_model <- function(model, timeout_secs = 10) {
-  model_chr <- as.character(model %||% "")[1]
-  model_chr <- trimws(model_chr)
-  if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
-    return(model_chr)
-  }
-
-  model_env <- trimws(Sys.getenv("TOGETHER_MODEL", ""))
-  if (nzchar(model_env)) {
-    return(model_env)
-  }
-
-  api_key <- .together_api_key()
-  if (!nzchar(api_key)) {
-    return("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo")
-  }
-
-  discovery_timeout <- if (is.numeric(timeout_secs) && length(timeout_secs) == 1 && !is.na(timeout_secs) && timeout_secs > 0) {
-    min(timeout_secs, 10)
-  } else {
-    10
-  }
-
-  base_url <- .together_base_url()
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  discovered_model <- tryCatch(
-    {
-      models_response <- httr::GET(
-        url = paste0(base_url, "/v1/models"),
-        headers,
-        httr::timeout(discovery_timeout)
-      )
-      if (httr::status_code(models_response) != 200) {
-        stop(
-          "Together model discovery returned HTTP ",
-          httr::status_code(models_response),
-          call. = FALSE
-        )
-      }
-
-      models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
-      models <- models_content$data %||% models_content$models
-      model_values <- character()
-      if (is.data.frame(models) && nrow(models) > 0) {
-        model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
-      } else if (is.list(models) && length(models) > 0) {
-        model_values <- vapply(models, function(entry) {
-          if (!is.list(entry)) {
-            return("")
-          }
-          as.character(entry$id %||% entry$model %||% entry$name %||% "")
-        }, character(1), USE.NAMES = FALSE)
-      }
-      model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
-      if (length(model_values) == 0) {
-        ""
-      } else {
-        model_values[[1]]
-      }
-    },
-    error = function(e) ""
-  )
-
-  if (nzchar(discovered_model)) discovered_model else "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
-}
+.together_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("together", model, timeout_secs)
 
 #' Internal: Together OpenAI-compatible chat call
 #'
@@ -975,244 +392,22 @@
 #'
 #' @keywords internal
 #' @noRd
-.gen_txt_together <- function(prompt,
-                              model,
-                              temp_v,
-                              reasoning,
-                              add_img,
-                              tools = FALSE,
-                              my_tools = NULL,
-                              plugins = NULL,
-                              timeout_secs = 80) {
-  base_url <- .together_base_url()
-  api_key <- .together_api_key()
-  if (!nzchar(api_key)) {
-    stop("Environment variable TOGETHER_API_KEY not set.")
-  }
-  model <- .together_resolve_model(model, timeout_secs = timeout_secs)
-  api_url <- paste0(base_url, "/v1/chat/completions")
-
-  if (!is.null(reasoning)) {
-    warning("`reasoning` is currently ignored for service = 'together'.")
-  }
-  if (!is.null(plugins)) {
-    warning("`plugins` is currently ignored for service = 'together'.")
-  }
-
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(
-      list(type = "text", text = prompt),
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    prompt
-  })
-
-  body <- list(
-    model = model,
-    messages = list(initial_message),
-    temperature = temp_v
-  )
-  if (isTRUE(tools)) {
-    tools_payload <- NULL
-    if (is.function(my_tools)) {
-      tools_payload <- tryCatch(my_tools(), error = function(e) {
-        warning("Error while building tools for Together: ", conditionMessage(e))
-        NULL
-      })
-    } else if (!is.null(my_tools)) {
-      tools_payload <- my_tools
-    }
-    if (!is.null(tools_payload)) {
-      body$tools <- tools_payload
-      body$tool_choice <- "auto"
-    }
-  }
-
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  response <- tryCatch(
-    {
-      httr::POST(
-        url = api_url,
-        headers,
-        body = toJSON(body, auto_unbox = TRUE, null = "null"),
-        encode = "json",
-        config = httr::timeout(timeout_secs)
-      )
-    },
-    error = function(e) {
-      err_msg <- conditionMessage(e)
-      if (grepl("Timeout was reached|Operation timed out", err_msg, ignore.case = TRUE)) {
-        warning(paste("HTTR timeout in .gen_txt_together after", timeout_secs, "seconds:", err_msg))
-        return(paste0("TIMEOUT_ERRORR_HTTR: API call exceeded ", timeout_secs, " seconds."))
-      }
-      warning(paste("HTTR error in .gen_txt_together:", err_msg))
-      paste0("HTTR_ERRORR: ", err_msg)
-    }
-  )
-
-  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
-    return(response)
-  }
-
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
-  }
-
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse Together response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
-
-  if (is.null(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by Together.")
-  }
-
-  first_choice <- NULL
-  if (is.list(result$choices) && length(result$choices) >= 1) {
-    first_choice <- result$choices[[1]]
-  }
-
-  message_content <- first_choice$message %||% result$message
-  function_result <- NULL
-  if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
-    function_result <- result
-  }
-
-  if (!is.null(function_result)) {
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    }
-    return(function_result)
-  }
-
-  response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
-  if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
-    return(response_text)
-  }
-
-  finish_reason <- first_choice$finish_reason %||% ""
-  if (identical(finish_reason, "content_filter")) {
-    warning("Content blocked by filter (Together/model).")
-    return("CONTENT_FILTERED: Response blocked by content filter.")
-  }
-
-  warning("Unexpected Together API response. Finish reason: ", finish_reason)
-  "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+.gen_txt_together <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("together", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.sambanova_base_url <- function() {
-  base_url <- Sys.getenv("SAMBANOVA_BASE_URL", "https://api.sambanova.ai")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.sambanova.ai"
-  }
-  sub("/+$", "", base_url)
-}
+.sambanova_base_url <- function() .genflow_compat_base_url("sambanova")
 
 #' @keywords internal
 #' @noRd
-.sambanova_api_key <- function() {
-  api_key <- trimws(Sys.getenv("SAMBANOVA_API_KEY", ""))
-  if (!nzchar(api_key)) {
-    api_key <- trimws(Sys.getenv("SAMBA_API_KEY", ""))
-  }
-  api_key
-}
+.sambanova_api_key <- function() .genflow_compat_key("sambanova")
 
 #' @keywords internal
 #' @noRd
-.sambanova_resolve_model <- function(model, timeout_secs = 10) {
-  model_chr <- as.character(model %||% "")[1]
-  model_chr <- trimws(model_chr)
-  if (nzchar(model_chr) && !identical(model_chr, "gpt-5-mini")) {
-    return(model_chr)
-  }
-
-  model_env <- trimws(Sys.getenv("SAMBANOVA_MODEL", ""))
-  if (!nzchar(model_env)) {
-    model_env <- trimws(Sys.getenv("SAMBA_MODEL", ""))
-  }
-  if (nzchar(model_env)) {
-    return(model_env)
-  }
-
-  api_key <- .sambanova_api_key()
-  if (!nzchar(api_key)) {
-    return("Meta-Llama-3.1-8B-Instruct")
-  }
-
-  discovery_timeout <- if (is.numeric(timeout_secs) && length(timeout_secs) == 1 && !is.na(timeout_secs) && timeout_secs > 0) {
-    min(timeout_secs, 10)
-  } else {
-    10
-  }
-
-  base_url <- .sambanova_base_url()
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  discovered_model <- tryCatch(
-    {
-      models_response <- httr::GET(
-        url = paste0(base_url, "/v1/models"),
-        headers,
-        httr::timeout(discovery_timeout)
-      )
-      if (httr::status_code(models_response) != 200) {
-        stop(
-          "SambaNova model discovery returned HTTP ",
-          httr::status_code(models_response),
-          call. = FALSE
-        )
-      }
-
-      models_content <- httr::content(models_response, as = "parsed", type = "application/json", encoding = "UTF-8")
-      models <- models_content$data %||% models_content$models
-      model_values <- character()
-      if (is.data.frame(models) && nrow(models) > 0) {
-        model_values <- as.character(models$id %||% models$model %||% models$name %||% "")
-      } else if (is.list(models) && length(models) > 0) {
-        model_values <- vapply(models, function(entry) {
-          if (!is.list(entry)) {
-            return("")
-          }
-          as.character(entry$id %||% entry$model %||% entry$name %||% "")
-        }, character(1), USE.NAMES = FALSE)
-      }
-      model_values <- unique(trimws(model_values[!is.na(model_values) & nzchar(model_values)]))
-      if (length(model_values) == 0) {
-        ""
-      } else {
-        model_values[[1]]
-      }
-    },
-    error = function(e) ""
-  )
-
-  if (nzchar(discovered_model)) discovered_model else "Meta-Llama-3.1-8B-Instruct"
-}
+.sambanova_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("sambanova", model, timeout_secs)
 
 #' Internal: SambaNova OpenAI-compatible chat call
 #'
@@ -1221,147 +416,9 @@
 #'
 #' @keywords internal
 #' @noRd
-.gen_txt_sambanova <- function(prompt,
-                               model,
-                               temp_v,
-                               reasoning,
-                               add_img,
-                               tools = FALSE,
-                               my_tools = NULL,
-                               plugins = NULL,
-                               timeout_secs = 80) {
-  base_url <- .sambanova_base_url()
-  api_key <- .sambanova_api_key()
-  if (!nzchar(api_key)) {
-    stop("Environment variable SAMBANOVA_API_KEY not set.")
-  }
-  model <- .sambanova_resolve_model(model, timeout_secs = timeout_secs)
-  api_url <- paste0(base_url, "/v1/chat/completions")
-
-  if (!is.null(reasoning)) {
-    warning("`reasoning` is currently ignored for service = 'sambanova'.")
-  }
-  if (!is.null(plugins)) {
-    warning("`plugins` is currently ignored for service = 'sambanova'.")
-  }
-
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(
-      list(type = "text", text = prompt),
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    prompt
-  })
-
-  body <- list(
-    model = model,
-    messages = list(initial_message),
-    temperature = temp_v
-  )
-  if (isTRUE(tools)) {
-    tools_payload <- NULL
-    if (is.function(my_tools)) {
-      tools_payload <- tryCatch(my_tools(), error = function(e) {
-        warning("Error while building tools for SambaNova: ", conditionMessage(e))
-        NULL
-      })
-    } else if (!is.null(my_tools)) {
-      tools_payload <- my_tools
-    }
-    if (!is.null(tools_payload)) {
-      body$tools <- tools_payload
-      body$tool_choice <- "auto"
-    }
-  }
-
-  headers <- httr::add_headers(
-    "Content-Type" = "application/json",
-    "Authorization" = paste("Bearer", api_key)
-  )
-
-  response <- tryCatch(
-    {
-      httr::POST(
-        url = api_url,
-        headers,
-        body = toJSON(body, auto_unbox = TRUE, null = "null"),
-        encode = "json",
-        config = httr::timeout(timeout_secs)
-      )
-    },
-    error = function(e) {
-      err_msg <- conditionMessage(e)
-      if (grepl("Timeout was reached|Operation timed out", err_msg, ignore.case = TRUE)) {
-        warning(paste("HTTR timeout in .gen_txt_sambanova after", timeout_secs, "seconds:", err_msg))
-        return(paste0("TIMEOUT_ERRORR_HTTR: API call exceeded ", timeout_secs, " seconds."))
-      }
-      warning(paste("HTTR error in .gen_txt_sambanova:", err_msg))
-      paste0("HTTR_ERRORR: ", err_msg)
-    }
-  )
-
-  if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
-    return(response)
-  }
-
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
-  }
-
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse SambaNova response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
-
-  if (is.null(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by SambaNova.")
-  }
-
-  first_choice <- NULL
-  if (is.list(result$choices) && length(result$choices) >= 1) {
-    first_choice <- result$choices[[1]]
-  }
-
-  message_content <- first_choice$message %||% result$message
-  function_result <- NULL
-  if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
-    function_result <- result
-  }
-
-  if (!is.null(function_result)) {
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    }
-    return(function_result)
-  }
-
-  response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
-  if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
-    return(response_text)
-  }
-
-  finish_reason <- first_choice$finish_reason %||% ""
-  if (identical(finish_reason, "content_filter")) {
-    warning("Content blocked by filter (SambaNova/model).")
-    return("CONTENT_FILTERED: Response blocked by content filter.")
-  }
-
-  warning("Unexpected SambaNova API response. Finish reason: ", finish_reason)
-  "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+.gen_txt_sambanova <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("sambanova", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
@@ -1617,7 +674,7 @@
       },
       error = function(e) error_content
     )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
+    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
   }
 
   result <- tryCatch(
@@ -1634,37 +691,7 @@
     return(paste0("API_RESPONSE_ERRORR: Invalid JSON returned by ", provider_label, "."))
   }
 
-  first_choice <- NULL
-  if (is.list(result$choices) && length(result$choices) >= 1) {
-    first_choice <- result$choices[[1]]
-  }
-
-  message_content <- first_choice$message %||% result$message
-  function_result <- NULL
-  if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
-    function_result <- result
-  }
-
-  if (!is.null(function_result)) {
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    }
-    return(function_result)
-  }
-
-  response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
-  if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
-    return(response_text)
-  }
-
-  finish_reason <- first_choice$finish_reason %||% ""
-  if (identical(finish_reason, "content_filter")) {
-    warning("Content blocked by filter (", provider_label, "/model).")
-    return("CONTENT_FILTERED: Response blocked by content filter.")
-  }
-
-  warning("Unexpected ", provider_label, " API response. Finish reason: ", finish_reason)
-  "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+  .genflow_chat_result(result)
 }
 
 #' @keywords internal
@@ -1791,12 +818,7 @@
         plugins_field = plugins_field
       )
 
-      if (is.character(response) && (
-        startsWith(response, "API_ERRORR:") ||
-          startsWith(response, "HTTR_ERRORR:") ||
-          startsWith(response, "TIMEOUT_ERRORR_HTTR:") ||
-          startsWith(response, "API_RESPONSE_ERRORR:")
-      )) {
+      if (.genflow_try_next_route(response)) {
         last_error <- response
         next
       }
@@ -1809,374 +831,116 @@
 
 #' @keywords internal
 #' @noRd
-.nebius_base_url <- function() {
-  base_url <- Sys.getenv("NEBIUS_BASE_URL", "https://api.studio.nebius.ai")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.studio.nebius.ai"
-  }
-  sub("/+$", "", base_url)
+.nebius_base_url <- function() .genflow_compat_base_url("nebius")
+
+#' @keywords internal
+#' @noRd
+.nebius_api_key <- function() .genflow_compat_key("nebius")
+
+#' @keywords internal
+#' @noRd
+.nebius_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("nebius", model, timeout_secs)
+
+#' @keywords internal
+#' @noRd
+.gen_txt_nebius <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("nebius", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.nebius_api_key <- function() {
-  trimws(Sys.getenv("NEBIUS_API_KEY", ""))
+.deepseek_base_url <- function() .genflow_compat_base_url("deepseek")
+
+#' @keywords internal
+#' @noRd
+.deepseek_api_key <- function() .genflow_compat_key("deepseek")
+
+#' @keywords internal
+#' @noRd
+.deepseek_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("deepseek", model, timeout_secs)
+
+#' @keywords internal
+#' @noRd
+.gen_txt_deepseek <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("deepseek", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.nebius_resolve_model <- function(model, timeout_secs = 10) {
-  .openai_compat_resolve_model(
-    model = model,
-    timeout_secs = timeout_secs,
-    model_env_vars = c("NEBIUS_MODEL"),
-    api_key = .nebius_api_key(),
-    default_model = "meta-llama/Meta-Llama-3.1-70B-Instruct",
-    base_url = .nebius_base_url(),
-    model_paths = c("/v1/models", "/models")
-  )
+.perplexity_base_url <- function() .genflow_compat_base_url("perplexity")
+
+#' @keywords internal
+#' @noRd
+.perplexity_api_key <- function() .genflow_compat_key("perplexity")
+
+#' @keywords internal
+#' @noRd
+.perplexity_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("perplexity", model, timeout_secs)
+
+#' @keywords internal
+#' @noRd
+.gen_txt_perplexity <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("perplexity", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.gen_txt_nebius <- function(prompt,
-                            model,
-                            temp_v,
-                            reasoning,
-                            add_img,
-                            tools = FALSE,
-                            my_tools = NULL,
-                            plugins = NULL,
-                            timeout_secs = 80) {
-  base_url <- .nebius_base_url()
-  api_key <- .nebius_api_key()
-  model <- .nebius_resolve_model(model, timeout_secs = timeout_secs)
-  .gen_txt_openai_compatible(
-    provider_label = "Nebius",
-    prompt = prompt,
-    model = model,
-    temp_v = temp_v,
-    reasoning = reasoning,
-    add_img = add_img,
-    tools = tools,
-    my_tools = my_tools,
-    plugins = plugins,
-    timeout_secs = timeout_secs,
-    base_url = base_url,
-    api_key = api_key,
-    chat_path = "/v1/chat/completions"
-  )
+.fireworks_base_url <- function() .genflow_compat_base_url("fireworks")
+
+#' @keywords internal
+#' @noRd
+.fireworks_api_key <- function() .genflow_compat_key("fireworks")
+
+#' @keywords internal
+#' @noRd
+.fireworks_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("fireworks", model, timeout_secs)
+
+#' @keywords internal
+#' @noRd
+.gen_txt_fireworks <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("fireworks", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.deepseek_base_url <- function() {
-  base_url <- Sys.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.deepseek.com"
-  }
-  sub("/+$", "", base_url)
+.deepinfra_base_url <- function() .genflow_compat_base_url("deepinfra")
+
+#' @keywords internal
+#' @noRd
+.deepinfra_api_key <- function() .genflow_compat_key("deepinfra")
+
+#' @keywords internal
+#' @noRd
+.deepinfra_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("deepinfra", model, timeout_secs)
+
+#' @keywords internal
+#' @noRd
+.gen_txt_deepinfra <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("deepinfra", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 #' @keywords internal
 #' @noRd
-.deepseek_api_key <- function() {
-  trimws(Sys.getenv("DEEPSEEK_API_KEY", ""))
-}
+.hyperbolic_base_url <- function() .genflow_compat_base_url("hyperbolic")
 
 #' @keywords internal
 #' @noRd
-.deepseek_resolve_model <- function(model, timeout_secs = 10) {
-  .openai_compat_resolve_model(
-    model = model,
-    timeout_secs = timeout_secs,
-    model_env_vars = c("DEEPSEEK_MODEL"),
-    api_key = .deepseek_api_key(),
-    default_model = "deepseek-chat",
-    base_url = .deepseek_base_url(),
-    model_paths = c("/models", "/v1/models")
-  )
-}
+.hyperbolic_api_key <- function() .genflow_compat_key("hyperbolic")
 
 #' @keywords internal
 #' @noRd
-.gen_txt_deepseek <- function(prompt,
-                              model,
-                              temp_v,
-                              reasoning,
-                              add_img,
-                              tools = FALSE,
-                              my_tools = NULL,
-                              plugins = NULL,
-                              timeout_secs = 80) {
-  base_url <- .deepseek_base_url()
-  api_key <- .deepseek_api_key()
-  model <- .deepseek_resolve_model(model, timeout_secs = timeout_secs)
-  .gen_txt_openai_compatible(
-    provider_label = "DeepSeek",
-    prompt = prompt,
-    model = model,
-    temp_v = temp_v,
-    reasoning = reasoning,
-    add_img = add_img,
-    tools = tools,
-    my_tools = my_tools,
-    plugins = plugins,
-    timeout_secs = timeout_secs,
-    base_url = base_url,
-    api_key = api_key,
-    chat_path = "/chat/completions"
-  )
-}
+.hyperbolic_resolve_model <- function(model, timeout_secs = 10) .genflow_compat_model("hyperbolic", model, timeout_secs)
 
 #' @keywords internal
 #' @noRd
-.perplexity_base_url <- function() {
-  base_url <- Sys.getenv("PERPLEXITY_BASE_URL", "https://api.perplexity.ai")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.perplexity.ai"
-  }
-  sub("/+$", "", base_url)
-}
-
-#' @keywords internal
-#' @noRd
-.perplexity_api_key <- function() {
-  trimws(Sys.getenv("PERPLEXITY_API_KEY", ""))
-}
-
-#' @keywords internal
-#' @noRd
-.perplexity_resolve_model <- function(model, timeout_secs = 10) {
-  .openai_compat_resolve_model(
-    model = model,
-    timeout_secs = timeout_secs,
-    model_env_vars = c("PERPLEXITY_MODEL"),
-    api_key = .perplexity_api_key(),
-    default_model = "sonar",
-    base_url = .perplexity_base_url(),
-    model_paths = c("/models", "/v1/models")
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.gen_txt_perplexity <- function(prompt,
-                                model,
-                                temp_v,
-                                reasoning,
-                                add_img,
-                                tools = FALSE,
-                                my_tools = NULL,
-                                plugins = NULL,
-                                timeout_secs = 80) {
-  base_url <- .perplexity_base_url()
-  api_key <- .perplexity_api_key()
-  model <- .perplexity_resolve_model(model, timeout_secs = timeout_secs)
-  .gen_txt_openai_compatible(
-    provider_label = "Perplexity",
-    prompt = prompt,
-    model = model,
-    temp_v = temp_v,
-    reasoning = reasoning,
-    add_img = add_img,
-    tools = tools,
-    my_tools = my_tools,
-    plugins = plugins,
-    timeout_secs = timeout_secs,
-    base_url = base_url,
-    api_key = api_key,
-    chat_path = "/chat/completions"
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.fireworks_base_url <- function() {
-  base_url <- Sys.getenv("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.fireworks.ai/inference"
-  }
-  sub("/+$", "", base_url)
-}
-
-#' @keywords internal
-#' @noRd
-.fireworks_api_key <- function() {
-  trimws(Sys.getenv("FIREWORKS_API_KEY", ""))
-}
-
-#' @keywords internal
-#' @noRd
-.fireworks_resolve_model <- function(model, timeout_secs = 10) {
-  .openai_compat_resolve_model(
-    model = model,
-    timeout_secs = timeout_secs,
-    model_env_vars = c("FIREWORKS_MODEL"),
-    api_key = .fireworks_api_key(),
-    default_model = "accounts/fireworks/models/llama-v3p1-8b-instruct",
-    base_url = .fireworks_base_url(),
-    model_paths = c("/v1/models", "/models")
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.gen_txt_fireworks <- function(prompt,
-                               model,
-                               temp_v,
-                               reasoning,
-                               add_img,
-                               tools = FALSE,
-                               my_tools = NULL,
-                               plugins = NULL,
-                               timeout_secs = 80) {
-  base_url <- .fireworks_base_url()
-  api_key <- .fireworks_api_key()
-  model <- .fireworks_resolve_model(model, timeout_secs = timeout_secs)
-  .gen_txt_openai_compatible(
-    provider_label = "Fireworks",
-    prompt = prompt,
-    model = model,
-    temp_v = temp_v,
-    reasoning = reasoning,
-    add_img = add_img,
-    tools = tools,
-    my_tools = my_tools,
-    plugins = plugins,
-    timeout_secs = timeout_secs,
-    base_url = base_url,
-    api_key = api_key,
-    chat_path = "/v1/chat/completions"
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.deepinfra_base_url <- function() {
-  base_url <- Sys.getenv("DEEPINFRA_BASE_URL", "https://api.deepinfra.com/v1/openai")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.deepinfra.com/v1/openai"
-  }
-  sub("/+$", "", base_url)
-}
-
-#' @keywords internal
-#' @noRd
-.deepinfra_api_key <- function() {
-  trimws(Sys.getenv("DEEPINFRA_API_KEY", ""))
-}
-
-#' @keywords internal
-#' @noRd
-.deepinfra_resolve_model <- function(model, timeout_secs = 10) {
-  .openai_compat_resolve_model(
-    model = model,
-    timeout_secs = timeout_secs,
-    model_env_vars = c("DEEPINFRA_MODEL"),
-    api_key = .deepinfra_api_key(),
-    default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    base_url = .deepinfra_base_url(),
-    model_paths = c("/models", "/v1/models")
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.gen_txt_deepinfra <- function(prompt,
-                               model,
-                               temp_v,
-                               reasoning,
-                               add_img,
-                               tools = FALSE,
-                               my_tools = NULL,
-                               plugins = NULL,
-                               timeout_secs = 80) {
-  base_url <- .deepinfra_base_url()
-  api_key <- .deepinfra_api_key()
-  model <- .deepinfra_resolve_model(model, timeout_secs = timeout_secs)
-  .gen_txt_openai_compatible(
-    provider_label = "DeepInfra",
-    prompt = prompt,
-    model = model,
-    temp_v = temp_v,
-    reasoning = reasoning,
-    add_img = add_img,
-    tools = tools,
-    my_tools = my_tools,
-    plugins = plugins,
-    timeout_secs = timeout_secs,
-    base_url = base_url,
-    api_key = api_key,
-    chat_path = "/chat/completions"
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.hyperbolic_base_url <- function() {
-  base_url <- Sys.getenv("HYPERBOLIC_BASE_URL", "https://api.hyperbolic.xyz")
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.hyperbolic.xyz"
-  }
-  sub("/+$", "", base_url)
-}
-
-#' @keywords internal
-#' @noRd
-.hyperbolic_api_key <- function() {
-  trimws(Sys.getenv("HYPERBOLIC_API_KEY", ""))
-}
-
-#' @keywords internal
-#' @noRd
-.hyperbolic_resolve_model <- function(model, timeout_secs = 10) {
-  .openai_compat_resolve_model(
-    model = model,
-    timeout_secs = timeout_secs,
-    model_env_vars = c("HYPERBOLIC_MODEL"),
-    api_key = .hyperbolic_api_key(),
-    default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    base_url = .hyperbolic_base_url(),
-    model_paths = c("/v1/models", "/models")
-  )
-}
-
-#' @keywords internal
-#' @noRd
-.gen_txt_hyperbolic <- function(prompt,
-                                model,
-                                temp_v,
-                                reasoning,
-                                add_img,
-                                tools = FALSE,
-                                my_tools = NULL,
-                                plugins = NULL,
-                                timeout_secs = 80) {
-  base_url <- .hyperbolic_base_url()
-  api_key <- .hyperbolic_api_key()
-  model <- .hyperbolic_resolve_model(model, timeout_secs = timeout_secs)
-  .gen_txt_openai_compatible(
-    provider_label = "Hyperbolic",
-    prompt = prompt,
-    model = model,
-    temp_v = temp_v,
-    reasoning = reasoning,
-    add_img = add_img,
-    tools = tools,
-    my_tools = my_tools,
-    plugins = plugins,
-    timeout_secs = timeout_secs,
-    base_url = base_url,
-    api_key = api_key,
-    chat_path = "/v1/chat/completions"
-  )
+.gen_txt_hyperbolic <- function(prompt, model, temp_v, reasoning, add_img,
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+  .genflow_compat_text("hyperbolic", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
 }
 
 .GEMINI_TEXT_DEFAULT_MODEL <- "gemini-3.6-flash"
@@ -2404,7 +1168,7 @@
     }, error = function(e) error_content)
     return(paste(
       "API_ERRORR:",
-      httr::http_status(response)$reason,
+      paste0("HTTP ", httr::status_code(response), " ", httr::http_status(response)$reason),
       "-",
       as.character(error_detail)[1]
     ))
@@ -2428,7 +1192,7 @@
     is.list(part) && !is.null(part$functionCall %||% part$function_call)
   }, logical(1)))
   if (has_function_call) {
-    return(result)
+    return(.genflow_provider_success(result, .genflow_response_metadata(result)))
   }
 
   text <- vapply(parts, function(part) {
@@ -2438,7 +1202,7 @@
   }, character(1))
   text <- text[nzchar(text)]
   if (length(text)) {
-    return(paste(text, collapse = ""))
+    return(.genflow_provider_success(paste(text, collapse = ""), .genflow_response_metadata(result)))
   }
 
   block_reason <- as.character(result$promptFeedback$blockReason %||% "")[1]
@@ -2742,7 +1506,7 @@
       },
       error = function(e) error_content
     )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
+    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
   }
 
   result <- tryCatch(
@@ -2791,11 +1555,11 @@
   }
 
   if (has_tool_use || identical(result$stop_reason, "tool_use")) {
-    return(result)
+    return(.genflow_provider_success(result, .genflow_response_metadata(result)))
   }
 
   if (length(text_parts) > 0) {
-    return(paste(text_parts, collapse = "\n"))
+    return(.genflow_provider_success(paste(text_parts, collapse = "\n"), .genflow_response_metadata(result)))
   }
 
   stop_reason <- tolower(as.character(result$stop_reason %||% ""))
@@ -3003,7 +1767,7 @@
       },
       error = function(e) error_content
     )
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
+    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
   }
 
   result <- tryCatch(
@@ -3026,7 +1790,7 @@
 
   message_content <- result$message$content %||% result$response
   if (!is.null(message_content) && nzchar(trimws(paste(message_content, collapse = "")))) {
-    return(message_content)
+    return(.genflow_provider_success(message_content, .genflow_response_metadata(result)))
   }
 
   warning("Unexpected Ollama API response; no message content found.")
@@ -3282,6 +2046,7 @@
       )
 
       if (is.character(response) && (startsWith(response, "TIMEOUT_ERRORR_HTTR:") || startsWith(response, "HTTR_ERRORR:"))) {
+        if (!.genflow_try_next_route(response)) return(response)
         last_error <- response
         next
       }
@@ -3295,7 +2060,8 @@
           },
           error = function(e) error_content
         )
-        last_error <- paste("API_ERRORR:", http_status(response)$reason, "-", error_details)
+        last_error <- paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details)
+        if (!.genflow_try_next_route(last_error)) return(last_error)
         next
       }
 
@@ -3310,36 +2076,7 @@
         next
       }
 
-      first_choice <- NULL
-      if (is.list(result$choices) && length(result$choices) >= 1) {
-        first_choice <- result$choices[[1]]
-      }
-
-      message_content <- first_choice$message %||% result$message
-      function_result <- NULL
-      if (!is.null(message_content$tool_calls) || !is.null(message_content$function_call)) {
-        function_result <- result
-      }
-
-      if (!is.null(function_result)) {
-        if (inherits(function_result, "htmlwidget")) {
-          return(as.character(function_result))
-        }
-        return(function_result)
-      }
-
-      response_text <- message_content$content %||% first_choice$text %||% result$content %||% result$response
-      if (!is.null(response_text) && nzchar(trimws(paste(response_text, collapse = "")))) {
-        return(response_text)
-      }
-
-      finish_reason <- first_choice$finish_reason %||% ""
-      if (identical(finish_reason, "content_filter")) {
-        warning("Content blocked by filter (llama-cpp/model).")
-        return("CONTENT_FILTERED: Response blocked by content filter.")
-      }
-
-      last_error <- "API_RESPONSE_ERRORR: No valid content, tool_calls or function_call found."
+      return(.genflow_chat_result(result))
     }
   }
 
@@ -3379,7 +2116,7 @@
     stop("Environment variable HUGGINGFACE_API_TOKEN not set.")
   }
   # Using the TGI OpenAI-compatible endpoint format
-  api_url <- paste0("https://router.huggingface.co/hf-inference/", model) # Base URL
+  api_url <- "https://router.huggingface.co" # Base URL
   # Check if the model supports the chat completions endpoint
   # Some models might only support /generate or require a specific task endpoint
   # Assuming /v1/chat/completions is supported by the chosen model
@@ -3518,7 +2255,7 @@
     if (is.null(error_details) || error_details == error_content) {
       error_details <- tryCatch(fromJSON(error_content)$detail, error = function(e) error_content)
     }
-    return(paste("API_ERRORR:", http_status(response)$reason, "-", error_details))
+    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
   }
 
   result <- tryCatch(
@@ -3536,42 +2273,7 @@
     return(paste("API_RESPONSE_ERRORR: Failed to parse JSON response. Raw content:", substr(raw_content, 1, 500)))
   }
 
-  # Check for tool calls (OpenAI format)
-  message_content <- result$choices[[1]]$message
-  function_result <- NULL
-
-  if (!is.null(message_content$tool_calls)) {
-    if (tools) {
-      function_result <- result
-    } else {
-      warning("HuggingFace API unexpectedly returned 'tool_calls' (tools=FALSE).")
-    }
-  }
-
-  # Return function result or text content
-  if (!is.null(function_result)) {
-    if (is.character(function_result) && startsWith(function_result, "TOOL_CALL_ERRORR:")) {
-      return(function_result)
-    }
-    if (inherits(function_result, "htmlwidget")) {
-      return(as.character(function_result))
-    } else {
-      return(function_result)
-    }
-  } else if (!is.null(message_content$content)) {
-    return(message_content$content)
-    # Check finish reason (OpenAI format)
-  } else if (!is.null(result$choices[[1]]$finish_reason) && result$choices[[1]]$finish_reason == "length") {
-    warning("HuggingFace TGI response truncated (finish_reason: length).")
-    # Return empty string or error? Let's return error if content is null.
-    return("API_RESPONSE_ERRORR: Max tokens reached (finish_reason: length), but no content found.")
-  } else if (!is.null(result$choices[[1]]$finish_reason) && result$choices[[1]]$finish_reason == "tool_calls") {
-    warning("HuggingFace TGI API finished with 'tool_calls' but no valid tool call processed.")
-    return("API_RESPONSE_ERRORR: Tool call expected but not processed correctly.")
-  } else {
-    warning("Unexpected HuggingFace TGI API response. Finish reason: ", result$choices[[1]]$finish_reason)
-    return("API_RESPONSE_ERRORR: No valid content or tool_calls found.")
-  }
+  .genflow_chat_result(result)
 }
 
 #' Generate text via multiple providers
@@ -3613,16 +2315,24 @@
 #' @param base_url Optional explicit base URL for local Ollama or llama-cpp
 #'   services. Explicit values take precedence over environment variables,
 #'   local inference configuration, and built-in defaults.
-#' @param null_repeat Logical; if `TRUE`, retries on empty responses with
-#'   progressive waits. Hugging Face model-loading responses use shorter
-#'   retries and remain structured errors if the model is still unavailable.
+#' @param null_repeat Logical; retry empty responses and Hugging Face loading
+#'   responses within `retry_delays` and `retry_deadline`. Exhaustion returns
+#'   a structured error result.
 #' @param persist Logical; whether to save the response artifact and generation
 #'   statistics. Set to `FALSE` when another package owns result persistence.
+#' @param retry_delays Finite non-negative waits, in seconds, before additional
+#'   attempts. `numeric()` disables retries. Default: `c(2, 5, 10)`.
+#' @param retry_deadline Optional positive limit in seconds for the inference
+#'   attempts and waits, after model resolution. Each attempt's timeout is
+#'   bounded by the remaining time. NULL uses only the attempt count limit.
 #' @param ... Reserved for future provider-specific arguments. Supplying values
 #'   currently raises an error instead of silently ignoring them.
 #' @return A list with elements: `response_value`, `label`, `label_cat`,
 #'   `service`, `model`, `temp`, `duration`, `status_api`, `status_msg`,
-#'   `tokens_sent`, `tokens_received`.
+#'   `tokens_sent`, `tokens_received`, `schema_version`, `inference_status`,
+#'   `persistence`, `error`, and `usage`. `status_api` is ERROR if requested
+#'   persistence fails even when `inference_status` is SUCCESS. Provider token
+#'   usage, when available, is separate from legacy token estimates.
 #' @examples
 #' \dontrun{
 #' gen_txt(
@@ -3659,45 +2369,27 @@ gen_txt.default <- function(
   base_url = NULL,
   null_repeat = TRUE,
   persist = TRUE,
+  retry_delays = c(2, 5, 10),
+  retry_deadline = NULL,
   ...
 ) {
   model_was_default <- missing(model)
-  dots <- list(...)
-  if (length(dots)) {
-    dot_names <- names(dots)
-    if (is.null(dot_names)) {
-      dot_names <- rep("", length(dots))
-    }
-    dot_names[!nzchar(dot_names)] <- "<unnamed>"
-    stop(
-      "`...` is reserved and is not forwarded silently. Unsupported argument(s): ",
-      paste(unique(dot_names), collapse = ", "),
-      ". Use an explicit `gen_txt()` argument instead.",
-      call. = FALSE
-    )
+  .genflow_validate_dots(list(...), "gen_txt")
+  .genflow_validate_flag(persist, "persist")
+  .genflow_validate_flag(null_repeat, "null_repeat")
+  if (!is.numeric(timeout_api) || length(timeout_api) != 1L ||
+      is.na(timeout_api) || !is.finite(timeout_api) || timeout_api <= 0) {
+    stop("`timeout_api` must be positive finite seconds.", call. = FALSE)
   }
-  if (!is.logical(persist) || length(persist) != 1L || is.na(persist)) {
-    stop("`persist` must be TRUE or FALSE.", call. = FALSE)
+  if (!is.numeric(retry_delays) || anyNA(retry_delays) ||
+      any(!is.finite(retry_delays)) || any(retry_delays < 0)) {
+    stop("`retry_delays` must contain finite non-negative seconds.", call. = FALSE)
   }
-
-  # Helpers
-  is_emptyish <- function(x) {
-    if (is.null(x)) {
-      return(TRUE)
-    }
-    if (length(x) == 0) {
-      return(TRUE)
-    }
-    if (is.character(x)) {
-      return(nchar(trimws(paste(x, collapse = ""))) == 0)
-    }
-    FALSE
+  if (!is.null(retry_deadline) && (!is.numeric(retry_deadline) || length(retry_deadline) != 1L ||
+      is.na(retry_deadline) || !is.finite(retry_deadline) || retry_deadline <= 0)) {
+    stop("`retry_deadline` must be NULL or positive finite seconds.", call. = FALSE)
   }
-
-  # Ensure output directory exists
-  if (is.null(directory) || is.na(directory)) {
-    directory <- .genflow_default_dir("texts")
-  }
+  if (isTRUE(persist) && is.null(directory)) directory <- .genflow_default_dir("texts")
 
   # Normalize inputs possibly coming as lists/vectors
   if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
@@ -3741,42 +2433,14 @@ gen_txt.default <- function(
   if (is.list(temp)) temp <- as.numeric(temp$temperature %||% temp$temp %||% temp[[1]]) else if (is.vector(temp)) temp <- as.numeric(temp[1])
   if (!is.null(custom_provider_cfg)) {
     model <- .custom_openai_provider_resolve_model(custom_provider_cfg, model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "anthropic")) {
-    model <- .anthropic_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "nebius")) {
-    model <- .nebius_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "deepseek")) {
-    model <- .deepseek_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "perplexity")) {
-    model <- .perplexity_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "fireworks")) {
-    model <- .fireworks_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "deepinfra")) {
-    model <- .deepinfra_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "hyperbolic")) {
-    model <- .hyperbolic_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "groq")) {
-    model <- .groq_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "cerebras")) {
-    model <- .cerebras_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "together")) {
-    model <- .together_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(tolower(service), "sambanova")) {
-    model <- .sambanova_resolve_model(model, timeout_secs = timeout_api)
-  } else if (identical(service_lower, "gemini")) {
-    model <- .gemini_resolve_model(model)
-  } else if (identical(service_lower, "ollama")) {
-    model <- .ollama_resolve_model(
-      model,
-      timeout_secs = timeout_api,
-      base_url = base_url
-    )
-  } else if (identical(service_lower, "llamacpp")) {
-    model <- .llamacpp_resolve_model(
-      model,
-      timeout_secs = timeout_api,
-      base_url = base_url
-    )
+  } else {
+    resolver <- .genflow_provider_registry()[[service]]$model_resolver
+    if (!is.null(resolver)) {
+      args <- list(model = model)
+      if (service != "gemini") args$timeout_secs <- timeout_api
+      if (service %in% c("ollama", "llamacpp")) args["base_url"] <- list(base_url)
+      model <- do.call(get(resolver, envir = asNamespace("genflow")), args)
+    }
   }
   temp_v <- ifelse(is.null(temp) || !is.numeric(temp) || is.na(temp), 0.7, temp)
   reasoning_v <- NULL
@@ -3787,9 +2451,9 @@ gen_txt.default <- function(
     }
     reasoning_value <- as.character(reasoning_value)[1]
     reasoning_value <- tolower(trimws(reasoning_value))
-    valid_reasoning <- c("minimal", "low", "medium", "high", "xhigh")
+    valid_reasoning <- c("none", "minimal", "low", "medium", "high", "xhigh")
     if (is.na(reasoning_value) || !nzchar(reasoning_value) || !(reasoning_value %in% valid_reasoning)) {
-      stop("Invalid `reasoning` value. Choose one of: minimal, low, medium, high, xhigh.")
+      stop("Invalid `reasoning` value. Choose one of: none, minimal, low, medium, high, xhigh.")
     }
     reasoning_v <- reasoning_value
   }
@@ -3834,51 +2498,8 @@ gen_txt.default <- function(
     plugins_payload <- candidate
   }
 
-  # Build prompt and estimate tokens (supports strings, files, data frames, nested lists)
-  process_add <- function(context, add) {
-    if (is.null(add)) {
-      prompt <- context
-      tokens <- tryCatch(.estimate_tokens(prompt), error = function(e) NA_integer_)
-      return(list(prompt = prompt, tokens = tokens))
-    }
-
-    if (!is.list(add)) add <- as.list(add)
-    full_text <- ""
-    for (item in add) {
-      item_text <- ""
-      if (is.character(item) && length(item) == 1 && file.exists(item)) {
-        ext <- tools::file_ext(item)
-        if (ext %in% c("txt", "csv")) {
-          if (ext == "txt") {
-            txt <- readLines(item, encoding = "UTF-8", warn = FALSE)
-            item_text <- paste(txt, collapse = "\n")
-          } else {
-            df <- read.csv(item, stringsAsFactors = FALSE)
-            item_text <- paste(capture.output(print(df)), collapse = "\n")
-          }
-        } else {
-          stop("Unsupported file format. Use .txt or .csv.")
-        }
-      } else if (is.character(item)) {
-        item_text <- item
-      } else if (is.data.frame(item) || is.matrix(item)) {
-        item_text <- paste(capture.output(print(item)), collapse = "\n")
-      } else if (is.list(item)) {
-        item_text <- paste(unlist(rapply(item, function(x) as.character(x))), collapse = "\n")
-      } else {
-        item_text <- as.character(item)
-      }
-      full_text <- paste(full_text, item_text, sep = "\n")
-    }
-
-    prompt <- paste(context, "\n\nText:\n", full_text)
-    tokens <- tryCatch(.estimate_tokens(prompt), error = function(e) NA_integer_)
-    list(prompt = prompt, tokens = tokens)
-  }
-
-  info <- process_add(context, add)
-  prompt <- info$prompt
-  tokens_sent <- info$tokens
+  prompt <- .genflow_prepare_prompt(context, add)
+  tokens_sent <- tryCatch(.estimate_tokens(prompt), error = function(e) NA_integer_)
 
   # Wrapper that dispatches to provider-specific functions.
   .do_call <- function(service, prompt, model, temp_v, reasoning, add_img, tools,
@@ -3898,175 +2519,68 @@ gen_txt.default <- function(
         timeout_secs = timeout_api
       ))
     }
-    switch(tolower(service),
-      "openai" = .gen_txt_openai(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "openrouter" = .gen_txt_openrouter(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "anthropic" = .gen_txt_anthropic(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "nebius" = .gen_txt_nebius(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "deepseek" = .gen_txt_deepseek(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "perplexity" = .gen_txt_perplexity(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "fireworks" = .gen_txt_fireworks(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "deepinfra" = .gen_txt_deepinfra(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "hyperbolic" = .gen_txt_hyperbolic(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "cerebras" = .gen_txt_cerebras(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "together" = .gen_txt_together(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "sambanova" = .gen_txt_sambanova(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "groq" = .gen_txt_groq(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "gemini" = .gen_txt_gemini(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "hf" = .gen_txt_hf(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api),
-      "ollama" = .gen_txt_ollama(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api, base_url = base_url),
-      "llamacpp" = .gen_txt_llamacpp(prompt, model, temp_v, reasoning, add_img, tools = tools, my_tools = my_tools, plugins = plugins, timeout_secs = timeout_api, base_url = base_url),
-      paste0("SERVICE_NOT_IMPLEMENTED: ", service)
-    )
+    spec <- .genflow_provider_registry()[[service]]
+    if (is.null(spec$text_function)) return(.genflow_provider_failure(paste0("SERVICE_NOT_IMPLEMENTED: ", service)))
+    args <- list(prompt = prompt, model = model, temp_v = temp_v, reasoning = reasoning,
+                 add_img = add_img, tools = tools, my_tools = my_tools,
+                 plugins = plugins, timeout_secs = timeout_api)
+    if (service %in% c("ollama", "llamacpp")) args["base_url"] <- list(base_url)
+    do.call(get(spec$text_function, envir = asNamespace("genflow")), args)
+
   }
 
-  # Call provider with timing
   sent_at <- Sys.time()
-  api_call_error <- NULL
-
-  response_api <- tryCatch(
-    .do_call(
+  attempts <- 0L
+  invoke <- function() {
+    remaining <- if (is.null(retry_deadline)) Inf else
+      retry_deadline - as.numeric(difftime(Sys.time(), sent_at, units = "secs"))
+    if (remaining <= 0) return(.genflow_provider_failure("DEADLINE_EXCEEDED", retryable = FALSE))
+    attempts <<- attempts + 1L
+    tryCatch(.genflow_provider_result(.do_call(
       service, prompt, model, temp_v, reasoning_v, add_img, tools_flag,
-      tools_payload, plugins_payload, timeout_api, base_url
-    ),
-    error = function(e) {
-      api_call_error <<- paste("Error during API call execution:", conditionMessage(e))
-      api_call_error
-    }
-  )
-
-  is_empty_response <- function(value) {
-    identical(value, "EMPTY_OR_NULL_RESPONSE") || is_emptyish(value)
+      tools_payload, plugins_payload, min(timeout_api, remaining), base_url
+    )), error = function(e) .genflow_provider_failure(paste0("HTTR_ERRORR: ", conditionMessage(e))))
   }
-  is_retryable_response <- function(value) {
-    is_empty_response(value) || .text_is_hf_loading(value)
-  }
-
-  # Optional retry on empty/null and temporary Hugging Face model loading.
-  if (isTRUE(null_repeat) && is_retryable_response(response_api)) {
-    hf_loading_retry <- .text_is_hf_loading(response_api)
-    retry_delays <- if (hf_loading_retry) c(2, 5, 10) else c(10, 60, 600)
-    for (wait_sec in retry_delays) {
-      retry_reason <- if (.text_is_hf_loading(response_api)) {
-        "Hugging Face model is still loading"
-      } else {
-        "Empty response detected"
-      }
-      message(sprintf("%s; waiting %ds and trying again...", retry_reason, wait_sec))
-      .text_retry_sleep(wait_sec)
-      response_api <- tryCatch(
-        .do_call(
-          service, prompt, model, temp_v, reasoning_v, add_img, tools_flag,
-          tools_payload, plugins_payload, timeout_api, base_url
-        ),
-        error = function(e) paste("HTTR_ERRORR: Error during API call execution:", conditionMessage(e))
-      )
-      if (!is_retryable_response(response_api)) {
-        message("Received a terminal response on retry. Proceeding.")
-        break
-      }
-    }
-    if (is_empty_response(response_api)) {
-      stop(
-        "EMPTY_OR_NULL_RESPONSE persisted after retries (",
-        paste(retry_delays, collapse = "s, "),
-        "s). Aborting.",
-        call. = FALSE
-      )
+  provider_result <- invoke()
+  retryable <- function(result) !is.null(result$error) &&
+    (identical(result$error$message, "EMPTY_OR_NULL_RESPONSE") ||
+     identical(result$error$code, "HF_MODEL_LOADING"))
+  if (isTRUE(null_repeat)) {
+    for (delay in retry_delays) {
+      if (!retryable(provider_result)) break
+      elapsed <- as.numeric(difftime(Sys.time(), sent_at, units = "secs"))
+      if (!is.null(retry_deadline) && elapsed + delay >= retry_deadline) break
+      .text_retry_sleep(delay)
+      provider_result <- invoke()
     }
   }
-
-  received_at <- Sys.time()
-  duration_response <- as.numeric(difftime(received_at, sent_at, units = "secs"))
-
-  # Classify response and compute received token estimate
-  tokens_received <- NA_integer_
-  houve_erro_api <- FALSE
-  status_msg <- "OK"
-  response_value_final <- NULL
-
-  if (!is.null(api_call_error)) {
-    houve_erro_api <- TRUE
-    status_msg <- api_call_error
-    response_value_final <- status_msg
-  } else if (is.character(response_api) &&
-    (startsWith(response_api, "TIMEOUT_ERRORR_HTTR:") ||
-      startsWith(response_api, "HTTR_ERRORR:") ||
-      startsWith(response_api, "HF_MODEL_LOADING:") ||
-      startsWith(response_api, "API_ERRORR:") ||
-      startsWith(response_api, "CONTENT_FILTERED:") ||
-      startsWith(response_api, "PROMPT_BLOCKED:") ||
-      startsWith(response_api, "SERVICE_NOT_IMPLEMENTED:") ||
-      startsWith(response_api, "API_RESPONSE_ERRORR:") ||
-      startsWith(response_api, "FUNCTION_CALL_ERRORR:") ||
-      startsWith(response_api, "TOOL_CALL_ERRORR:"))) {
-    houve_erro_api <- TRUE
-    status_msg <- response_api
-    response_value_final <- status_msg
-  } else if (is_emptyish(response_api)) {
-    houve_erro_api <- TRUE
-    status_msg <- "EMPTY_OR_NULL_RESPONSE"
-    response_value_final <- status_msg
-  } else {
-    response_value_final <- response_api
-    if (is.character(response_value_final)) {
-      tokens_received <- tryCatch(.estimate_tokens(response_value_final), error = function(e) NA_integer_)
-    } else {
-      tokens_received <- tryCatch(
-        .estimate_tokens(paste(capture.output(str(response_value_final)), collapse = "\n")),
-        error = function(e) NA_integer_
-      )
-    }
-    status_msg <- "OK"
-  }
-
-  # Define labels
-  label_base <- label
-  if (is.null(label_base)) {
-    label_base <- deparse(substitute(context))
-    label_base <- substr(gsub("[^A-Za-z0-9_.-]", "_", label_base), 1, 50)
-  }
-  label_cat <- label_base
-
-  # Persist response (assumes .save_response exists and handles logging/saving)
+  duration_response <- as.numeric(difftime(Sys.time(), sent_at, units = "secs"))
+  error <- provider_result$error
+  response_value <- if (is.null(error)) provider_result$value else error$message
+  status <- if (is.null(error)) "SUCCESS" else "ERROR"
+  tokens_received <- if (is.null(error)) tryCatch(
+    .estimate_tokens(if (is.character(response_value)) response_value else
+      jsonlite::toJSON(response_value, auto_unbox = TRUE)), error = function(e) NA_integer_
+  ) else NA_integer_
+  label_base <- label %||% substr(gsub("[^A-Za-z0-9_.-]", "_", deparse(substitute(context))), 1, 50)
+  label_cat <- .sanitize_filename(label_base)
+  saved_file <- NA_character_
+  persistence <- list(status = "not_requested", path = NULL)
   if (isTRUE(persist)) {
-    try(
-      {
-        .save_response(
-          response_api = response_value_final,
-          context = context,
-          res_context = res_context,
-          label = label_base,
-          label_cat = label_cat,
-          service = service,
-          model = model,
-          temp = temp_v,
-          duration_response = duration_response,
-          directory = directory,
-          status = ifelse(houve_erro_api, "ERROR", "SUCCESS"),
-          tokens_sent = tokens_sent,
-          tokens_received = tokens_received %||% NA_integer_
-        )
-      },
-      silent = TRUE
-    )
+    persistence <- tryCatch({
+      saved_file <- .save_response(response_value, context, res_context, label_base,
+        label_cat, service, model, temp_v, duration_response, directory, status,
+        tokens_sent, tokens_received)
+      .genflow_persistence(saved_file)
+    }, error = function(e) .genflow_persistence(error = e))
   }
-
-  # Final structured return
-  result <- list(
-    response_value = response_value_final,
-    label = label_base,
-    label_cat = label_cat,
-    service = service,
-    model = model,
-    temp = temp_v,
-    duration = duration_response,
-    status_api = ifelse(houve_erro_api, "ERROR", "SUCCESS"),
-    status_msg = status_msg,
-    tokens_sent = tokens_sent,
-    tokens_received = tokens_received
-  )
-  return(result)
+  result <- list(response_value = response_value, label = label_base, label_cat = label_cat,
+                service = service, model = model, temp = temp_v, duration = duration_response,
+                status_api = status, status_msg = if (is.null(error)) "OK" else error$message,
+                tokens_sent = tokens_sent, tokens_received = tokens_received,
+                saved_file = saved_file, attempts = attempts)
+  result <- .genflow_merge_fields(result, provider_result$metadata)
+  .genflow_complete_result(result, inference_status = status, persistence = persistence, error = error)
 }
 
 #' @rdname gen_txt

@@ -428,7 +428,7 @@ gen_stt_signature <- function(service = "openai",
     ),
     "voicegain" = "https://api.voicegain.ai/v1/asr/transcribe/async",
     "hf" = paste0(
-      "https://api-inference.hf.co/models/",
+      "https://router.huggingface.co/hf-inference/models/",
       model %||% .stt_default_model("hf")
     ),
     "replicate" = "https://api.replicate.com/v1/predictions",

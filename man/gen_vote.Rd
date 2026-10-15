@@ -11,7 +11,9 @@ gen_vote(
   type = c("number", "letter"),
   label = "Option",
   title = "Vote Count",
-  return_winner = c("ranking", "content", "scoreboard", "id")
+  return_winner = c("ranking", "content", "scoreboard", "id", "result"),
+  min_votes = 1L,
+  ties = c("none", "first", "error")
 )
 }
 \arguments{
@@ -35,8 +37,13 @@ example, \code{"option"}).}
 \code{"Vote Count"}). Use \code{NULL} or \code{""} to skip the title.}
 
 \item{return_winner}{Return mode: \code{"ranking"} (default), \code{"scoreboard"},
-\code{"id"}, or \code{"content"}. Logical \code{TRUE}/\code{FALSE} remains accepted as a
+\code{"id"}, \code{"content"}, or \code{"result"} (structured decision). Logical \code{TRUE}/\code{FALSE} remains accepted as a
 compatibility alias for \code{"id"}/\code{"ranking"}.}
+
+\item{min_votes}{Minimum number of valid ballots required for a winner.}
+
+\item{ties}{Tie policy: \code{"none"} (no winner), \code{"first"} (explicit legacy
+ordering), or \code{"error"}. Rankings and scoreboards remain available.}
 }
 \value{
 Invisibly returns the value selected by \code{return_winner}: a named

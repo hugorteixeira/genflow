@@ -89,7 +89,8 @@ test_that("Gemini runtime sends the documented generateContent request", {
     timeout_secs = 5
   )
 
-  expect_identical(value, "hello world")
+  expect_identical(value$value, "hello world")
+  expect_null(value$error)
   expect_match(
     captured$url,
     "/v1beta/models/gemini-test:generateContent$"
@@ -124,7 +125,7 @@ test_that("Gemini function calls and filters preserve the runtime contract", {
     genflow:::.gen_txt_gemini(
       "hello", "gemini-test", 1, NULL, NULL,
       tools = FALSE, timeout_secs = 5
-    ),
+    )$value,
     payload
   )
 

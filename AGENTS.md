@@ -17,6 +17,12 @@ Primary goal: keep provider integrations consistent across runtime, batch, model
   the complete history.
 
 ## Architecture Map
+- Provider registry: `R/aaa-provider_registry.R` owns adapter labels,
+  capabilities, dispatch names, and compatible-provider endpoint/config facts.
+  `gen_capabilities()` reports adapter support, not model qualification.
+- Common boundaries: `R/runtime_contract.R` owns typed results, prompt inputs,
+  validation and response parsing; `R/runtime_context.R` owns batch snapshots;
+  `R/artifact_storage.R` owns unique, contained, atomic output publication.
 - Text runtime entrypoint: `R/text_functions.R`
   - `gen_txt.default()` normalizes inputs, dispatches by `service`, saves output, returns structured status list.
   - Provider implementations currently in-tree: `.gen_txt_openai()`, `.gen_txt_openrouter()`, `.gen_txt_hf()`, `.gen_txt_ollama()`, `.gen_txt_llamacpp()`.
@@ -38,7 +44,8 @@ Primary goal: keep provider integrations consistent across runtime, batch, model
 - TTS runtime entrypoint: `R/tts_functions.R` (`gen_tts.default()` + provider-specific internals).
 - Batch/parallel runtime:
   - `R/batch_functions.R` orchestrates batches.
-  - `R/helper_functions.R` contains `.execute_agent_task()` which calls `gen_txt()`/`gen_img()`.
+  - `R/helper_functions.R` contains `.execute_agent_task()` which uses the same
+    `.genflow_prepare_agent_args()` and generator defaults as direct agent calls.
   - `gen_batch_agent()` passes one `genflow_agent` directly to all tasks; do not
     reintroduce one temporary `.GlobalEnv` clone per task.
   - Keep task count (`qty`) separate from concurrency (`workers`). Vision
@@ -62,6 +69,12 @@ All high-level generators should return a list with this shape (or compatible su
 - `duration`
 - `status_api` (`"SUCCESS"` or `"ERROR"`)
 - `status_msg`
+- `schema_version`, `inference_status`, `persistence`, `error`, `usage`
+
+Persistence failure must set `status_api = "ERROR"` while preserving successful
+`inference_status` and generated content. Automatic batch recovery must not
+repeat a paid inference solely because publication failed. Model-generated
+text is wrapped as success by adapters before legacy sentinel normalization.
 
 Text (`gen_txt`) also expects token estimates and persists responses through `.save_response()`.
 Batch worker code expects list-like responses and uses `status_api` for error handling.
@@ -79,15 +92,17 @@ diarization, chunking, and chunk-merge metadata.
 1. Add internal function in `R/text_functions.R`:
    - Suggested name: `.gen_txt_<provider>()`.
    - Handle auth/config, timeout, request, response parsing, and error sentinel strings.
-2. Add switch branch in `gen_txt.default()` `.do_call`.
+2. Register it in `R/aaa-provider_registry.R`. Compatible adapters should use
+   the common transport and catalog implementation, retaining real differences
+   in their registry entries.
 3. Keep compatibility with:
    - `tools` payload handling (or explicit warning when unsupported).
    - `add_img` handling (or explicit warning when unsupported).
    - `reasoning` / `plugins` behavior (pass-through or explicit no-op warning).
-4. Ensure returned values are either:
-   - plain text content,
-   - tool/function object payload,
-   - sentinel string consumed by `gen_txt.default()` status classification.
+4. Wrap successful content/tool payloads with `.genflow_provider_success()`;
+   use `.genflow_provider_failure()` for new error paths. Legacy error strings
+   are accepted only at the normalization boundary. Never classify generated
+   text by its prefix inside an adapter's successful response path.
 5. Add model catalog updater in `R/update_functions.R` when feasible.
 6. Add provider label/options in `R/agent_interface.R` (`.MODEL_PROVIDER_LABELS`).
 7. Update docs: `README.md`, roxygen comments, and generated man pages.
@@ -141,9 +156,18 @@ diarization, chunking, and chunk-merge metadata.
   provider internals through the package namespace; PSOCK exports only current
   task state.
 
-## Current Risks To Keep In Mind
-- `gen_txt.default()` retry path currently calls `.do_call()` with mismatched arguments; be careful when touching retry logic.
-- Error sentinel prefixes are not fully consistent across providers (`API_ERROR` vs `API_ERRORR`, timeout prefix variants). Keep new provider aligned with `gen_txt.default()` classifier.
+## Runtime and Test Constraints
+- Text retries are bounded by explicit delays and an optional inference
+  deadline. Preserve exhausted failures as structured results.
+- PSOCK receives only whitelisted options and a resolved provider/local-config
+  snapshot. Credentials are resolved from the worker environment.
+- Saved/exported configurations are data, with credential references rather
+  than literal secrets or executable R values. Explicit NULL overrides clear
+  fields; later complete fields replace earlier values, without recursive merge.
+- Shiny UI construction is lazy through `.genflow_agent_app()`.
+- Fork tests combined with processx jobs require the documented
+  `PROCESSX_NOTIFY_OLD_SIGCHLD=true` setup before loading processx. The package
+  itself must not silently change the user's signal or environment settings.
 
 ## Validation Routine For Provider Changes
 - Manual smoke tests (text):

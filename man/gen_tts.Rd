@@ -21,6 +21,7 @@ gen_tts(text, ...)
   instructions = NULL,
   preview = FALSE,
   timeout_api = 240,
+  persist = TRUE,
   ...
 )
 
@@ -33,7 +34,8 @@ gen_tts(text, ...)
 
 \item{add}{Optional character appended to \code{text}.}
 
-\item{directory}{Optional output directory. Defaults to \code{getwd()/audios} if NULL.}
+\item{directory}{Optional output directory. Defaults to the configured
+Genflow output directory's \code{audios} subdirectory.}
 
 \item{label}{Optional short label used for filenames. If NULL, derived from text.}
 
@@ -55,6 +57,10 @@ may return another audio container; the saved filename and returned
 \item{preview}{Logical; attempt to open audio after save if interactive.}
 
 \item{timeout_api}{Numeric; request timeout in seconds.}
+
+\item{persist}{Logical; save to the output directory. FALSE returns a
+temporary file in \code{response_value} and sets \code{saved_file} to NA. The caller
+owns moving or deleting that file before the R session ends.}
 }
 \value{
 Invisibly returns a list with \code{response_value} (saved file path),
@@ -70,8 +76,10 @@ implementations (currently OpenAI and Replicate). Returns the saved audio file p
 \details{
 Replicate model metadata is fetched at most once per \code{gen_tts()}
 call and reused for voice validation plus prediction construction.
-Provider temporaries are removed after the final file is copied, including
-error paths.
+Provider temporaries are removed after successful publication. If saving
+fails after synthesis, the generated temporary is retained and returned;
+\code{status_api} is ERROR, \code{inference_status} is SUCCESS, and \code{error$stage} is
+\code{"persistence"}.
 
 For a \code{genflow_agent}, a saved \code{context} is used as speech text when
 the agent has no explicit \code{text}. Supply \code{text_override} through \code{...} to

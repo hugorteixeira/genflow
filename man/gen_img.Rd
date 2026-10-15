@@ -23,6 +23,7 @@ gen_img(prompt, ...)
   replicate_input = NULL,
   poll_interval = 3,
   max_poll_seconds = 600,
+  persist = TRUE,
   ...
 )
 
@@ -36,7 +37,8 @@ gen_img(prompt, ...)
 \item{add}{Optional character or object(s) to append to the prompt. If provided and
 character, it will be concatenated to \code{prompt}.}
 
-\item{directory}{Optional output directory. Defaults to \code{getwd()/imgs} if NULL.}
+\item{directory}{Optional output directory. Defaults to the configured
+Genflow output directory's \code{imgs} subdirectory.}
 
 \item{label}{Optional short label to be used in filenames. If NULL, derived from prompt.}
 
@@ -65,6 +67,10 @@ argument for model-specific schema fields.}
 
 \item{max_poll_seconds}{Maximum time in seconds to poll an asynchronous
 provider before returning an error.}
+
+\item{persist}{Logical; save to the output directory and record statistics.
+FALSE leaves the image in the R session's temporary directory, returns its
+path in \code{response_value}, and sets \code{saved_file} to NA.}
 }
 \value{
 Invisibly returns a list with fields such as \code{response_value} (saved file path

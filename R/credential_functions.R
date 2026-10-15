@@ -37,37 +37,6 @@
     .genflow_credential_spec_row("anthropic", "Anthropic", "ANTHROPIC_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.anthropic.com"),
     .genflow_credential_spec_row("anthropic", "Anthropic", "ANTHROPIC_API_VERSION", "API version", "metadata", FALSE),
 
-    .genflow_credential_spec_row("groq", "Groq", "GROQ_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("groq", "Groq", "GROQ_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.groq.com"),
-
-    .genflow_credential_spec_row("cerebras", "Cerebras", "CEREBRAS_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("cerebras", "Cerebras", "CEREBRAS_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.cerebras.ai"),
-
-    .genflow_credential_spec_row("together", "Together", "TOGETHER_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("together", "Together", "TOGETHER_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.together.xyz"),
-
-    .genflow_credential_spec_row("sambanova", "SambaNova", "SAMBANOVA_API_KEY", "API key", required_for_models = TRUE, required_group = "sambanova_api_key"),
-    .genflow_credential_spec_row("sambanova", "SambaNova", "SAMBA_API_KEY", "Samba API key alias", required_for_models = TRUE, required_group = "sambanova_api_key"),
-    .genflow_credential_spec_row("sambanova", "SambaNova", "SAMBANOVA_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.sambanova.ai"),
-
-    .genflow_credential_spec_row("nebius", "Nebius", "NEBIUS_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("nebius", "Nebius", "NEBIUS_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.studio.nebius.ai"),
-
-    .genflow_credential_spec_row("deepseek", "DeepSeek", "DEEPSEEK_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("deepseek", "DeepSeek", "DEEPSEEK_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.deepseek.com"),
-
-    .genflow_credential_spec_row("perplexity", "Perplexity", "PERPLEXITY_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("perplexity", "Perplexity", "PERPLEXITY_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.perplexity.ai"),
-
-    .genflow_credential_spec_row("fireworks", "Fireworks", "FIREWORKS_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("fireworks", "Fireworks", "FIREWORKS_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.fireworks.ai/inference"),
-
-    .genflow_credential_spec_row("deepinfra", "DeepInfra", "DEEPINFRA_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("deepinfra", "DeepInfra", "DEEPINFRA_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.deepinfra.com/v1/openai"),
-
-    .genflow_credential_spec_row("hyperbolic", "Hyperbolic", "HYPERBOLIC_API_KEY", "API key", required_for_models = TRUE),
-    .genflow_credential_spec_row("hyperbolic", "Hyperbolic", "HYPERBOLIC_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.hyperbolic.xyz"),
-
     .genflow_credential_spec_row("gemini", "Gemini", "GOOGLE_API_KEY", "Google API key", required_for_models = TRUE, required_group = "gemini_api_key"),
     .genflow_credential_spec_row("gemini", "Gemini", "GEMINI_API_KEY", "Gemini API key alias", required_for_models = TRUE, required_group = "gemini_api_key"),
     .genflow_credential_spec_row("fal", "FAL", "FAL_API_KEY", "API key", required_for_models = TRUE),
@@ -87,6 +56,18 @@
     .genflow_credential_spec_row("llamacpp", "llama-cpp", "LLAMA_CPP_API_KEY", "Optional API key alias", "api_key", TRUE, FALSE, required_group = "llamacpp_api_key")
   )
 
+  for (id in names(.GENFLOW_COMPAT_SPECS)) {
+    spec <- .genflow_compat_spec(id)
+    for (env in spec$api_key_env) {
+      rows[[length(rows) + 1L]] <- .genflow_credential_spec_row(
+        id, spec$label, env, "API key", required_for_models = TRUE,
+        required_group = paste0(id, "_api_key"))
+    }
+    rows[[length(rows) + 1L]] <- .genflow_credential_spec_row(
+      id, spec$label, spec$base_url_env, "Base URL", "base_url", FALSE,
+      default_value = spec$base_url)
+  }
+
   specs <- do.call(rbind, rows)
 
   custom_cfgs <- tryCatch(
@@ -99,6 +80,13 @@
     },
     error = function(e) list()
   )
+  for (cfg in custom_cfgs) {
+    if (nzchar(cfg$api_key_env %||% "")) {
+      specs <- rbind(specs, .genflow_credential_spec_row(
+        cfg$id, cfg$label, cfg$api_key_env, "API key",
+        required_for_models = isTRUE(cfg$api_key_required)))
+    }
+  }
   specs <- unique(specs)
   if (!is.null(providers)) {
     providers <- tolower(trimws(as.character(providers)))

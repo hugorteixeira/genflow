@@ -1,3 +1,17 @@
+.genflow_tally_votes <- function(votes, min_votes = 1L, ties = "none") {
+  counts <- sort(table(votes), decreasing = TRUE)
+  winners <- if (length(counts)) names(counts)[counts == max(counts)] else character()
+  status <- if (length(votes) < min_votes) "insufficient_votes" else if (length(winners) > 1L) "tie" else "selected"
+  if (identical(status, "tie") && identical(ties, "error")) {
+    stop("Voting ended in a tie.", call. = FALSE)
+  }
+  winner <- if (identical(status, "selected") ||
+                (identical(status, "tie") && identical(ties, "first"))) winners[[1]] else NULL
+  list(status = status, winner = winner, valid_votes = length(votes),
+       min_votes = min_votes, tied_candidates = if (length(winners) > 1L) winners else character(),
+       counts = counts)
+}
+
 #' Count voting tokens inside generated responses
 #'
 #' Scans a list of texts (typically the output lists returned by
@@ -20,8 +34,11 @@
 #' @param title Optional character title printed before the ranking (default
 #'   `"Vote Count"`). Use `NULL` or `""` to skip the title.
 #' @param return_winner Return mode: `"ranking"` (default), `"scoreboard"`,
-#'   `"id"`, or `"content"`. Logical `TRUE`/`FALSE` remains accepted as a
+#'   `"id"`, `"content"`, or `"result"` (structured decision). Logical `TRUE`/`FALSE` remains accepted as a
 #'   compatibility alias for `"id"`/`"ranking"`.
+#' @param min_votes Minimum number of valid ballots required for a winner.
+#' @param ties Tie policy: `"none"` (no winner), `"first"` (explicit legacy
+#'   ordering), or `"error"`. Rankings and scoreboards remain available.
 #'
 #' @return Invisibly returns the value selected by `return_winner`: a named
 #'   ranking, a scoreboard data frame, the winning id, or the corresponding
@@ -45,7 +62,9 @@ gen_vote <- function(voting_list,
                      type = c("number", "letter"),
                      label = "Option",
                      title = "Vote Count",
-                     return_winner = c("ranking", "content", "scoreboard", "id")) {
+                     return_winner = c("ranking", "content", "scoreboard", "id", "result"),
+                     min_votes = 1L,
+                     ties = c("none", "first", "error")) {
   if (missing(voting_list)) {
     stop("`voting_list` must be provided.", call. = FALSE)
   }
@@ -62,6 +81,8 @@ gen_vote <- function(voting_list,
   trigger <- trimws(trigger)
 
   type <- match.arg(type)
+  ties <- match.arg(ties)
+  min_votes <- .genflow_positive_integer(min_votes, "min_votes")
   if (length(return_winner) == 1L && is.logical(return_winner)) {
     if (is.na(return_winner)) {
       stop("`return_winner` cannot be NA.", call. = FALSE)
@@ -70,7 +91,7 @@ gen_vote <- function(voting_list,
   }
   return_mode <- match.arg(
     return_winner,
-    c("ranking", "content", "scoreboard", "id")
+    c("ranking", "content", "scoreboard", "id", "result")
   )
   if (identical(return_mode, "content") && is.null(underlying_list)) {
     stop(
@@ -104,7 +125,7 @@ gen_vote <- function(voting_list,
     for (single_text in text) {
       if (is.na(single_text)) next
       text_norm <- normalize_text(single_text)
-      if (!nzchar(text_norm)) next
+      if (is.na(text_norm) || !nzchar(text_norm)) next
       match_info <- regexpr(pattern, text_norm, perl = TRUE, ignore.case = TRUE)
       if (match_info[1] == -1) {
         next
@@ -127,6 +148,9 @@ gen_vote <- function(voting_list,
     }
 
     if (is.list(entry)) {
+      if (!is.null(entry$status_api) && !identical(entry$status_api, "SUCCESS")) {
+        return()
+      }
       # Skip combined statistics blocks returned by gen_batch()
       if (!is.null(entry$duration_real_secs) && !is.null(entry$parallel_mode)) {
         return()
@@ -157,7 +181,7 @@ gen_vote <- function(voting_list,
       process_entry(voting_list[[idx]])
     }
   } else {
-    process_entry(voting_list)
+    for (entry in voting_list) process_entry(entry)
   }
 
   valid_idx <- if (type == "number") {
@@ -169,12 +193,24 @@ gen_vote <- function(voting_list,
   valid_values <- vote_values[valid_idx]
   valid_models <- vote_models[valid_idx]
 
+  candidates <- if (is.null(underlying_list)) NULL else as.list(underlying_list)
+  if (!is.null(candidates)) {
+    candidates <- candidates[(names(candidates) %||% rep("", length(candidates))) != "combined_stats"]
+    allowed <- if (type == "number") as.character(seq_along(candidates)) else head(letters, length(candidates))
+    keep <- valid_values %in% allowed
+    valid_values <- valid_values[keep]
+    valid_models <- valid_models[keep]
+  }
+
+  decision <- .genflow_tally_votes(valid_values, min_votes, ties)
+  if (identical(return_mode, "result")) return(invisible(decision))
+
   if (length(valid_values) == 0) {
     message("No matches found for the requested trigger and type.")
     return(invisible(NULL))
   }
 
-  counts <- sort(table(valid_values), decreasing = TRUE)
+  counts <- decision$counts
   ranking <- character(length(counts))
 
   for (i in seq_along(counts)) {
@@ -199,7 +235,11 @@ gen_vote <- function(voting_list,
 
   cat(paste(ranking, collapse = "\n"), "\n", sep = "")
 
-  winner_value <- names(counts)[1]
+  winner_value <- decision$winner
+  if (is.null(winner_value) && return_mode %in% c("id", "content")) {
+    message("No winner: ", decision$status, ".")
+    return(invisible(NULL))
+  }
 
   select_entries <- function(lst) {
     if (is.null(lst)) {

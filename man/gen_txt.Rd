@@ -26,6 +26,8 @@ gen_txt(context, ...)
   base_url = NULL,
   null_repeat = TRUE,
   persist = TRUE,
+  retry_delays = c(2, 5, 10),
+  retry_deadline = NULL,
   ...
 )
 
@@ -82,17 +84,27 @@ call.}
 services. Explicit values take precedence over environment variables,
 local inference configuration, and built-in defaults.}
 
-\item{null_repeat}{Logical; if \code{TRUE}, retries on empty responses with
-progressive waits. Hugging Face model-loading responses use shorter
-retries and remain structured errors if the model is still unavailable.}
+\item{null_repeat}{Logical; retry empty responses and Hugging Face loading
+responses within \code{retry_delays} and \code{retry_deadline}. Exhaustion returns
+a structured error result.}
 
 \item{persist}{Logical; whether to save the response artifact and generation
 statistics. Set to \code{FALSE} when another package owns result persistence.}
+
+\item{retry_delays}{Finite non-negative waits, in seconds, before additional
+attempts. \code{numeric()} disables retries. Default: \code{c(2, 5, 10)}.}
+
+\item{retry_deadline}{Optional positive limit in seconds for the inference
+attempts and waits, after model resolution. Each attempt's timeout is
+bounded by the remaining time. NULL uses only the attempt count limit.}
 }
 \value{
 A list with elements: \code{response_value}, \code{label}, \code{label_cat},
 \code{service}, \code{model}, \code{temp}, \code{duration}, \code{status_api}, \code{status_msg},
-\code{tokens_sent}, \code{tokens_received}.
+\code{tokens_sent}, \code{tokens_received}, \code{schema_version}, \code{inference_status},
+\code{persistence}, \code{error}, and \code{usage}. \code{status_api} is ERROR if requested
+persistence fails even when \code{inference_status} is SUCCESS. Provider token
+usage, when available, is separate from legacy token estimates.
 }
 \description{
 High-level helper to send a prompt (and optional additional content and image)

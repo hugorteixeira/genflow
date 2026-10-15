@@ -423,103 +423,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_groq <- function(directory = NULL, verbose = TRUE) {
-  api_key_groq <- trimws(Sys.getenv("GROQ_API_KEY"))
-  if (api_key_groq == "") stop("Error: Environment variable 'GROQ_API_KEY' not set.")
-
-  base_url <- trimws(Sys.getenv("GROQ_BASE_URL", "https://api.groq.com"))
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.groq.com"
-  }
-  base_url <- sub("/+$", "", base_url)
-
-  api_url <- paste0(base_url, "/openai/v1/models")
-  headers <- httr::add_headers("Authorization" = paste("Bearer", api_key_groq))
-
-  if (verbose) message("Connecting to the Groq API...")
-  response <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
-    error = function(e) stop("Error connecting to the Groq API: ", e$message)
-  )
-
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("Groq API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
-
-  if (verbose) message("Processing JSON response...")
-  raw_content <- httr::content(response, "raw")
-  parsed_content <- tryCatch({ jsonlite::fromJSON(rawToChar(raw_content), simplifyVector = TRUE) },
-    error = function(e) stop("Error processing JSON from Groq API: ", e$message)
-  )
-
-  models_list <- NULL
-  if (!is.null(parsed_content) && is.list(parsed_content) && "data" %in% names(parsed_content)) {
-    if (is.data.frame(parsed_content$data)) {
-      models_list <- parsed_content$data
-    } else if (is.list(parsed_content$data)) {
-      models_list <- tryCatch({
-        list_data <- purrr::map(parsed_content$data, ~ as.list(.x))
-        dplyr::bind_rows(!!!list_data)
-      }, error = function(e) {
-        warning("Field 'data' is a list but failed conversion to data frame: ", e$message)
-        return(NULL)
-      })
-      if (is.null(models_list)) stop("Could not process the 'data' list from the Groq API response.")
-    }
-  }
-
-  if (is.null(models_list) || nrow(models_list) == 0) {
-    if (verbose) print(utils::str(parsed_content))
-    stop("Field 'data' not found, empty, or not processable in Groq API response.")
-  }
-
-  if (verbose) message("Processing ", nrow(models_list), " Groq models...")
-
-  output_df <- purrr::map_df(seq_len(nrow(models_list)), function(i) {
-    model_info <- models_list[i, ]
-    model_id_safe <- model_info$id %||% model_info$model %||% model_info$name %||% paste0("UNKNOWN_ID_", i)
-
-    model_type <- dplyr::case_when(
-      grepl("vision|vl|llava|minicpm|moondream|qwen2\\.5-vl|gemma3", model_id_safe, ignore.case = TRUE, perl = TRUE) ~ "Vision",
-      grepl("whisper|audio|tts|speech", model_id_safe, ignore.case = TRUE) ~ "Audio",
-      grepl("embed|embedding", model_id_safe, ignore.case = TRUE) ~ "Embedding",
-      TRUE ~ "Chat"
-    )
-
-    tibble::tibble(
-      service = "groq",
-      model = model_id_safe,
-      type = model_type,
-      pricing = "",
-      description = ""
-    )
-  })
-
-  if (nrow(output_df) > 0) {
-    output_df <- output_df %>%
-      dplyr::mutate(
-        pricing = sprintf('"%s"', pricing),
-        description = sprintf('"%s"', description)
-      )
-  }
-
-  if (!dir.exists(directory)) {
-    if (verbose) message("Creating directory: ", directory)
-    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
-  }
-
-  file_path <- file.path(directory, "groq.csv")
-  if (verbose) message("\nSaving ", nrow(output_df), " Groq models to: ", file_path)
-  tryCatch({
-    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
-      row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8"
-    )
-  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
-
-  if (verbose) message("File 'groq.csv' updated successfully.")
-  invisible(output_df)
-}
+.update_models_groq <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("groq", directory, verbose)
 #' Update Cerebras models list (internal)
 #'
 #' Connects to the Cerebras API, retrieves the list of models and saves a
@@ -532,103 +436,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_cerebras <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("CEREBRAS_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'CEREBRAS_API_KEY' not set.")
-
-  base_url <- trimws(Sys.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai"))
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.cerebras.ai"
-  }
-  base_url <- sub("/+$", "", base_url)
-
-  api_url <- paste0(base_url, "/v1/models")
-  headers <- httr::add_headers("Authorization" = paste("Bearer", api_key))
-
-  if (verbose) message("Connecting to the Cerebras API...")
-  response <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
-    error = function(e) stop("Error connecting to the Cerebras API: ", e$message)
-  )
-
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("Cerebras API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
-
-  if (verbose) message("Processing JSON response...")
-  raw_content <- httr::content(response, "raw")
-  parsed_content <- tryCatch({ jsonlite::fromJSON(rawToChar(raw_content), simplifyVector = TRUE) },
-    error = function(e) stop("Error processing JSON from Cerebras API: ", e$message)
-  )
-
-  models_list <- NULL
-  if (!is.null(parsed_content) && is.list(parsed_content) && "data" %in% names(parsed_content)) {
-    if (is.data.frame(parsed_content$data)) {
-      models_list <- parsed_content$data
-    } else if (is.list(parsed_content$data)) {
-      models_list <- tryCatch({
-        list_data <- purrr::map(parsed_content$data, ~ as.list(.x))
-        dplyr::bind_rows(!!!list_data)
-      }, error = function(e) {
-        warning("Field 'data' is a list but failed conversion to data frame: ", e$message)
-        return(NULL)
-      })
-      if (is.null(models_list)) stop("Could not process the 'data' list from the Cerebras API response.")
-    }
-  }
-
-  if (is.null(models_list) || nrow(models_list) == 0) {
-    if (verbose) print(utils::str(parsed_content))
-    stop("Field 'data' not found, empty, or not processable in Cerebras API response.")
-  }
-
-  if (verbose) message("Processing ", nrow(models_list), " Cerebras models...")
-
-  output_df <- purrr::map_df(seq_len(nrow(models_list)), function(i) {
-    model_info <- models_list[i, ]
-    model_id_safe <- model_info$id %||% model_info$model %||% model_info$name %||% paste0("UNKNOWN_ID_", i)
-    model_text <- tolower(model_id_safe)
-    model_type <- dplyr::case_when(
-      grepl("vision|vl|llava|minicpm|moondream|qwen2\\.5-vl|gemma3", model_text, perl = TRUE) ~ "Vision",
-      grepl("whisper|audio|tts|speech", model_text) ~ "Audio",
-      grepl("embed|embedding", model_text) ~ "Embedding",
-      TRUE ~ "Chat"
-    )
-
-    tibble::tibble(
-      service = "cerebras",
-      model = model_id_safe,
-      type = model_type,
-      pricing = "",
-      description = ""
-    )
-  })
-
-  if (nrow(output_df) > 0) {
-    output_df <- output_df %>%
-      dplyr::mutate(
-        pricing = sprintf('"%s"', pricing),
-        description = sprintf('"%s"', description)
-      )
-  }
-
-  if (!dir.exists(directory)) {
-    if (verbose) message("Creating directory: ", directory)
-    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
-  }
-
-  file_path <- file.path(directory, "cerebras.csv")
-  if (verbose) message("\nSaving ", nrow(output_df), " Cerebras models to: ", file_path)
-  tryCatch({
-    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
-      row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8"
-    )
-  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
-
-  if (verbose) message("File 'cerebras.csv' updated successfully.")
-  invisible(output_df)
-}
+.update_models_cerebras <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("cerebras", directory, verbose)
 #' Update Together models list (internal)
 #'
 #' Connects to the Together API, retrieves the list of models and saves a
@@ -641,103 +449,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_together <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("TOGETHER_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'TOGETHER_API_KEY' not set.")
-
-  base_url <- trimws(Sys.getenv("TOGETHER_BASE_URL", "https://api.together.xyz"))
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.together.xyz"
-  }
-  base_url <- sub("/+$", "", base_url)
-
-  api_url <- paste0(base_url, "/v1/models")
-  headers <- httr::add_headers("Authorization" = paste("Bearer", api_key))
-
-  if (verbose) message("Connecting to the Together API...")
-  response <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
-    error = function(e) stop("Error connecting to the Together API: ", e$message)
-  )
-
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("Together API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
-
-  if (verbose) message("Processing JSON response...")
-  raw_content <- httr::content(response, "raw")
-  parsed_content <- tryCatch({ jsonlite::fromJSON(rawToChar(raw_content), simplifyVector = TRUE) },
-    error = function(e) stop("Error processing JSON from Together API: ", e$message)
-  )
-
-  models_list <- NULL
-  if (!is.null(parsed_content) && is.list(parsed_content) && "data" %in% names(parsed_content)) {
-    if (is.data.frame(parsed_content$data)) {
-      models_list <- parsed_content$data
-    } else if (is.list(parsed_content$data)) {
-      models_list <- tryCatch({
-        list_data <- purrr::map(parsed_content$data, ~ as.list(.x))
-        dplyr::bind_rows(!!!list_data)
-      }, error = function(e) {
-        warning("Field 'data' is a list but failed conversion to data frame: ", e$message)
-        return(NULL)
-      })
-      if (is.null(models_list)) stop("Could not process the 'data' list from the Together API response.")
-    }
-  }
-
-  if (is.null(models_list) || nrow(models_list) == 0) {
-    if (verbose) print(utils::str(parsed_content))
-    stop("Field 'data' not found, empty, or not processable in Together API response.")
-  }
-
-  if (verbose) message("Processing ", nrow(models_list), " Together models...")
-
-  output_df <- purrr::map_df(seq_len(nrow(models_list)), function(i) {
-    model_info <- models_list[i, ]
-    model_id_safe <- model_info$id %||% model_info$model %||% model_info$name %||% paste0("UNKNOWN_ID_", i)
-    model_text <- tolower(model_id_safe)
-    model_type <- dplyr::case_when(
-      grepl("vision|vl|llava|minicpm|moondream|qwen2\\.5-vl|gemma3", model_text, perl = TRUE) ~ "Vision",
-      grepl("whisper|audio|tts|speech", model_text) ~ "Audio",
-      grepl("embed|embedding", model_text) ~ "Embedding",
-      TRUE ~ "Chat"
-    )
-
-    tibble::tibble(
-      service = "together",
-      model = model_id_safe,
-      type = model_type,
-      pricing = "",
-      description = ""
-    )
-  })
-
-  if (nrow(output_df) > 0) {
-    output_df <- output_df %>%
-      dplyr::mutate(
-        pricing = sprintf('"%s"', pricing),
-        description = sprintf('"%s"', description)
-      )
-  }
-
-  if (!dir.exists(directory)) {
-    if (verbose) message("Creating directory: ", directory)
-    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
-  }
-
-  file_path <- file.path(directory, "together.csv")
-  if (verbose) message("\nSaving ", nrow(output_df), " Together models to: ", file_path)
-  tryCatch({
-    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
-      row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8"
-    )
-  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
-
-  if (verbose) message("File 'together.csv' updated successfully.")
-  invisible(output_df)
-}
+.update_models_together <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("together", directory, verbose)
 #' Update SambaNova models list (internal)
 #'
 #' Connects to the SambaNova API, retrieves the list of models and saves a
@@ -750,106 +462,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_sambanova <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("SAMBANOVA_API_KEY"))
-  if (!nzchar(api_key)) {
-    api_key <- trimws(Sys.getenv("SAMBA_API_KEY"))
-  }
-  if (!nzchar(api_key)) stop("Error: Environment variable 'SAMBANOVA_API_KEY' not set.")
-
-  base_url <- trimws(Sys.getenv("SAMBANOVA_BASE_URL", "https://api.sambanova.ai"))
-  if (!nzchar(base_url)) {
-    base_url <- "https://api.sambanova.ai"
-  }
-  base_url <- sub("/+$", "", base_url)
-
-  api_url <- paste0(base_url, "/v1/models")
-  headers <- httr::add_headers("Authorization" = paste("Bearer", api_key))
-
-  if (verbose) message("Connecting to the SambaNova API...")
-  response <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
-    error = function(e) stop("Error connecting to the SambaNova API: ", e$message)
-  )
-
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("SambaNova API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
-
-  if (verbose) message("Processing JSON response...")
-  raw_content <- httr::content(response, "raw")
-  parsed_content <- tryCatch({ jsonlite::fromJSON(rawToChar(raw_content), simplifyVector = TRUE) },
-    error = function(e) stop("Error processing JSON from SambaNova API: ", e$message)
-  )
-
-  models_list <- NULL
-  if (!is.null(parsed_content) && is.list(parsed_content) && "data" %in% names(parsed_content)) {
-    if (is.data.frame(parsed_content$data)) {
-      models_list <- parsed_content$data
-    } else if (is.list(parsed_content$data)) {
-      models_list <- tryCatch({
-        list_data <- purrr::map(parsed_content$data, ~ as.list(.x))
-        dplyr::bind_rows(!!!list_data)
-      }, error = function(e) {
-        warning("Field 'data' is a list but failed conversion to data frame: ", e$message)
-        return(NULL)
-      })
-      if (is.null(models_list)) stop("Could not process the 'data' list from the SambaNova API response.")
-    }
-  }
-
-  if (is.null(models_list) || nrow(models_list) == 0) {
-    if (verbose) print(utils::str(parsed_content))
-    stop("Field 'data' not found, empty, or not processable in SambaNova API response.")
-  }
-
-  if (verbose) message("Processing ", nrow(models_list), " SambaNova models...")
-
-  output_df <- purrr::map_df(seq_len(nrow(models_list)), function(i) {
-    model_info <- models_list[i, ]
-    model_id_safe <- model_info$id %||% model_info$model %||% model_info$name %||% paste0("UNKNOWN_ID_", i)
-    model_text <- tolower(model_id_safe)
-    model_type <- dplyr::case_when(
-      grepl("vision|vl|llava|minicpm|moondream|qwen2\\.5-vl|gemma3", model_text, perl = TRUE) ~ "Vision",
-      grepl("whisper|audio|tts|speech", model_text) ~ "Audio",
-      grepl("embed|embedding", model_text) ~ "Embedding",
-      TRUE ~ "Chat"
-    )
-
-    tibble::tibble(
-      service = "sambanova",
-      model = model_id_safe,
-      type = model_type,
-      pricing = "",
-      description = ""
-    )
-  })
-
-  if (nrow(output_df) > 0) {
-    output_df <- output_df %>%
-      dplyr::mutate(
-        pricing = sprintf('"%s"', pricing),
-        description = sprintf('"%s"', description)
-      )
-  }
-
-  if (!dir.exists(directory)) {
-    if (verbose) message("Creating directory: ", directory)
-    dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-    if (!dir.exists(directory)) stop("Failed to create directory: ", directory)
-  }
-
-  file_path <- file.path(directory, "sambanova.csv")
-  if (verbose) message("\nSaving ", nrow(output_df), " SambaNova models to: ", file_path)
-  tryCatch({
-    write.table(output_df, file = file_path, sep = ",", quote = FALSE,
-      row.names = FALSE, col.names = TRUE, na = "", fileEncoding = "UTF-8"
-    )
-  }, error = function(e) stop("Error saving CSV '", file_path, "' with write.table: ", conditionMessage(e)))
-
-  if (verbose) message("File 'sambanova.csv' updated successfully.")
-  invisible(output_df)
-}
+.update_models_sambanova <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("sambanova", directory, verbose)
 
 #' @keywords internal
 #' @noRd
@@ -1008,20 +621,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_nebius <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("NEBIUS_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'NEBIUS_API_KEY' not set.")
-  base_url <- trimws(Sys.getenv("NEBIUS_BASE_URL", "https://api.studio.nebius.ai"))
-  .update_models_openai_compat(
-    directory = directory,
-    verbose = verbose,
-    provider_id = "nebius",
-    provider_name = "Nebius",
-    api_key = api_key,
-    base_url = base_url,
-    model_paths = c("/v1/models", "/models")
-  )
-}
+.update_models_nebius <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("nebius", directory, verbose)
 
 #' Update DeepSeek models list (internal)
 #'
@@ -1030,20 +630,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_deepseek <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("DEEPSEEK_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'DEEPSEEK_API_KEY' not set.")
-  base_url <- trimws(Sys.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"))
-  .update_models_openai_compat(
-    directory = directory,
-    verbose = verbose,
-    provider_id = "deepseek",
-    provider_name = "DeepSeek",
-    api_key = api_key,
-    base_url = base_url,
-    model_paths = c("/models", "/v1/models")
-  )
-}
+.update_models_deepseek <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("deepseek", directory, verbose)
 
 #' Update Perplexity models list (internal)
 #'
@@ -1052,20 +639,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_perplexity <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("PERPLEXITY_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'PERPLEXITY_API_KEY' not set.")
-  base_url <- trimws(Sys.getenv("PERPLEXITY_BASE_URL", "https://api.perplexity.ai"))
-  .update_models_openai_compat(
-    directory = directory,
-    verbose = verbose,
-    provider_id = "perplexity",
-    provider_name = "Perplexity",
-    api_key = api_key,
-    base_url = base_url,
-    model_paths = c("/models", "/v1/models")
-  )
-}
+.update_models_perplexity <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("perplexity", directory, verbose)
 
 #' Update Fireworks models list (internal)
 #'
@@ -1074,20 +648,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_fireworks <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("FIREWORKS_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'FIREWORKS_API_KEY' not set.")
-  base_url <- trimws(Sys.getenv("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference"))
-  .update_models_openai_compat(
-    directory = directory,
-    verbose = verbose,
-    provider_id = "fireworks",
-    provider_name = "Fireworks",
-    api_key = api_key,
-    base_url = base_url,
-    model_paths = c("/v1/models", "/models")
-  )
-}
+.update_models_fireworks <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("fireworks", directory, verbose)
 
 #' Update DeepInfra models list (internal)
 #'
@@ -1096,20 +657,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_deepinfra <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("DEEPINFRA_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'DEEPINFRA_API_KEY' not set.")
-  base_url <- trimws(Sys.getenv("DEEPINFRA_BASE_URL", "https://api.deepinfra.com/v1/openai"))
-  .update_models_openai_compat(
-    directory = directory,
-    verbose = verbose,
-    provider_id = "deepinfra",
-    provider_name = "DeepInfra",
-    api_key = api_key,
-    base_url = base_url,
-    model_paths = c("/models", "/v1/models")
-  )
-}
+.update_models_deepinfra <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("deepinfra", directory, verbose)
 
 #' Update Hyperbolic models list (internal)
 #'
@@ -1118,20 +666,7 @@
 #' @return Invisibly returns a data frame with the processed models.
 #' @keywords internal
 #' @noRd
-.update_models_hyperbolic <- function(directory = NULL, verbose = TRUE) {
-  api_key <- trimws(Sys.getenv("HYPERBOLIC_API_KEY"))
-  if (!nzchar(api_key)) stop("Error: Environment variable 'HYPERBOLIC_API_KEY' not set.")
-  base_url <- trimws(Sys.getenv("HYPERBOLIC_BASE_URL", "https://api.hyperbolic.xyz"))
-  .update_models_openai_compat(
-    directory = directory,
-    verbose = verbose,
-    provider_id = "hyperbolic",
-    provider_name = "Hyperbolic",
-    api_key = api_key,
-    base_url = base_url,
-    model_paths = c("/v1/models", "/models")
-  )
-}
+.update_models_hyperbolic <- function(directory = NULL, verbose = TRUE) .genflow_compat_catalog("hyperbolic", directory, verbose)
 
 #' @keywords internal
 #' @noRd
@@ -1880,6 +1415,14 @@
       return(NULL)
     }
     pipeline_tag <- model_info$pipeline_tag %||% model_info$pipelineTag %||% ""
+    if (identical(service, "hf") && isTRUE(require_live_provider)) {
+      # The global router handles chat. Non-chat requests in this adapter use
+      # hf-inference specifically; another provider's listing is not executable.
+      chat <- pipeline_tag %in% c("text-generation", "image-text-to-text", "conversational")
+      native_task <- pipeline_tag %in% c("text-to-image", "automatic-speech-recognition") &&
+        "hf-inference" %in% live_providers
+      if (!chat && !native_task) return(NULL)
+    }
 
     tibble::tibble(
       service = service,
@@ -2897,13 +2440,8 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     stop("Failed to create model directory: ", directory, call. = FALSE)
   }
 
-  # Define all available built-in providers
-  builtin_providers <- c(
-    "openrouter", "openai", "anthropic", "groq", "cerebras", "together", "sambanova",
-    "nebius", "deepseek", "perplexity", "fireworks", "deepinfra", "hyperbolic",
-    "gemini", "fal", "replicate", "hf", "ollama", "llamacpp",
-    "local-native"
-  )
+  registry <- Filter(function(spec) !is.null(spec$catalog_function), .genflow_provider_registry())
+  builtin_providers <- names(registry)
   custom_provider_cfgs <- .genflow_list_custom_provider_configs()
   custom_providers <- names(custom_provider_cfgs)
   all_providers <- unique(c(builtin_providers, custom_providers))
@@ -2929,33 +2467,9 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
     if (verbose) message("Updating selected providers: ", paste(providers_to_update, collapse = ", "))
   }
 
-  # Update function mapping
-  update_functions <- list(
-    "openrouter" = list(func = ".update_models_openrouter", name = "OpenRouter"),
-    "openai"     = list(func = ".update_models_openai",     name = "OpenAI"),
-    "anthropic"  = list(func = ".update_models_anthropic",  name = "Anthropic"),
-    "groq"       = list(func = ".update_models_groq",       name = "Groq"),
-    "cerebras"   = list(func = ".update_models_cerebras",   name = "Cerebras"),
-    "together"   = list(func = ".update_models_together",   name = "Together"),
-    "sambanova"  = list(func = ".update_models_sambanova",  name = "SambaNova"),
-    "nebius"     = list(func = ".update_models_nebius",     name = "Nebius"),
-    "deepseek"   = list(func = ".update_models_deepseek",   name = "DeepSeek"),
-    "perplexity" = list(func = ".update_models_perplexity", name = "Perplexity"),
-    "fireworks"  = list(func = ".update_models_fireworks",  name = "Fireworks"),
-    "deepinfra"  = list(func = ".update_models_deepinfra",  name = "DeepInfra"),
-    "hyperbolic" = list(func = ".update_models_hyperbolic", name = "Hyperbolic"),
-    "gemini"     = list(func = ".update_models_gemini",     name = "Gemini"),
-    "fal"        = list(func = ".update_models_fal",        name = "Fal"),
-    "replicate"  = list(func = ".update_models_replicate",  name = "Replicate"),
-    "hf"         = list(func = ".update_models_hf",         name = "Hugging Face"),
-    "ollama"     = list(func = ".update_models_ollama",     name = "Ollama"),
-    "llamacpp"   = list(func = ".update_models_llamacpp",   name = "llama-cpp"),
-    "local-native" = list(
-      func = ".update_models_local_native",
-      name = "Native STT",
-      allow_empty = TRUE
-    )
-  )
+  update_functions <- lapply(registry, function(spec) {
+    list(func = spec$catalog_function, name = spec$label, allow_empty = spec$catalog_allow_empty)
+  })
 
   # Track progress
   total_providers <- length(providers_to_update)

@@ -535,6 +535,8 @@ gen_batch <- function(qty = 8,
                       checkpoint_each = NULL) {
 
   inicio_geral <- Sys.time()
+  old_context <- options(genflow.runtime_snapshot = .genflow_snapshot_config())
+  on.exit(options(old_context), add = TRUE)
   if (!requireNamespace("parallel", quietly = TRUE)) stop("Package 'parallel' needed.")
   qty <- .genflow_positive_integer(qty, "qty")
   if (!is.logical(persist) || length(persist) != 1L || is.na(persist)) {
@@ -780,9 +782,15 @@ gen_batch <- function(qty = 8,
           cache_entry <- NULL
         } else {
           pending_indices <- which(vapply(seq_len(qty), function(idx) {
-            is.null(cache_entry$results[[idx]]) || !is.null(cache_entry$errors[[idx]])
+            result <- cache_entry$results[[idx]]
+            failed <- is.null(result) || !is.null(cache_entry$errors[[idx]])
+            # A successful paid inference with failed local publication must
+            # not be submitted again by automatic error recovery.
+            failed && !identical(result$error$stage, "persistence")
           }, logical(1)))
-          if (length(pending_indices) > 0) {
+          if (length(pending_indices) > 0 || any(vapply(cache_entry$results, function(result) {
+            identical(result$error$stage, "persistence")
+          }, logical(1)))) {
             indices_to_run <- pending_indices
             reused_indices <- setdiff(seq_len(qty), pending_indices)
             if (verbose && length(reused_indices) > 0) {

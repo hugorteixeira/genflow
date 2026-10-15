@@ -41,6 +41,13 @@ structured results, and a Shiny/RStudio management app.
 | 🎙️ | `gen_stt()` | Cloud or local speech-to-text |
 | 🔊 | `gen_tts()` | Speech synthesis |
 
+Runtime contracts, migration notes, and the boundaries for embedding Genflow
+in a separate application are described in
+[the runtime contract](inst/doc/runtime-contract.md). Version 0.0.9 shares
+request preparation between direct calls and batches, exposes
+`gen_capabilities()`, and distinguishes inference failures from file-save
+failures without discarding generated content.
+
 ## 🚀 Getting Started
 
 ### Installation
@@ -305,9 +312,9 @@ transcript data; treat them as sensitive and budget their disk usage accordingly
 - `chunk_format = "auto"` uses PCM mono 16 kHz WAV for native calls and compact
   mono 16 kHz MP3 for remote calls. CrispASR also accepts explicit MP3;
   moss-transcribe.cpp requires WAV.
-- Automatic MOSS Diarize chunking uses conservative model-safe windows for
-  recordings over 60 minutes. `chunking = "never"` explicitly accepts the
-  whole-file truncation or context risk.
+- All STT models split only when `chunk_segment_seconds` is explicitly set.
+  Without it, Genflow sends the recording as one input; choose a segment
+  duration appropriate to the model's documented input limits.
 - MOSS Diarize defaults its CrispASR KV cache to `q8_0`. Explicit `f16`,
   `q8_0`, or `q4_0` wins; `q4_0` is supported but not recommended because
   degraded output has been observed.

@@ -310,7 +310,10 @@ test_that("first real Shiny flush initializes local configuration", {
   restore <- interface_test_scope()
   on.exit(restore(), add = TRUE)
 
-  shiny:::initCurrentAppState(genflow:::genflow_agent_app)
+  # Force construction before Shiny marks itself running. initCurrentAppState
+  # stores its argument lazily and has not installed app options at that point.
+  app <- genflow:::.genflow_agent_app()
+  shiny:::initCurrentAppState(app)
   on.exit(shiny:::clearCurrentAppState(), add = TRUE)
 
   websocket <- new.env(parent = emptyenv())

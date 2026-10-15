@@ -1,4 +1,29 @@
-# genflow 0.0.8.9000
+# genflow 0.0.9
+
+- Unified direct/agent/batch request preparation, complete-field overrides,
+  and byte-sensitive batch input identity. PSOCK workers receive a frozen
+  provider/local configuration, including custom option paths.
+- Consolidated ten OpenAI-compatible providers and their catalogs around a
+  shared registry; exposed `gen_capabilities()`. Shiny UI is constructed only
+  when launched, while its public entrypoints remain available.
+- Added typed internal text responses, normalized result/error/persistence
+  fields, provider usage and request metadata, bounded text retries, and
+  explicit refusal/truncation handling. Literal error-like generated text is
+  no longer treated as transport failure.
+- All generated artifacts use unique contained paths and staged publication.
+  Inference success survives a storage failure without reporting overall
+  success or automatically repeating paid work. Image/TTS support temporary
+  output via `persist = FALSE`.
+- Fixed vector voting, failed-response and candidate filtering; added quorum,
+  explicit tie policies and structured decisions. The default tie policy now
+  returns no winner; `ties = "first"` explicitly restores legacy tie selection.
+- Saved/exported configurations reject executable values and credential
+  fields. Provider registry edits lock the full read/modify/write transaction;
+  failed exports preserve existing archives.
+- Corrected Hugging Face chat/STT routes and catalog executability; omitted
+  unsupported OpenAI sampling parameters. Removed legacy `*_dir_mkt` behavior.
+
+## Changes carried forward from 0.0.8.9000
 
 - Persistent STT run folders now identify their service, model, creation time,
   and a short code. Each completed chunk publishes a readable

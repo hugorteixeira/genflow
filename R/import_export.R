@@ -309,6 +309,7 @@
       )
     }
   )
+  .genflow_validate_portable(value, paste0("bundle.", type))
   valid <- switch(type,
     setups = is.list(value) &&
       is.character(value$sname) && length(value$sname) == 1L &&
@@ -438,7 +439,6 @@ gen_export_bundle <- function(path,
     if (!isTRUE(overwrite)) {
       stop(sprintf("File '%s' already exists. Set overwrite = TRUE to replace it.", path), call. = FALSE)
     }
-    unlink(path)
   }
 
   dest_dir <- dirname(path)
@@ -506,15 +506,19 @@ gen_export_bundle <- function(path,
     )
   )
   jsonlite::write_json(metadata, file.path(bundle_root, "metadata.json"), auto_unbox = TRUE, pretty = TRUE, digits = NA)
+  .genflow_validate_bundle_tree(bundle_root)
 
   old_wd <- getwd()
   on.exit(setwd(old_wd), add = TRUE)
   setwd(staging_root)
-  zip_result <- utils::zip(zipfile = path, files = bundle_root_name, flags = "-r9Xq")
+  archive <- tempfile(".genflow-export-", tmpdir = dest_dir, fileext = ".zip")
+  on.exit(unlink(archive), add = TRUE)
+  zip_result <- utils::zip(zipfile = archive, files = bundle_root_name, flags = "-r9Xq")
   if (!identical(zip_result, 0L)) {
     stop("Failed to create export archive with utils::zip().", call. = FALSE)
   }
   setwd(old_wd)
+  .genflow_replace_file(archive, path)
 
   if (!quiet) {
     message(sprintf("genflow bundle exported to %s", path))

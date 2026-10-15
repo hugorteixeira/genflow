@@ -7,7 +7,8 @@
 #' @param prompt Character. Main text prompt describing the desired image.
 #' @param add Optional character or object(s) to append to the prompt. If provided and
 #'   character, it will be concatenated to `prompt`.
-#' @param directory Optional output directory. Defaults to `getwd()/imgs` if NULL.
+#' @param directory Optional output directory. Defaults to the configured
+#'   Genflow output directory's `imgs` subdirectory.
 #' @param label Optional short label to be used in filenames. If NULL, derived from prompt.
 #' @param service Provider identifier: `"hf"`, `"fal"`, `"replicate"`, or
 #'   `"openai"`.
@@ -25,6 +26,9 @@
 #' @param poll_interval Polling interval in seconds for asynchronous providers.
 #' @param max_poll_seconds Maximum time in seconds to poll an asynchronous
 #'   provider before returning an error.
+#' @param persist Logical; save to the output directory and record statistics.
+#'   FALSE leaves the image in the R session's temporary directory, returns its
+#'   path in `response_value`, and sets `saved_file` to NA.
 #' @param ... Reserved for S3 methods.
 #'
 #' @return Invisibly returns a list with fields such as `response_value` (saved file path
@@ -58,9 +62,12 @@ gen_img.default <- function(prompt,
                             replicate_input = NULL,
                             poll_interval = 3,
                             max_poll_seconds = 600,
+                            persist = TRUE,
                             ...) {
 
   start_time <- Sys.time()
+  .genflow_validate_dots(list(...), "gen_img")
+  .genflow_validate_flag(persist, "persist")
 
   # --- Input Processing & Setup ---
   if (is.list(service)) {
@@ -87,10 +94,10 @@ gen_img.default <- function(prompt,
   if (is.list(y)) y <- as.numeric(y$y %||% y$w %||% y[[1]]) else if (is.vector(y)) y <- as.numeric(y[1]) # Allow w or y
   if (length(y) != 1 || !is.numeric(y) || is.na(y) || y <= 0) y <- 1024 # Default y (width)
 
-  if (is.null(directory)) directory <- .genflow_default_dir("imgs")
+  directory <- .genflow_media_directory(directory, "imgs", persist)
   if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
 
-  final_prompt <- if (!is.null(add)) paste(prompt, add) else prompt
+  final_prompt <- .genflow_prepare_prompt(prompt, add)
 
   label_processed <- label %||% paste(strsplit(final_prompt, "[[:space:]]+")[[1]][1:min(5, length(strsplit(final_prompt, "[[:space:]]+")[[1]]))], collapse = "_")
   label_processed <- substr(label_processed, 1, 36)
@@ -101,6 +108,7 @@ gen_img.default <- function(prompt,
   file_path <- NULL
   error_occurred <- FALSE
   api_call_error_msg <- "" # Store specific error
+  persistence_error <- NULL
 
   tryCatch({
     file_path <- switch(service,
@@ -136,6 +144,7 @@ gen_img.default <- function(prompt,
     )
   }, error = function(e) {
     error_occurred <<- TRUE
+    if (inherits(e, "genflow_persistence_error")) persistence_error <<- e
     api_call_error_msg <<- conditionMessage(e) # Capture the specific error
     # Error message printed later
   })
@@ -200,7 +209,7 @@ gen_img.default <- function(prompt,
 
   # Persist stats to daily logs unless suppressed in batch workers
   should_persist <- tryCatch({ Sys.getenv("genflow_SKIP_PERSIST_LOG", unset = "0") != "1" }, error = function(e) TRUE)
-  if (isTRUE(should_persist)) {
+  if (isTRUE(persist) && isTRUE(should_persist)) {
     try({
       .persist_stats_row(list(
         label      = label_processed %||% label %||% NA_character_,
@@ -214,7 +223,13 @@ gen_img.default <- function(prompt,
     }, silent = TRUE)
   }
 
-  return(invisible(resultado_com_atributos)) # Return the LIST in both success/error cases
+  persistence <- .genflow_persistence(file_path, requested = persist, error = persistence_error)
+  if (!persist) resultado_com_atributos$saved_file <- NA_character_
+  resultado_com_atributos <- .genflow_complete_result(resultado_com_atributos,
+    inference_status = if (!is.null(persistence_error)) "SUCCESS" else final_status,
+    persistence = persistence)
+  if (!is.null(persistence_error$recovery_file)) resultado_com_atributos$response_value <- persistence_error$recovery_file
+  return(invisible(resultado_com_atributos))
 }
 
 #' Resolve the default image model for a provider
@@ -297,20 +312,7 @@ gen_img.default <- function(prompt,
   }
 
   # Construct filename & path
-  datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  filename <- paste(label_sanitized, service_name, model_sanitized_name, datetime_str, sep = "_")
-  filename <- paste0(filename, ".png")
-  file_path <- file.path(directory, filename)
-
-  # Save the image
-  tryCatch({
-    writeBin(img_binary, file_path)
-    if (!file.exists(file_path) || file.info(file_path)$size == 0) stop("Failed to validate saved file.")
-  }, error = function(e) {
-    stop("Failed to save HuggingFace image at ", file_path, ": ", e$message)
-  })
-
-  return(file_path)
+  .genflow_write_artifact(img_binary, directory, label_sanitized, service_name, model, "png")
 }
 
 #' @rdname gen_img
@@ -486,16 +488,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("Empty or invalid FAL image content.")
   }
 
-  datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  filename <- paste(label_sanitized, service_name, model_sanitized_name, datetime_str, sep = "_")
-  filename <- paste0(filename, ".png")
-  file_path <- file.path(directory, filename)
-
-  tryCatch({
-    writeBin(img_binary, file_path)
-    if (!file.exists(file_path) || file.info(file_path)$size == 0) stop("Failed to validate saved file.")
-  }, error = function(e) stop("Failed to save FAL image: ", e$message))
-  return(file_path)
+  .genflow_write_artifact(img_binary, directory, label_sanitized, service_name, model, "png")
 }
 
 #' Normalize a FAL model id for queue URLs
@@ -720,17 +713,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("OpenAI returned empty or invalid image content.")
   }
 
-  datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  model_sani <- .sanitize_filename(model)
-  filename <- paste(label_sanitized, "openai", model_sani, datetime_str, sep = "_")
-  file_path <- file.path(directory, paste0(filename, ".png"))
-
-  writeBin(img_bin, file_path)
-  if (!file.exists(file_path) || file.info(file_path)$size == 0) {
-    stop("Failed to save image to disk.")
-  }
-
-  return(file_path)
+  .genflow_write_artifact(img_bin, directory, label_sanitized, "openai", model, "png")
 }
 
 #' Resolve an OpenAI image size for the selected model family
@@ -961,16 +944,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("Empty or invalid Replicate image content.")
   }
 
-  datetime_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  filename <- paste(label_sanitized, service_name, model_sanitized_name, datetime_str, sep = "_")
-  filename <- paste0(filename, ".png")
-  file_path <- file.path(directory, filename)
-
-  tryCatch({
-    writeBin(img_binary, file_path)
-    if (!file.exists(file_path) || file.info(file_path)$size == 0) stop("Failed to validate saved file.")
-  }, error = function(e) stop("Failed to save Replicate image: ", e$message))
-  return(file_path)
+  .genflow_write_artifact(img_binary, directory, label_sanitized, service_name, model, "png")
 }
 
 #' Parse a Replicate model id and optional pinned version

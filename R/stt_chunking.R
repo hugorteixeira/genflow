@@ -2181,6 +2181,8 @@
     content_type = result$content_type,
     metadata = projected_metadata
   )
+  contract_fields <- intersect(c("schema_version", "inference_status", "persistence", "error", "usage"), names(result))
+  projected[contract_fields] <- result[contract_fields]
   if (!is.null(result$diarized_transcript)) {
     projected <- append(
       projected,

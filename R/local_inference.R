@@ -295,6 +295,8 @@
 }
 
 .genflow_read_local_config <- function(path = NULL) {
+  snapshot <- getOption("genflow.runtime_snapshot")
+  if (is.null(path) && !is.null(snapshot$local)) return(snapshot$local)
   config_path <- .genflow_local_config_path(path)
   if (!file.exists(config_path)) {
     return(.genflow_local_config_defaults())
@@ -496,15 +498,7 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
   result
 }
 
-.genflow_first_env <- function(names) {
-  for (name in names) {
-    value <- trimws(Sys.getenv(name, unset = ""))
-    if (nzchar(value)) {
-      return(value)
-    }
-  }
-  ""
-}
+
 
 .genflow_local_setting <- function(field,
                                    env = character(),

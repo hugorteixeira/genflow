@@ -62,7 +62,7 @@ gen_interface <- function(
 ) {
   host <- .genflow_validate_interface_host(host, allow_remote)
   shiny::runApp(
-    genflow_agent_app,
+    .genflow_agent_app(),
     launch.browser = launch.browser,
     host = host,
     ...

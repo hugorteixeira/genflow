@@ -57,6 +57,31 @@ stt_diarization_audio_fixture <- function() {
   path
 }
 
+test_that("failed diarization metadata publication is not reported as saved success", {
+  audio <- stt_diarization_audio_fixture()
+  directory <- tempfile("genflow-sidecar-failure-")
+  dir.create(directory)
+  withr::defer(unlink(c(audio, directory), recursive = TRUE))
+  normalized <- genflow:::.stt_normalize_native_payload(list(
+    transcription = stt_diarized_segments_fixture()
+  ))
+  testthat::local_mocked_bindings(
+    .stt_local_native = function(...) normalized,
+    .stt_audio_duration_seconds = function(...) 10,
+    .stt_atomic_write_json = function(...) stop("disk full"),
+    .package = "genflow"
+  )
+  capture.output(expect_warning(result <- gen_stt(audio, service = "local-native",
+    model = "moss-transcribe-diarize-0.9b-q8_0.gguf", directory = directory),
+    "metadata sidecar could not be written"))
+  expect_identical(result$status_api, "ERROR")
+  expect_identical(result$inference_status, "SUCCESS")
+  expect_identical(result$error$stage, "persistence")
+  expect_identical(result$response_value, normalized$text)
+  expect_true(file.exists(result$saved_file))
+  expect_true(is.na(result$saved_metadata_file))
+})
+
 test_that("CrispASR speaker labels normalize to stable Sxx labels", {
   expect_identical(
     genflow:::.stt_normalize_speaker_label("(Speaker 1) "),
