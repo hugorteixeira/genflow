@@ -2353,6 +2353,7 @@
 #' }
 #' @export
 gen_txt <- function(context, ...) {
+  if (missing(context)) return(gen_txt.default(...))
   UseMethod("gen_txt")
 }
 
@@ -2361,83 +2362,35 @@ gen_txt <- function(context, ...) {
 #' @export
 gen_txt.default <- function(
   context,
-  res_context = TRUE,
-  add = NULL,
-  add_img = NULL,
-  directory = NULL,
-  label = NULL,
-  service = "openai",
-  model = "gpt-5-mini",
-  temp = 1,
-  reasoning = NULL,
-  tools = FALSE,
-  plugins = NULL,
-  my_tools = NULL,
-  timeout_api = 240,
-  base_url = NULL,
-  null_repeat = TRUE,
-  persist = TRUE,
-  retry_delays = c(2, 5, 10),
-  retry_deadline = NULL,
-  max_output_tokens = NULL,
+  res_context = .gen_default("gen_txt", "res_context"),
+  add = .gen_default("gen_txt", "add"),
+  add_img = .gen_default("gen_txt", "add_img"),
+  directory = .gen_default("gen_txt", "directory"),
+  label = .gen_default("gen_txt", "label"),
+  service = .gen_default("gen_txt", "service"),
+  model = .gen_default("gen_txt", "model"),
+  temp = .gen_default("gen_txt", "temp"),
+  reasoning = .gen_default("gen_txt", "reasoning"),
+  tools = .gen_default("gen_txt", "tools"),
+  plugins = .gen_default("gen_txt", "plugins"),
+  my_tools = .gen_default("gen_txt", "my_tools"),
+  timeout_api = .gen_default("gen_txt", "timeout_api"),
+  base_url = .gen_default("gen_txt", "base_url"),
+  null_repeat = .gen_default("gen_txt", "null_repeat"),
+  persist = .gen_default("gen_txt", "persist"),
+  retry_delays = .gen_default("gen_txt", "retry_delays"),
+  retry_deadline = .gen_default("gen_txt", "retry_deadline"),
+  max_output_tokens = .gen_default("gen_txt", "max_output_tokens"),
   ...
 ) {
   model_was_default <- missing(model)
-  .genflow_validate_dots(list(...), "gen_txt")
-  .genflow_validate_flag(persist, "persist")
-  .genflow_validate_flag(null_repeat, "null_repeat")
-  if (!is.numeric(timeout_api) || length(timeout_api) != 1L ||
-      is.na(timeout_api) || !is.finite(timeout_api) || timeout_api <= 0) {
-    stop("`timeout_api` must be positive finite seconds.", call. = FALSE)
-  }
-  if (!is.numeric(retry_delays) || anyNA(retry_delays) ||
-      any(!is.finite(retry_delays)) || any(retry_delays < 0)) {
-    stop("`retry_delays` must contain finite non-negative seconds.", call. = FALSE)
-  }
-  if (!is.null(retry_deadline) && (!is.numeric(retry_deadline) || length(retry_deadline) != 1L ||
-      is.na(retry_deadline) || !is.finite(retry_deadline) || retry_deadline <= 0)) {
-    stop("`retry_deadline` must be NULL or positive finite seconds.", call. = FALSE)
-  }
+  .gen_internal_validate("gen_txt")
   if (isTRUE(persist) && is.null(directory)) directory <- .genflow_default_dir("texts")
-
-  # Normalize inputs possibly coming as lists/vectors
-  if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
-  service <- .genflow_normalize_service_alias(service)
-  service_lower <- tolower(service)
-  if (!is.null(max_output_tokens)) {
-    if (!is.numeric(max_output_tokens) || length(max_output_tokens) != 1L ||
-        is.na(max_output_tokens) || !is.finite(max_output_tokens) ||
-        max_output_tokens < 1 || max_output_tokens > .Machine$integer.max ||
-        max_output_tokens != floor(max_output_tokens)) {
-      stop("`max_output_tokens` must be NULL or a positive integer.", call. = FALSE)
-    }
-    if (!identical(service_lower, "openai")) {
-      stop("`max_output_tokens` is currently supported only by service = 'openai'.", call. = FALSE)
-    }
-    max_output_tokens <- as.integer(max_output_tokens)
-  }
-
-  base_url_value <- as.character(base_url %||% "")[1]
-  if (is.na(base_url_value)) {
-    base_url_value <- ""
-  }
-  if (nzchar(trimws(base_url_value)) && !service_lower %in% c("ollama", "llamacpp")) {
-    stop("`base_url` is only supported for local Ollama and llama-cpp text services.", call. = FALSE)
-  }
-  base_url <- if (nzchar(trimws(base_url_value))) base_url_value else NULL
+  service_lower <- service
+  if (!is.null(max_output_tokens)) max_output_tokens <- as.integer(max_output_tokens)
 
   custom_provider_cfg <- .genflow_get_custom_provider(service)
 
-  if (is.list(model)) {
-    if (!length(model)) {
-      model <- NULL
-    } else {
-      model_value <- model$model %||% model[[1]]
-      model <- if (is.null(model_value) || !length(model_value)) NULL else as.character(model_value[[1]])
-    }
-  } else if (is.vector(model) && length(model)) {
-    model <- as.character(model[[1]])
-  }
   model_is_empty <- is.null(model) ||
     !length(model) ||
     is.na(model[[1]]) ||
@@ -2451,7 +2404,6 @@ gen_txt.default <- function(
        identical(as.character(model[[1]]), "gpt-5-mini"))) {
     model <- .gemini_resolve_model(NULL)
   }
-  if (is.list(temp)) temp <- as.numeric(temp$temperature %||% temp$temp %||% temp[[1]]) else if (is.vector(temp)) temp <- as.numeric(temp[1])
   if (!is.null(custom_provider_cfg)) {
     model <- .custom_openai_provider_resolve_model(custom_provider_cfg, model, timeout_secs = timeout_api)
   } else {
@@ -2463,21 +2415,8 @@ gen_txt.default <- function(
       model <- do.call(get(resolver, envir = asNamespace("genflow")), args)
     }
   }
-  temp_v <- ifelse(is.null(temp) || !is.numeric(temp) || is.na(temp), 0.7, temp)
-  reasoning_v <- NULL
-  if (!is.null(reasoning)) {
-    reasoning_value <- reasoning
-    if (is.list(reasoning_value)) {
-      reasoning_value <- reasoning_value[[1]]
-    }
-    reasoning_value <- as.character(reasoning_value)[1]
-    reasoning_value <- tolower(trimws(reasoning_value))
-    valid_reasoning <- c("none", "minimal", "low", "medium", "high", "xhigh")
-    if (is.na(reasoning_value) || !nzchar(reasoning_value) || !(reasoning_value %in% valid_reasoning)) {
-      stop("Invalid `reasoning` value. Choose one of: none, minimal, low, medium, high, xhigh.")
-    }
-    reasoning_v <- reasoning_value
-  }
+  temp_v <- temp
+  reasoning_v <- reasoning
 
   if (is.null(tools)) {
     tools_flag <- FALSE

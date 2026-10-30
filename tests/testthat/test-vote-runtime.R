@@ -1,18 +1,15 @@
 test_that("gen_vote validates scalar inputs before producing output", {
   expect_error(
     gen_vote("option 1", trigger = NA_character_),
-    "`trigger` must be one non-empty string",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
   expect_error(
     gen_vote("option 1", trigger = c("option", "choice")),
-    "`trigger` must be one non-empty string",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
   expect_error(
     gen_vote(1:3, trigger = "option"),
-    "`voting_list` must be a list or character vector",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
   expect_error(
     gen_vote(
@@ -20,8 +17,7 @@ test_that("gen_vote validates scalar inputs before producing output", {
       trigger = "option",
       return_winner = "content"
     ),
-    "`underlying_list` must be provided",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
 })
 

@@ -1,0 +1,53 @@
+{
+  "id": "video.generate",
+  "version": 1,
+  "kind": "reserved",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "duration": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3600,
+        "title": "Duração (s)"
+      },
+      "aspect_ratio": {
+        "type": "string",
+        "pattern": "\\S",
+        "title": "Proporção"
+      },
+      "resolution": {
+        "type": "string",
+        "pattern": "\\S",
+        "title": "Resolução"
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647,
+        "title": "Semente"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "modality": "video",
+  "inputs": {
+    "text": "asset:text|asset:json",
+    "image": "asset:image"
+  },
+  "outputs": {
+    "content": "asset:video"
+  },
+  "studio": {
+    "id": "video.generate",
+    "inputs": {
+      "text": "text|json",
+      "image": "image"
+    },
+    "output": "video",
+    "execution": "remote",
+    "available": false,
+    "planned_service": "openrouter"
+  }
+}

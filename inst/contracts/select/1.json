@@ -1,0 +1,23 @@
+{
+  "id": "select",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "manual",
+          "assisted"
+        ],
+        "default": "assisted",
+        "title": "Quem escolhe"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "select"
+}

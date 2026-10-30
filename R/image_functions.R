@@ -42,57 +42,34 @@
 #'
 #' @export
 gen_img <- function(prompt, ...) {
+  if (missing(prompt)) return(gen_img.default(...))
   UseMethod("gen_img")
 }
 
 #' @rdname gen_img
 #' @method gen_img default
 #' @export
-gen_img.default <- function(prompt,
-                            add = NULL,
-                            directory = NULL,
-                            label = NULL,
-                            service = "hf",
-                            model = NULL,
-                            temp = 5,
-                            steps = 18,
-                            h = 1072,
-                            y = 1920,
-                            model_version = NULL,
-                            replicate_input = NULL,
-                            poll_interval = 3,
-                            max_poll_seconds = 600,
-                            persist = TRUE,
-                            ...) {
+gen_img.default <- function(
+  prompt,
+  add = .gen_default("gen_img", "add"),
+  directory = .gen_default("gen_img", "directory"),
+  label = .gen_default("gen_img", "label"),
+  service = .gen_default("gen_img", "service"),
+  model = .gen_default("gen_img", "model"),
+  temp = .gen_default("gen_img", "temp"),
+  steps = .gen_default("gen_img", "steps"),
+  h = .gen_default("gen_img", "h"),
+  y = .gen_default("gen_img", "y"),
+  model_version = .gen_default("gen_img", "model_version"),
+  replicate_input = .gen_default("gen_img", "replicate_input"),
+  poll_interval = .gen_default("gen_img", "poll_interval"),
+  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds"),
+  persist = .gen_default("gen_img", "persist"),
+  ...
+) {
 
   start_time <- Sys.time()
-  .genflow_validate_dots(list(...), "gen_img")
-  .genflow_validate_flag(persist, "persist")
-
-  # --- Input Processing & Setup ---
-  if (is.list(service)) {
-    service <- service$service %||% if (length(service)) service[[1]] else NULL
-  }
-  if (is.vector(service)) service <- as.character(service[1])
-  service <- tolower(trimws(as.character(service %||% "")[1]))
-  if (is.na(service) || !nzchar(service)) {
-    stop("`service` must be a non-empty provider identifier.", call. = FALSE)
-  }
-  if (is.list(model)) {
-    model <- model$model %||% if (length(model)) model[[1]] else NULL
-  }
-  if (is.vector(model)) model <- as.character(model[1])
-  if (is.null(model) || length(model) == 0L || is.na(model) || !nzchar(model)) {
-    model <- .gen_img_default_model(service)
-  }
-  if (is.list(temp)) temp <- as.numeric(temp$temperature %||% temp$temp %||% temp[[1]]) else if (is.vector(temp)) temp <- as.numeric(temp[1])
-  if (length(temp) != 1 || !is.numeric(temp) || is.na(temp)) temp <- 7.0 # Default guidance
-  if (is.list(steps)) steps <- as.numeric(steps$steps %||% steps[[1]]) else if (is.vector(steps)) steps <- as.numeric(steps[1])
-  if (length(steps) != 1 || !is.numeric(steps) || is.na(steps)) steps <- 18 # Default steps
-  if (is.list(h)) h <- as.numeric(h$h %||% h[[1]]) else if (is.vector(h)) h <- as.numeric(h[1])
-  if (length(h) != 1 || !is.numeric(h) || is.na(h) || h <=0) h <- 1024 # Default h
-  if (is.list(y)) y <- as.numeric(y$y %||% y$w %||% y[[1]]) else if (is.vector(y)) y <- as.numeric(y[1]) # Allow w or y
-  if (length(y) != 1 || !is.numeric(y) || is.na(y) || y <= 0) y <- 1024 # Default y (width)
+  .gen_internal_validate("gen_img")
 
   directory <- .genflow_media_directory(directory, "imgs", persist)
   if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
@@ -230,20 +207,6 @@ gen_img.default <- function(prompt,
     persistence = persistence)
   if (!is.null(persistence_error$recovery_file)) resultado_com_atributos$response_value <- persistence_error$recovery_file
   return(invisible(resultado_com_atributos))
-}
-
-#' Resolve the default image model for a provider
-#'
-#' @keywords internal
-#' @noRd
-.gen_img_default_model <- function(service) {
-  switch(tolower(service),
-    "hf" = "black-forest-labs/FLUX.1-schnell",
-    "fal" = "fal-ai/flux/schnell",
-    "replicate" = "black-forest-labs/flux-schnell",
-    "openai" = "gpt-image-2",
-    "default"
-  )
 }
 
 #' Hugging Face image generation (internal)

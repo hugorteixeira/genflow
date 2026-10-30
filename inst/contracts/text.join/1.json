@@ -1,0 +1,18 @@
+{
+  "id": "text.join",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "separator": {
+        "type": "string",
+        "default": "\n",
+        "title": "Separador entre os textos"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "text.join"
+}

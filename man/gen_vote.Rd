@@ -6,14 +6,14 @@
 \usage{
 gen_vote(
   voting_list,
-  underlying_list = NULL,
+  underlying_list = .gen_default("gen_vote", "underlying_list"),
   trigger,
-  type = c("number", "letter"),
-  label = "Option",
-  title = "Vote Count",
-  return_winner = c("ranking", "content", "scoreboard", "id", "result"),
-  min_votes = 1L,
-  ties = c("none", "first", "error")
+  type = .gen_default("gen_vote", "type"),
+  label = .gen_default("gen_vote", "label"),
+  title = .gen_default("gen_vote", "title"),
+  return_winner = .gen_default("gen_vote", "return_winner"),
+  min_votes = .gen_default("gen_vote", "min_votes"),
+  ties = .gen_default("gen_vote", "ties")
 )
 }
 \arguments{

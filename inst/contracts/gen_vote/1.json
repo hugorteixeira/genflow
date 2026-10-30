@@ -1,0 +1,112 @@
+{
+  "id": "gen_vote",
+  "version": 1,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "voting_list": {
+        "type": [
+          "array",
+          "object",
+          "string"
+        ],
+        "x-r-types": [
+          "data.frame"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "object",
+            "null"
+          ]
+        }
+      },
+      "underlying_list": {
+        "type": [
+          "array",
+          "object",
+          "string",
+          "null"
+        ],
+        "x-r-types": [
+          "data.frame"
+        ],
+        "default": null
+      },
+      "trigger": {
+        "type": "string",
+        "pattern": "\\S",
+        "title": "Marcador do voto"
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "number",
+          "letter"
+        ],
+        "default": "number",
+        "title": "Tipo de voto"
+      },
+      "label": {
+        "type": "string",
+        "default": "Option",
+        "title": "Rótulo"
+      },
+      "title": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": "Vote Count",
+        "title": "Título"
+      },
+      "return_winner": {
+        "type": [
+          "string",
+          "boolean"
+        ],
+        "enum": [
+          "ranking",
+          "content",
+          "scoreboard",
+          "id",
+          "result",
+          true,
+          false
+        ],
+        "default": "ranking",
+        "title": "Resultado"
+      },
+      "min_votes": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 1,
+        "title": "Mínimo de votos"
+      },
+      "ties": {
+        "type": "string",
+        "enum": [
+          "none",
+          "first",
+          "error"
+        ],
+        "default": "none",
+        "title": "Empates"
+      }
+    },
+    "required": [
+      "voting_list",
+      "trigger"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_vote",
+  "inputs": {
+    "voting_list": "list:text|list:json",
+    "underlying_list": "list:*"
+  },
+  "outputs": {
+    "content": "asset:json"
+  }
+}

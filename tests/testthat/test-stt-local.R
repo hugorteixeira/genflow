@@ -131,8 +131,8 @@ test_that("gen_stt accepts a NULL model and dispatches local OpenAI aliases", {
   console <- capture.output(
     result <- gen_stt(
       audio,
-      service = list(service = "openai-compatible"),
-      model = list(),
+      service = "openai-compatible",
+      model = NULL,
       save_txt = FALSE
     )
   )
@@ -193,7 +193,7 @@ test_that("gen_stt validates public scalar controls before dispatch", {
           case
         )
       ),
-      "must be TRUE or FALSE"
+      class = "genflow_validation_error"
     )
   }
   numeric_cases <- list(
@@ -215,7 +215,7 @@ test_that("gen_stt validates public scalar controls before dispatch", {
           case
         )
       ),
-      "positive finite number"
+      class = "genflow_validation_error"
     )
   }
   for (case in list(
@@ -230,7 +230,7 @@ test_that("gen_stt validates public scalar controls before dispatch", {
           case
         )
       ),
-      "non-negative finite number"
+      class = "genflow_validation_error"
     )
   }
   expect_identical(dispatches, 0L)
@@ -240,9 +240,9 @@ test_that("gen_stt validates public scalar controls before dispatch", {
     service = "local-openai",
     save_txt = FALSE,
     convert = FALSE,
-    timeout_api = "30",
-    poll_interval = "0.25",
-    max_poll_seconds = "60"
+    timeout_api = 30,
+    poll_interval = 0.25,
+    max_poll_seconds = 60
   )
   expect_identical(result$status_api, "SUCCESS")
   expect_identical(result$metadata$timeout_secs, 30)
@@ -311,21 +311,12 @@ test_that("gen_stt probes duration once and forwards it to local native STT", {
   expect_identical(duration_seen, 321)
 })
 
-test_that("an unsupported STT service is a structured error when model is NULL", {
-  audio <- local_stt_audio()
-  on.exit(unlink(audio), add = TRUE)
-
+test_that("an unsupported STT service is rejected before opening audio", {
+  testthat::local_mocked_bindings(.stt_prepare_audio = function(...) stop("AUDIO OPENED"), .package = "genflow")
   for (service in c("does-not-exist", "hf-local")) {
-    capture.output(result <- gen_stt(
-      audio,
-      service = service,
-      model = NULL,
-      save_txt = FALSE
-    ))
-
-    expect_identical(result$status_api, "ERROR")
-    expect_match(result$status_msg, "Unsupported STT service")
-    expect_identical(result$model, "default")
+    error <- tryCatch(gen_stt("missing.wav", service = service, model = NULL, save_txt = FALSE), error = function(e) e)
+    expect_s3_class(error, "genflow_validation_error")
+    expect_identical(error$errors[[1]]$code, "unsupported_provider")
   }
 })
 

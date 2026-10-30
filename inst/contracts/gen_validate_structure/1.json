@@ -1,0 +1,35 @@
+{
+  "id": "gen_validate_structure",
+  "version": 1,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "document": {
+        "type": [
+          "object",
+          "array",
+          "string"
+        ],
+        "title": "Documento do workflow"
+      },
+      "require_output": {
+        "type": "boolean",
+        "default": false,
+        "title": "Exigir uma saída final"
+      }
+    },
+    "required": [
+      "document"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_validate_structure",
+  "inputs": {
+    "document": "asset:text|asset:json"
+  },
+  "outputs": {
+    "report": "asset:json",
+    "document": "asset:json"
+  }
+}

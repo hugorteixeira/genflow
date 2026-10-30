@@ -1,0 +1,22 @@
+{
+  "id": "subworkflow",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "workflow_version_id": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-ui": {
+          "hidden": true
+        }
+      }
+    },
+    "required": [
+      "workflow_version_id"
+    ],
+    "additionalProperties": false
+  },
+  "port_rule": "subworkflow"
+}

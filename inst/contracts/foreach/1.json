@@ -1,0 +1,35 @@
+{
+  "id": "foreach",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "workflow_version_id": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "item_input": {
+        "type": "string",
+        "pattern": "\\S",
+        "title": "Entrada de cada item"
+      },
+      "max_items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 100,
+        "title": "Máximo de itens"
+      }
+    },
+    "required": [
+      "workflow_version_id",
+      "item_input"
+    ],
+    "additionalProperties": false
+  },
+  "port_rule": "foreach"
+}

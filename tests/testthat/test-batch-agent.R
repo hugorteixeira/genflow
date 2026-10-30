@@ -651,7 +651,7 @@ test_that("batch tasks reject unknown modalities and unsupported files", {
       list(
         add = unsupported,
         agent = list(
-          service = "mock",
+          service = "openai",
           model = "mock",
           type = "Chat",
           context = "test"

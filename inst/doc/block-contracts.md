@@ -1,0 +1,154 @@
+# Versioned block contracts
+
+Genflow 0.0.11 packages block contracts in `inst/contracts/<block>/<version>.json`.
+The installed location is `system.file("contracts", package = "genflow")`.
+A contract owns argument names, required fields, types, bounds, defaults, typed
+ports, and optional presentation annotations. No database or model is needed to
+load or validate a contract. The catalog is cached per R session.
+
+```r
+library(genflow)
+gen_block_contracts("gen_img", version = 1)
+checked <- gen_validate_call("gen_img", list(prompt = "A quiet garden"))
+stopifnot(checked$valid)
+checked$args$steps # 18, from the contract
+```
+
+## Defaults and execution
+
+Omitted arguments receive the contract's defaults. Explicit invalid values fail;
+`steps = "18"`, `steps = NULL`, and `steps = 0` are not omission. A nullable field
+can accept NULL. Service aliases and declared service-dependent model defaults
+are resolved centrally; they do not query a remote model catalog. The returned
+`defaulted` names identify inserted fields, and `args` contains the prepared
+copy. Caller data is not mutated.
+
+`gen_txt()`, `gen_img()`, `gen_stt()`, `gen_tts()`, and `gen_vote()` enter the same
+validator before provider dispatch, audio preparation, or output directory
+creation. Invalid direct calls raise `genflow_validation_error`; inspect
+`condition$errors` for every independently detected argument error. Existing R
+input forms such as supported data frames and tool functions remain direct-call
+features, not portable JSON values.
+
+`gen_validate_call(..., bound = c("prompt"))` marks arguments that an upstream
+block will supply. Bound arguments receive no default and appear in `pending`.
+Specifying both a literal and a binding is an error. The concrete value must be
+validated again when executing the downstream operation. Empty strings are not
+substitutes for required content.
+
+Environment-dependent local models, credentials, executable availability,
+provider-specific model support, file contents and output quality cannot be
+established by static validation. Existing runtime resolution remains responsible
+for those checks. A valid report is not a promise that remote inference will
+succeed. `check_capabilities = FALSE` only skips the offline provider/modality
+check; it does not disable argument validation.
+
+## Portable workflow format
+
+```json
+{
+  "schema_version": 1,
+  "nodes": [
+    {
+      "id": "words",
+      "block": "gen_txt",
+      "contract_version": 1,
+      "args": {"context": "Write one short line welcoming the audience."}
+    },
+    {
+      "id": "voice",
+      "block": "gen_tts",
+      "contract_version": 1,
+      "args": {"service": "openai", "speed": 1},
+      "inputs": {"text": {"node": "words", "port": "content"}}
+    }
+  ],
+  "outputs": {"audio": {"node": "voice", "port": "content"}}
+}
+```
+
+Pass the JSON text or a parsed R list to `gen_validate_structure(document,
+require_output = TRUE)`. Single nodes and arrays of nodes are also accepted for
+validating fragments. The function validates data, never R source code; strings
+are not interpreted as file paths or URLs. It does not generate media, import a
+workflow into an application, or schedule execution.
+
+The report contains `valid`, `errors`, a prepared `document`, typed `ports`, a
+topological `order`, and `pending` bindings. Each error includes a stable `code`,
+a JSON Pointer-style `path` and a human-readable `message`; node errors include
+`node_id`. Independent errors across arguments, nodes and connections accumulate.
+Malformed JSON cannot be traversed and returns a parse error. Dependent checks
+are skipped when an invalid prerequisite prevents a meaningful check.
+
+The validator checks exact contract versions, argument types and required
+values, unsupported arguments, duplicate node IDs, connection references, port
+types, dependency cycles, final outputs and declared subworkflows. Connections
+use IDs, never canvas coordinates. Optional `label` and `metadata` are descriptive.
+No arbitrary expression evaluation is supported.
+
+A named `workflows` map may contain additional complete documents. A
+`subworkflow` or `foreach` block refers to a map key through
+`args.workflow_version_id`; its interface is derived from `input` and `output`
+blocks (or the document's `outputs`). All supplied definitions are checked,
+including unused ones. Recursive definitions are rejected. Limits are 10,000
+nodes per graph, 64 definitions and 8 levels of subworkflow references.
+Applications that already resolve immutable workflow versions may instead supply
+`{ "external": true, "interface": {...}, "exports": {...} }` with declared port
+types. This validates the declared interface only; the application must validate
+the referenced implementation and permissions separately.
+
+## Public API and application boundary
+
+- `gen_block_contracts()` returns the installed catalog keyed by `block@version`.
+- `gen_validate_call()` prepares defaults and checks one call without executing it.
+- `gen_validate_structure()` checks an entire declarative graph or fragment.
+- `gen_block_ports()` checks typed connections of an already prepared block.
+- `gen_check_schema()` checks the supported schema vocabulary and returns its
+  `keywords`; `gen_validate_schema()` checks data without inserting defaults.
+
+The catalog includes generation/voting functions and existing workflow control
+blocks (input, lists, templates, selection, subworkflows and outputs). Control
+contracts describe compatible composition; the R library does not implement a
+new durable scheduler. Studio retains authentication, resource resolution,
+version storage, jobs and UI layout. It consumes only exported APIs from an
+installed Genflow package.
+
+## Supported schema vocabulary
+
+This is a deliberately bounded subset of JSON Schema, not a complete JSON Schema
+implementation. Supported validation keywords are `type` (including type
+arrays), `properties`, `required`, boolean `additionalProperties`, `items`,
+`enum`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minLength`,
+`maxLength`, `pattern`, `minItems`, `maxItems`, and `uniqueItems`.
+
+`default`, `title`, `description`, and `$comment` are annotations. Defaults are
+inserted by call preparation, not by `gen_validate_schema()`. Unknown keywords
+are rejected, including `$ref`, `allOf`, `anyOf`, `oneOf` and `format`. R callers
+use named lists for objects and unnamed lists for arrays. An empty R `list()` is
+accepted as the top-level argument map in `gen_validate_call()` for ordinary
+call ergonomics. JSON documents preserve the difference between `[]` and `{}`;
+schema data validation requires a named list for an object, including
+`structure(list(), names = character())` for `{}`.
+
+Genflow annotations are `x-ui` (presentation and backend-owned fields),
+`x-content-kind` (connection kinds), `x-r-types` (direct-R input extensions),
+`x-default-by` (a declared field-dependent default/compatibility mapping) and
+`x-runtime-only` (defaults excluded from portable configurations, such as an API
+key resolved at runtime). Saved portable configurations reject credentials and
+executable R values. Cross-field constraints and dynamic port rules remain small,
+explicit library functions rather than a new expression language in JSON.
+
+## Maintaining a contract
+
+Version 1 is the first catalog version. Omitting a version currently selects 1;
+prepared documents make it explicit. Unknown versions fail. Treat published
+contracts and their defaults as immutable: a breaking argument/default change
+requires a new contract version, corresponding execution support, and an
+explicit migration when desired. Adding a JSON file alone does not implement a
+new provider or a new operation.
+
+Keep schema/default changes and the runtime boundary in the same package
+release. Tests compare generator formals against contracts and verify failure
+before side effects. Applications must update their installed package and start
+a new R process to load a changed release; editing a source checkout does not
+change a running installed namespace.

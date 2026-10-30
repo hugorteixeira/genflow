@@ -48,6 +48,18 @@ request preparation between direct calls and batches, exposes
 `gen_capabilities()`, and distinguishes inference failures from file-save
 failures without discarding generated content.
 
+## Declarative validation
+
+Version 0.0.11 adds an offline, versioned block catalog shared by execution and
+workflow validation. `gen_validate_call("gen_img", list(prompt = "A garden"))`
+returns prepared defaults and all argument errors without generating an image.
+`gen_validate_structure(document)` checks a complete JSON workflow or fragment,
+including connections, types and cycles. Direct generators perform the same
+argument checks before provider work.
+
+See [block contracts and the workflow format](inst/doc/block-contracts.md) for
+examples, supported schema keywords, validation limits and versioning.
+
 ## 🚀 Getting Started
 
 ### Installation

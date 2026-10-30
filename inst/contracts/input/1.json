@@ -1,0 +1,54 @@
+{
+  "id": "input",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "key": {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": "\\S",
+        "title": "Nome da entrada"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "text",
+          "json",
+          "image",
+          "audio",
+          "video"
+        ],
+        "default": "text",
+        "title": "Tipo de conteúdo"
+      },
+      "value_type": {
+        "type": "string",
+        "enum": [
+          "asset",
+          "list",
+          "candidates"
+        ],
+        "default": "asset",
+        "title": "Receber"
+      },
+      "output_schema": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": true,
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      }
+    },
+    "required": [
+      "key"
+    ],
+    "additionalProperties": false
+  },
+  "port_rule": "input"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "output",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "output"
+}

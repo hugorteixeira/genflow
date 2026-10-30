@@ -1,0 +1,68 @@
+{
+  "id": "judge",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "agent_version_id": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "agent_version_ids": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "minItems": 1,
+        "maxItems": 1
+      },
+      "count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1,
+        "default": 1
+      },
+      "on_failure": {
+        "type": "string",
+        "enum": [
+          "pause",
+          "abstain"
+        ],
+        "default": "pause",
+        "title": "Se este juiz falhar"
+      },
+      "policy": {
+        "type": "object",
+        "properties": {
+          "rule": {
+            "type": "string",
+            "enum": [
+              "majority",
+              "plurality"
+            ],
+            "default": "majority",
+            "title": "Regra da votação"
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 1,
+            "title": "Mínimo de votos válidos"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "default": {}
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "judge"
+}

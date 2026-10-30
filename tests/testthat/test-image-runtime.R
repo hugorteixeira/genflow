@@ -208,7 +208,7 @@ test_that("FAL queue flow uses the current model path and initial status", {
 
 test_that("FAL model ids accept catalog and shorthand forms", {
   expect_identical(
-    genflow:::.gen_img_default_model("fal"),
+    gen_validate_call("gen_img", list(prompt = "test", service = "fal"))$args$model,
     "fal-ai/flux/schnell"
   )
   expect_identical(

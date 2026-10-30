@@ -1,0 +1,27 @@
+{
+  "id": "json.get",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "pointer": {
+        "type": "string",
+        "default": "",
+        "title": "Caminho no JSON"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "text",
+          "json"
+        ],
+        "default": "json",
+        "title": "Produzir"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "json.get"
+}

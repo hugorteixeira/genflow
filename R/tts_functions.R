@@ -44,6 +44,7 @@
 #'
 #' @export
 gen_tts <- function(text, ...) {
+  if (missing(text)) return(gen_tts.default(...))
   UseMethod("gen_tts")
 }
 
@@ -52,68 +53,23 @@ gen_tts <- function(text, ...) {
 #' @export
 gen_tts.default <- function(
   text,
-  add = NULL,
-  directory = NULL,
-  label = NULL,
-  service = "openai",
-  model = "gpt-4o-mini-tts",
-  voice = NULL,
-  format = "mp3",
-  speed = 1,
-  instructions = NULL,
-  preview = FALSE,
-  timeout_api = 240,
-  persist = TRUE,
+  add = .gen_default("gen_tts", "add"),
+  directory = .gen_default("gen_tts", "directory"),
+  label = .gen_default("gen_tts", "label"),
+  service = .gen_default("gen_tts", "service"),
+  model = .gen_default("gen_tts", "model"),
+  voice = .gen_default("gen_tts", "voice"),
+  format = .gen_default("gen_tts", "format"),
+  speed = .gen_default("gen_tts", "speed"),
+  instructions = .gen_default("gen_tts", "instructions"),
+  preview = .gen_default("gen_tts", "preview"),
+  timeout_api = .gen_default("gen_tts", "timeout_api"),
+  persist = .gen_default("gen_tts", "persist"),
   ...
 ) {
   start_time <- Sys.time()
-  .genflow_validate_dots(list(...), "gen_tts")
-  .genflow_validate_flag(persist, "persist")
-
-  if (is.null(text) || length(text) == 0) {
-    stop("`text` must be a non-empty character string.")
-  }
-  if (!is.character(text)) text <- as.character(text)
-  text <- text[[1]]
-  if (!nzchar(text)) stop("`text` must be a non-empty character string.")
-
-  if (!is.null(add)) {
-    if (!is.character(add)) add <- as.character(add)
-    add <- add[[1]]
-    if (nzchar(add)) text <- paste(text, add)
-  }
-
-  # Normalize inputs
-  if (is.list(service)) service <- as.character(service$service %||% service[[1]]) else if (is.vector(service)) service <- as.character(service[1])
-  if (is.list(model)) model <- as.character(model$model %||% model[[1]]) else if (is.vector(model)) model <- as.character(model[1])
-  if (is.list(voice)) voice <- as.character(voice$voice %||% voice[[1]]) else if (is.vector(voice)) voice <- as.character(voice[1])
-  if (is.list(format)) format <- as.character(format$format %||% format[[1]]) else if (is.vector(format)) format <- as.character(format[1])
-
-  service <- tolower(as.character(service)[1])
-  model <- if (!is.null(model)) as.character(model)[1] else "gpt-4o-mini-tts"
-  if (is.na(model) || !nzchar(model)) model <- "gpt-4o-mini-tts"
-  voice <- if (!is.null(voice)) as.character(voice)[1] else NULL
-  if (is.null(voice) || is.na(voice) || !nzchar(voice)) voice <- NULL
-  format <- if (!is.null(format)) tolower(as.character(format)[1]) else "mp3"
-  if (is.na(format) || !nzchar(format)) format <- "mp3"
-
-  if (service == "replicate" && (is.null(model) || !nzchar(model) || model == "gpt-4o-mini-tts")) {
-    model <- "qwen/qwen3-tts"
-  }
-
-  if (!is.null(speed)) {
-    if (!is.numeric(speed) || length(speed) != 1 || is.na(speed)) {
-      stop("`speed` must be a single numeric value.")
-    }
-    if (speed < 0.25 || speed > 4.0) {
-      stop("`speed` must be between 0.25 and 4.0.")
-    }
-  }
-
-  valid_formats <- c("mp3", "opus", "aac", "flac", "wav", "pcm")
-  if (!format %in% valid_formats) {
-    stop("Invalid `format`. Choose one of: ", paste(valid_formats, collapse = ", "))
-  }
+  .gen_internal_validate("gen_tts")
+  if (!is.null(add) && nzchar(add)) text <- paste(text, add)
   requested_format <- format
 
   replicate_model_info <- NULL

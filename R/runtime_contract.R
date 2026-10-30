@@ -127,15 +127,6 @@
         value, ignore.case = TRUE)
 }
 
-.genflow_validate_dots <- function(dots, generator) {
-  if (!length(dots)) return(invisible(NULL))
-  fields <- names(dots) %||% rep("", length(dots))
-  fields[is.na(fields) | !nzchar(fields)] <- "<unnamed>"
-  stop("`...` is reserved and is not forwarded silently. Unsupported argument(s): ",
-       paste(unique(fields), collapse = ", "), ". Use an explicit `", generator,
-       "()` argument instead.", call. = FALSE)
-}
-
 .genflow_validate_flag <- function(value, name) {
   if (!is.logical(value) || length(value) != 1L || is.na(value)) {
     stop("`", name, "` must be TRUE or FALSE.", call. = FALSE)

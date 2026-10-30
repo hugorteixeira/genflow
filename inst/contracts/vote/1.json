@@ -1,0 +1,37 @@
+{
+  "id": "vote",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "policy": {
+        "type": "object",
+        "properties": {
+          "rule": {
+            "type": "string",
+            "enum": [
+              "majority",
+              "plurality"
+            ],
+            "default": "majority",
+            "title": "Regra da votação"
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 1,
+            "title": "Mínimo de votos válidos"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "default": {}
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "vote"
+}

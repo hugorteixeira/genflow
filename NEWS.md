@@ -1,3 +1,18 @@
+# genflow 0.0.11
+
+- Added versioned block contracts with shared defaults, typed connections and
+  presentation metadata, exposed through `gen_block_contracts()`.
+- Added offline `gen_validate_call()`, `gen_validate_structure()`,
+  `gen_block_ports()`, `gen_check_schema()` and `gen_validate_schema()`. Validation
+  accumulates independent errors and never executes the described operations.
+- Generator and voting entry points now validate with the same contracts before
+  provider or file work. Omitted arguments receive defaults; invalid explicit
+  types/ranges and unknown arguments raise structured `genflow_validation_error`
+  conditions. Silent scalar/list and numeric-string coercions are removed.
+- Portable workflows pin contract versions, validate nested definitions and
+  preserve connected values as pending until execution. See
+  `inst/doc/block-contracts.md` for the bounded schema vocabulary and limits.
+
 # genflow 0.0.10
 
 - Added an explicit OpenAI `max_output_tokens` cap for direct, agent, and batch

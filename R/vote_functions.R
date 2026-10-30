@@ -56,33 +56,20 @@
 #' # Retrieve only the winning option
 #' gen_vote(votes, trigger = "option", return_winner = TRUE)
 #' @export
-gen_vote <- function(voting_list,
-                     underlying_list = NULL,
-                     trigger,
-                     type = c("number", "letter"),
-                     label = "Option",
-                     title = "Vote Count",
-                     return_winner = c("ranking", "content", "scoreboard", "id", "result"),
-                     min_votes = 1L,
-                     ties = c("none", "first", "error")) {
-  if (missing(voting_list)) {
-    stop("`voting_list` must be provided.", call. = FALSE)
-  }
-  if (!is.list(voting_list) && !is.character(voting_list)) {
-    stop("`voting_list` must be a list or character vector.", call. = FALSE)
-  }
-  if (missing(trigger) ||
-      !is.character(trigger) ||
-      length(trigger) != 1L ||
-      is.na(trigger) ||
-      !nzchar(trimws(trigger))) {
-    stop("`trigger` must be one non-empty string.", call. = FALSE)
-  }
+gen_vote <- function(
+  voting_list,
+  underlying_list = .gen_default("gen_vote", "underlying_list"),
+  trigger,
+  type = .gen_default("gen_vote", "type"),
+  label = .gen_default("gen_vote", "label"),
+  title = .gen_default("gen_vote", "title"),
+  return_winner = .gen_default("gen_vote", "return_winner"),
+  min_votes = .gen_default("gen_vote", "min_votes"),
+  ties = .gen_default("gen_vote", "ties")
+) {
+  .gen_internal_validate("gen_vote")
   trigger <- trimws(trigger)
 
-  type <- match.arg(type)
-  ties <- match.arg(ties)
-  min_votes <- .genflow_positive_integer(min_votes, "min_votes")
   if (length(return_winner) == 1L && is.logical(return_winner)) {
     if (is.na(return_winner)) {
       stop("`return_winner` cannot be NA.", call. = FALSE)

@@ -159,6 +159,7 @@
 #'
 #' @export
 gen_stt <- function(audio, ...) {
+  if (missing(audio)) return(gen_stt.default(...))
   UseMethod("gen_stt")
 }
 
@@ -195,57 +196,45 @@ gen_stt_capabilities <- function(service) {
 #' @export
 gen_stt.default <- function(
   audio,
-  service = "openai",
-  model = NULL,
-  language = NULL,
-  prompt = NULL,
-  directory = NULL,
-  label = NULL,
-  save_txt = TRUE,
-  convert = TRUE,
-  diarize = TRUE,
-  timestamps = FALSE,
-  timeout_api = 240,
-  timeout_per_audio_minute = 60,
-  poll_interval = 5,
-  max_poll_seconds = 600,
-  executable = NULL,
-  native_engine = NULL,
-  native_backend = NULL,
-  native_quant = NULL,
-  native_kv_quant = NULL,
-  native_device = NULL,
-  max_new_tokens = NULL,
-  base_url = NULL,
-  api_key = NULL,
-  response_format = "json",
-  chunking = c("auto", "never"),
-  chunk_bitrate_kbps = 48,
-  chunk_segment_seconds = NULL,
-  checkpoint_dir = NULL,
-  resume = TRUE,
-  chunk_retry_forever = TRUE,
-  chunk_max_retries = 20,
-  chunk_retry_wait_seconds = 2,
-  output = c("full", "transcript"),
-  chunk_format = c("auto", "wav", "mp3"),
-  checkpoint_retention = c("all", "results"),
+  service = .gen_default("gen_stt", "service"),
+  model = .gen_default("gen_stt", "model"),
+  language = .gen_default("gen_stt", "language"),
+  prompt = .gen_default("gen_stt", "prompt"),
+  directory = .gen_default("gen_stt", "directory"),
+  label = .gen_default("gen_stt", "label"),
+  save_txt = .gen_default("gen_stt", "save_txt"),
+  convert = .gen_default("gen_stt", "convert"),
+  diarize = .gen_default("gen_stt", "diarize"),
+  timestamps = .gen_default("gen_stt", "timestamps"),
+  timeout_api = .gen_default("gen_stt", "timeout_api"),
+  timeout_per_audio_minute = .gen_default("gen_stt", "timeout_per_audio_minute"),
+  poll_interval = .gen_default("gen_stt", "poll_interval"),
+  max_poll_seconds = .gen_default("gen_stt", "max_poll_seconds"),
+  executable = .gen_default("gen_stt", "executable"),
+  native_engine = .gen_default("gen_stt", "native_engine"),
+  native_backend = .gen_default("gen_stt", "native_backend"),
+  native_quant = .gen_default("gen_stt", "native_quant"),
+  native_kv_quant = .gen_default("gen_stt", "native_kv_quant"),
+  native_device = .gen_default("gen_stt", "native_device"),
+  max_new_tokens = .gen_default("gen_stt", "max_new_tokens"),
+  base_url = .gen_default("gen_stt", "base_url"),
+  api_key = .gen_default("gen_stt", "api_key"),
+  response_format = .gen_default("gen_stt", "response_format"),
+  chunking = .gen_default("gen_stt", "chunking"),
+  chunk_bitrate_kbps = .gen_default("gen_stt", "chunk_bitrate_kbps"),
+  chunk_segment_seconds = .gen_default("gen_stt", "chunk_segment_seconds"),
+  checkpoint_dir = .gen_default("gen_stt", "checkpoint_dir"),
+  resume = .gen_default("gen_stt", "resume"),
+  chunk_retry_forever = .gen_default("gen_stt", "chunk_retry_forever"),
+  chunk_max_retries = .gen_default("gen_stt", "chunk_max_retries"),
+  chunk_retry_wait_seconds = .gen_default("gen_stt", "chunk_retry_wait_seconds"),
+  output = .gen_default("gen_stt", "output"),
+  chunk_format = .gen_default("gen_stt", "chunk_format"),
+  checkpoint_retention = .gen_default("gen_stt", "checkpoint_retention"),
   ...
 ) {
   start_time <- Sys.time()
-  dots <- list(...)
-  if (length(dots)) {
-    dot_names <- names(dots)
-    if (is.null(dot_names)) dot_names <- rep("", length(dots))
-    shown <- ifelse(nzchar(dot_names), dot_names, "<unnamed>")
-    stop(
-      "Unused STT argument(s): ", paste(unique(shown), collapse = ", "),
-      ".",
-      call. = FALSE
-    )
-  }
-  save_txt <- .stt_validate_logical_scalar(save_txt, "save_txt")
-  convert <- .stt_validate_logical_scalar(convert, "convert")
+  .gen_internal_validate("gen_stt")
   chunk_options <- .stt_chunk_validate_options(
     chunking = chunking,
     chunk_bitrate_kbps = chunk_bitrate_kbps,
@@ -259,29 +248,10 @@ gen_stt.default <- function(
     chunk_retry_wait_seconds = chunk_retry_wait_seconds,
     output = output
   )
-  diarize <- .stt_validate_logical_scalar(diarize, "diarize")
-  timestamps <- .stt_validate_logical_scalar(timestamps, "timestamps")
-  timeout_api <- .stt_validate_positive_number(timeout_api, "timeout_api")
   timeout_api_base <- timeout_api
-  timeout_per_audio_minute <- .stt_validate_nonnegative_number(
-    timeout_per_audio_minute,
-    "timeout_per_audio_minute"
-  )
-  poll_interval <- .stt_validate_positive_number(
-    poll_interval,
-    "poll_interval"
-  )
-  max_poll_seconds <- .stt_validate_positive_number(
-    max_poll_seconds,
-    "max_poll_seconds"
-  )
   # Normalize inputs. Keep track of the temporary model-specific service name
   # so callers of the pre-release adapter still select the same engine while
   # the public result uses the durable, transport-level service id.
-  if (is.list(service)) {
-    service <- service$service %||% if (length(service)) service[[1]] else NULL
-  }
-  if (is.vector(service)) service <- as.character(service[1])
   checkpoint_service_label <- service
   legacy_moss_service <- .stt_is_legacy_moss_service(service)
   if (legacy_moss_service) {
@@ -299,28 +269,8 @@ gen_stt.default <- function(
       )
     }
   }
-  if (is.list(model)) {
-    model <- model$model %||% if (length(model)) model[[1]] else NULL
-  }
-  if (is.vector(model)) model <- as.character(model[1])
-  if (is.list(language)) {
-    language <- language$language %||% if (length(language)) language[[1]] else NULL
-  }
-  if (is.vector(language)) language <- as.character(language[1])
-
   service <- .stt_normalize_service(service)
-  model <- if (!is.null(model)) as.character(model)[1] else NULL
-  if (is.null(model) || length(model) == 0L || is.na(model) || !nzchar(model)) {
-    model <- NULL
-  }
-  if (!is.null(language)) {
-    language <- as.character(language)[1]
-    if (is.na(language) || !nzchar(language)) language <- NULL
-  }
-  if (!is.null(prompt)) {
-    prompt <- as.character(prompt)[1]
-    if (is.na(prompt) || !nzchar(prompt)) prompt <- NULL
-  }
+  if (!is.null(prompt) && !nzchar(prompt)) prompt <- NULL
 
   label_source <- audio
   prep <- .stt_prepare_audio(audio, convert = convert)

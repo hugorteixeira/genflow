@@ -680,13 +680,11 @@ test_that("auxiliary speaker controls are absent and rejected", {
 
   expect_error(
     gen_stt("missing.wav", diarize_speakers = TRUE),
-    "Unused STT argument(s): diarize_speakers",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
   expect_error(
     gen_stt("missing.wav", diarize_embedder = FALSE),
-    "Unused STT argument(s): diarize_embedder",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
 })
 

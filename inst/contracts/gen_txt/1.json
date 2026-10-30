@@ -1,0 +1,252 @@
+{
+  "id": "gen_txt",
+  "version": 1,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "context": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-content-kind": "text",
+        "title": "Texto",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "res_context": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "add": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "null"
+        ],
+        "x-r-types": [
+          "data.frame",
+          "matrix"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "add_img": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "x-content-kind": "image",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "label": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "service": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "openai",
+        "title": "Serviço",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 100
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": "gpt-5-mini",
+        "title": "Modelo",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 300
+      },
+      "temp": {
+        "type": "number",
+        "minimum": 0,
+        "default": 1,
+        "title": "Temperatura"
+      },
+      "reasoning": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          null
+        ],
+        "default": null,
+        "title": "Esforço de raciocínio"
+      },
+      "tools": {
+        "type": [
+          "boolean",
+          "object",
+          "array",
+          "string",
+          "null"
+        ],
+        "default": false,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "plugins": {
+        "type": [
+          "object",
+          "array",
+          "string",
+          "null"
+        ],
+        "default": null,
+        "title": "Plugins"
+      },
+      "my_tools": {
+        "type": [
+          "object",
+          "array",
+          "string",
+          "null"
+        ],
+        "x-r-types": [
+          "function"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "timeout_api": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 240,
+        "title": "Tempo máximo da chamada (s)"
+      },
+      "base_url": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Endereço do serviço local"
+      },
+      "null_repeat": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "persist": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "retry_delays": {
+        "type": "array",
+        "items": {
+          "type": "number",
+          "minimum": 0
+        },
+        "default": [
+          2,
+          5,
+          10
+        ],
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "retry_deadline": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "exclusiveMinimum": 0,
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "max_output_tokens": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1,
+        "maximum": 2147483647,
+        "x-ui": {
+          "service": [
+            "openai"
+          ]
+        },
+        "default": null,
+        "title": "Limite de tokens de saída"
+      }
+    },
+    "required": [
+      "context"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_txt",
+  "modality": "text",
+  "inputs": {
+    "context": "asset:text|asset:json",
+    "add_img": "asset:image"
+  },
+  "outputs": {
+    "content": "asset:text"
+  },
+  "studio": {
+    "id": "text.generate",
+    "inputs": {
+      "text": "text|json",
+      "image": "image"
+    },
+    "output": "text",
+    "execution": "inline",
+    "available": true
+  }
+}

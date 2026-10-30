@@ -1,0 +1,20 @@
+{
+  "id": "list.item",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "index": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 1,
+        "title": "Posição na lista"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "list.item"
+}

@@ -10,18 +10,18 @@ gen_tts(text, ...)
 
 \method{gen_tts}{default}(
   text,
-  add = NULL,
-  directory = NULL,
-  label = NULL,
-  service = "openai",
-  model = "gpt-4o-mini-tts",
-  voice = NULL,
-  format = "mp3",
-  speed = 1,
-  instructions = NULL,
-  preview = FALSE,
-  timeout_api = 240,
-  persist = TRUE,
+  add = .gen_default("gen_tts", "add"),
+  directory = .gen_default("gen_tts", "directory"),
+  label = .gen_default("gen_tts", "label"),
+  service = .gen_default("gen_tts", "service"),
+  model = .gen_default("gen_tts", "model"),
+  voice = .gen_default("gen_tts", "voice"),
+  format = .gen_default("gen_tts", "format"),
+  speed = .gen_default("gen_tts", "speed"),
+  instructions = .gen_default("gen_tts", "instructions"),
+  preview = .gen_default("gen_tts", "preview"),
+  timeout_api = .gen_default("gen_tts", "timeout_api"),
+  persist = .gen_default("gen_tts", "persist"),
   ...
 )
 

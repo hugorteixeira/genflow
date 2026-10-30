@@ -236,8 +236,7 @@ test_that("ellipsis arguments are rejected instead of ignored", {
       persist = FALSE,
       directory = tempdir()
     ),
-    "`...` is reserved",
-    fixed = TRUE
+    class = "genflow_validation_error"
   )
 
   agent <- structure(
