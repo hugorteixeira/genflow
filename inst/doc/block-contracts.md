@@ -171,6 +171,13 @@ contract and cannot be enabled by a document. Applications own that policy.
 - `gen_block_contracts()` returns the installed catalog keyed by `block@version`.
 - `gen_validate_call()` prepares defaults and checks one call without executing it.
 - `gen_validate_structure()` checks a graph, fragment or complete definition bundle.
+- `gen_materialize_structure()` prepares a Studio body or bundle for composition,
+  selecting root nodes plus ancestors, pruning unused resources, and applying an
+  optional prefix to root IDs, root interface names and dependency keys. Compact
+  `block/args` graphs are not materializable Studio definitions. The report uses
+  the same validators and adds `node_map`, `input_map`, `resource_sources` and
+  `asset_sources`. It preserves authored argument omissions; effective defaults
+  remain available in the graph metadata. Invalid input returns diagnostics.
 - `gen_validate_agent_definition()` prepares a portable agent body using the same
   checks as a complete bundle, without resolving its prompt reference.
 - `gen_block_ports()` checks typed connections of an already prepared block.
@@ -183,6 +190,15 @@ contracts describe compatible composition; the R library does not implement a
 new durable scheduler. Studio retains authentication, resource resolution,
 version storage, jobs and UI layout. It consumes only exported APIs from an
 installed Genflow package.
+
+For example, `gen_materialize_structure(bundle, prefix = "scene1",
+node_ids = list("out"))` includes `out` and every ancestor. The application can
+show the returned document, resolve declared external inputs, and persist it in
+one revision-checked transaction. The function itself does not read referenced
+files, allocate IDs in a database, change a running graph or execute blocks.
+Prefixes never truncate identifiers: a resulting name beyond the existing
+format limits is a validation error. Nested workflows keep their own node and
+interface scopes. An empty prefix preserves identifiers for full-document edits.
 
 ## Supported schema vocabulary
 

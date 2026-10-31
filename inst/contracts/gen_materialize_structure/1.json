@@ -1,0 +1,18 @@
+{
+  "id": "gen_materialize_structure",
+  "version": 1,
+  "kind": "function",
+  "function": "gen_materialize_structure",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "document": { "type": ["object", "string"], "title": "Documento do workflow" },
+      "prefix": { "type": "string", "default": "", "pattern": "^([A-Za-z][A-Za-z0-9_]*)?$", "maxLength": 32, "title": "Prefixo das peças" },
+      "node_ids": { "type": ["array", "null"], "default": null, "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "title": "Peças selecionadas (inclui antecedentes)" }
+    },
+    "required": ["document"],
+    "additionalProperties": false
+  },
+  "inputs": { "document": "asset:text|asset:json" },
+  "outputs": { "report": "asset:json", "document": "asset:json" }
+}

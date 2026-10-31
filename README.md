@@ -58,6 +58,11 @@ Studio export bundle with its agents, prompts and subworkflows,
 including connections, types and cycles. Direct generators perform the same
 argument checks before provider work.
 
+Version 0.0.14 adds `gen_materialize_structure(document, prefix, node_ids)`:
+validate and prepare a selected workflow fragment, including its ancestors,
+without executing it. It preserves authored arguments, namespaces identifiers
+and returns the same portable format for an application to preview and apply.
+
 See [block contracts and the workflow format](inst/doc/block-contracts.md) for
 examples, supported schema keywords, validation limits and versioning.
 

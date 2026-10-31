@@ -118,9 +118,9 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       errors <- c(errors,.gen_definition_shape(n$inputs[[key]],list(node=list(type="string",maxLength=64),
         port=list(type="string",maxLength=64)),c("node","port"),ip))
     }
-    block <- if (identical(n$type,"validate")) "gen_validate_structure" else n$type
+    block <- if (identical(n$type,"validate")) "gen_validate_structure" else if (identical(n$type,"materialize")) "gen_materialize_structure" else n$type
     contract <- if (.gen_scalar(block)) tryCatch(gen_block_contracts(block,n$contract_version %||% 1L),error=function(e)NULL) else NULL
-    if (!is.null(contract) && contract$kind!="workflow" && !identical(n$type,"validate"))
+    if (!is.null(contract) && contract$kind!="workflow" && !n$type %in% c("validate","materialize"))
       add("invalid_node_type",paste0(path,"/type"),"Studio nodes require a workflow block type.",n$id)
     config <- n$config %||% list()
     if (.gen_object(config)) {

@@ -165,5 +165,5 @@ test_that("call and port validation require exactly one identified contract", {
     expect_identical(call$errors[[1]]$code,"unknown_contract")
     expect_identical(ports$errors[[1]]$code,"unknown_contract")
   }
-  expect_length(gen_block_contracts(),23L)
+  expect_length(gen_block_contracts(),24L)
 })
