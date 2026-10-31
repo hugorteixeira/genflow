@@ -1,3 +1,26 @@
+# genflow 0.0.13
+
+- Compare JSON objects and schemas by exact values and property names, with
+  object ordering ignored. Call/port validators reject missing contract IDs.
+- Preserve invalid explicit counts, prepare static graph metadata once, and
+  separate incomplete root diagnostics from envelope/dependency failures.
+- Export `gen_validate_agent_definition()` so consumers reuse agent preparation.
+  Runtime-owned agent parameters use `x-owner`, independently of form visibility.
+- Include shared portable examples for contract parity tests and verify pinned
+  contract versions independently.
+
+# genflow 0.0.12
+
+- `gen_validate_structure()` now accepts complete `genflow-studio-definition` v1
+  bundles and self-contained Studio workflow bodies using the existing contract
+  and typed graph engine. It validates all resources offline, reports original
+  document paths and returns a prepared copy plus resource dependency order.
+- Added cross-resource checks for agent arguments, prompts, candidate schemas,
+  subworkflow interfaces and asset manifests. Preserved v1 empty-object and
+  plural-agent-reference compatibility without modifying stored documents.
+- Added an R-side `check_capabilities` policy for isolated fixture validation;
+  serialized documents cannot change this policy. No contracts or defaults changed.
+
 # genflow 0.0.11
 
 - Added versioned block contracts with shared defaults, typed connections and

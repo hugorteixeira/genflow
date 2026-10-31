@@ -32,7 +32,7 @@
 #' @return A list with `valid`, `errors`, and inferred output `ports`.
 #' @export
 gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L, interface = list(), exports = list()) {
-  contract <- tryCatch(gen_block_contracts(block,version),error=function(e)e)
+  contract <- tryCatch(.gen_call_contract(block,version),error=function(e)e)
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),ports=list()))
   errors <- list(); ports <- list()
   add <- function(key,message,code="incompatible_input") errors[[length(errors)+1L]] <<- .gen_issue(code,.gen_pointer("/inputs",key),message)
@@ -137,18 +137,37 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
 #' Independent errors are accumulated across nodes, arguments, and connections.
 #' Invalid prerequisites suppress checks that would only produce cascading
 #' errors. Connected argument values remain pending until execution.
-#' @param document A JSON string or parsed list containing a declarative graph.
+#' @param document A JSON string or parsed list: a compact declarative graph,
+#'   a Studio workflow body, or a complete `genflow-studio-definition` v1 bundle.
+#'   References to agents, prompts and subworkflows require the complete bundle.
 #' @param require_output Require an explicit final output for a complete graph.
+#' @param check_capabilities R-side policy for checking provider capabilities and
+#'   rejecting fixture controls. Defaults to TRUE; FALSE is for isolated fixtures.
+#'   This policy cannot be supplied inside the serialized document.
 #' @return A report with `valid`, `errors`, `document` (a prepared copy), `ports`,
-#'   `order`, and `pending`. The supplied input is never modified.
+#'   `order`, and `pending`. Complete bundles also return static `graph` and
+#'   `plans` metadata and `bundle_errors` for envelope/dependency failures. Root
+#'   execution diagnostics remain in `errors`, including incomplete drafts.
+#'   The supplied input is never modified.
 #' @export
-gen_validate_structure <- function(document, require_output = .gen_default("gen_validate_structure","require_output")) {
+gen_validate_structure <- function(document, require_output = .gen_default("gen_validate_structure","require_output"), check_capabilities = TRUE) {
   args <- list(require_output=require_output)
   if (!missing(document)) args["document"] <- list(document)
   call <- gen_validate_call("gen_validate_structure",args)
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL,ports=list(),order=list(),pending=list()))
+  if (!is.logical(check_capabilities) || length(check_capabilities)!=1L || is.na(check_capabilities))
+    return(list(valid=FALSE,errors=list(.gen_issue("invalid_policy","/check_capabilities","check_capabilities must be boolean.")),document=NULL,ports=list(),order=list(),pending=list()))
   parsed <- if (.gen_scalar(document)) tryCatch(.gen_parse_document(document),error=function(e)NULL) else document
-  if (!.gen_object(parsed) || is.null(parsed$workflows) || !length(parsed$workflows)) return(.gen_validate_structure_graph(document,require_output))
+  if (.gen_object(parsed) && "format" %in% names(parsed)) return(.gen_validate_definition_bundle(parsed,require_output,check_capabilities))
+  if (.gen_object(parsed) && is.list(parsed$nodes) && any(vapply(parsed$nodes,function(n) .gen_object(n) && "type" %in% names(n),logical(1)))) {
+    bundle <- list(format="genflow-studio-definition",schema_version=1L,
+      root=list(kind="workflow",name="Workflow",body=parsed),resources=list(),assets=list())
+    report <- .gen_validate_definition_bundle(bundle,require_output,check_capabilities)
+    report$document <- report$document$root$body
+    report$errors <- lapply(report$errors,function(e) { e$path <- sub("^/root/body","",e$path); e })
+    return(report)
+  }
+  if (!.gen_object(parsed) || is.null(parsed$workflows) || !length(parsed$workflows)) return(.gen_validate_structure_graph(document,require_output,check_capabilities))
   definitions <- parsed$workflows
   if (!.gen_object(definitions) || length(definitions)>64L) return(list(valid=FALSE,errors=list(.gen_issue("invalid_workflows","/workflows","workflows must contain at most 64 named definitions.")),document=parsed,ports=list(),order=list(),pending=list()))
   reports <- list(); interfaces <- list(); errors <- list(); active <- character()
@@ -177,7 +196,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         if (.gen_object(n) && .gen_scalar(n$block) && n$block %in% c("subworkflow","foreach") && .gen_object(n$args) && .gen_scalar(n$args$workflow_version_id)) resolve(n$args$workflow_version_id)
       }
       if (.gen_object(value)) value$workflows <- interfaces
-      report <- .gen_validate_structure_graph(value,TRUE)
+      report <- .gen_validate_structure_graph(value,TRUE,check_capabilities)
       if (report$valid) {
         incoming <- list(); outgoing <- list()
         for (n in report$document$nodes) {
@@ -203,14 +222,14 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
   }
   for (key in names(definitions)) resolve(key)
   parsed$workflows <- interfaces
-  result <- .gen_validate_structure_graph(parsed,require_output)
+  result <- .gen_validate_structure_graph(parsed,require_output,check_capabilities)
   result$errors <- c(errors,result$errors); result$valid <- !length(result$errors)
   result$document$workflows <- lapply(names(definitions),function(key) reports[[key]]$document %||% definitions[[key]])
   names(result$document$workflows) <- names(definitions)
   result
 }
 
-.gen_validate_structure_graph <- function(document, require_output = FALSE) {
+.gen_validate_structure_graph <- function(document, require_output = FALSE, check_capabilities = TRUE) {
   errors <- list(); ports <- list(); prepared <- list(); ordered <- character(); pending <- list()
   finish <- function(value=NULL) list(valid=!length(errors),errors=errors,document=value,ports=ports,order=as.list(ordered),pending=pending)
   add <- function(code,path,message,node=NULL) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message,node)
@@ -258,12 +277,25 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
       refs[[i]][key] <- list(ref)
     }
     checked <- gen_validate_call(n$block,n$args %||% list(),version,
-      bound=if (contract$kind=="function") names(bindings) else character())
+      bound=if (contract$kind=="function") names(bindings) else character(), check_capabilities=check_capabilities)
     for (e in checked$errors) add(e$code,paste0(path,e$path),e$message,id)
     n$args <- checked$args; n$inputs <- bindings; n$contract_version <- version
     prepared[[i]] <- n
     pending[[ids[[i]] %||% as.character(i)]] <- checked$pending
     usable[[i]] <- checked$valid && valid_ids[[i]] && length(refs[[i]])==length(bindings)
+  }
+  input_keys <- character(); output_keys <- character()
+  for (i in seq_along(prepared)) {
+    n <- prepared[[i]]
+    if (is.null(n) || !.gen_object(n$args)) next
+    if (n$block=="input" && .gen_scalar(n$args$key)) {
+      if (n$args$key %in% input_keys) add("duplicate_input",paste0("/nodes/",i-1L,"/args/key"),"Input keys must be unique within a workflow.",n$id)
+      input_keys <- c(input_keys,n$args$key)
+    }
+    if (n$block=="output") {
+      for (key in intersect(names(n$inputs),output_keys)) add("duplicate_output",.gen_pointer(paste0("/nodes/",i-1L,"/inputs"),key),"Output names must be unique across the workflow.",n$id)
+      output_keys <- c(output_keys,names(n$inputs))
+    }
   }
   # One adjacency traversal, including invalid branches, so long linear scripts
   # do not repeatedly scan every remaining node.

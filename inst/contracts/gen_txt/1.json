@@ -12,14 +12,16 @@
         "title": "Texto",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "res_context": {
         "type": "boolean",
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "add": {
         "type": [
@@ -35,7 +37,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "add_img": {
         "type": [
@@ -47,7 +50,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "directory": {
         "type": [
@@ -58,7 +62,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "label": {
         "type": [
@@ -68,7 +73,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "service": {
         "type": "string",
@@ -78,7 +84,8 @@
         "x-ui": {
           "hidden": true
         },
-        "maxLength": 100
+        "maxLength": 100,
+        "x-owner": "runtime"
       },
       "model": {
         "type": [
@@ -91,7 +98,8 @@
         "x-ui": {
           "hidden": true
         },
-        "maxLength": 300
+        "maxLength": 300,
+        "x-owner": "runtime"
       },
       "temp": {
         "type": "number",
@@ -127,7 +135,8 @@
         "default": false,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "plugins": {
         "type": [
@@ -152,7 +161,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "timeout_api": {
         "type": "number",
@@ -174,14 +184,16 @@
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "persist": {
         "type": "boolean",
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "retry_delays": {
         "type": "array",
@@ -196,7 +208,8 @@
         ],
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "retry_deadline": {
         "type": [
@@ -207,7 +220,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "max_output_tokens": {
         "type": [

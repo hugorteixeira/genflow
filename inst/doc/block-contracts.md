@@ -1,6 +1,6 @@
 # Versioned block contracts
 
-Genflow 0.0.11 packages block contracts in `inst/contracts/<block>/<version>.json`.
+Genflow packages block contracts in `inst/contracts/<block>/<version>.json`.
 The installed location is `system.file("contracts", package = "genflow")`.
 A contract owns argument names, required fields, types, bounds, defaults, typed
 ports, and optional presentation annotations. No database or model is needed to
@@ -97,11 +97,82 @@ Applications that already resolve immutable workflow versions may instead supply
 types. This validates the declared interface only; the application must validate
 the referenced implementation and permissions separately.
 
+## Complete definition bundles
+
+Since 0.0.12, the same validator also accepts the existing
+`genflow-studio-definition` version 1 envelope. This is the portable export of a
+workflow together with its agent, prompt and subworkflow definitions:
+
+```json
+{
+  "format": "genflow-studio-definition",
+  "schema_version": 1,
+  "root": {
+    "kind": "workflow",
+    "name": "A short story",
+    "body": {
+      "schema_version": 1,
+      "nodes": [
+        {"id": "brief", "type": "input", "config": {"key": "brief"}},
+        {"id": "write", "type": "generate", "config": {"agent_version_id": "writer"},
+         "inputs": {"input": {"node": "brief", "port": "asset"}}},
+        {"id": "out", "type": "output", "inputs": {"story": {"node": "write", "port": "asset"}}}
+      ]
+    }
+  },
+  "resources": [
+    {"key": "writer", "kind": "agent", "name": "Writer",
+     "body": {"operation": "text.generate", "service": "openai", "model": "gpt-5-mini",
+              "prompt_version_id": "prompt", "parameters": {"temp": 0.7}}},
+    {"key": "prompt", "kind": "prompt", "name": "Prompt",
+     "body": {"template": "Write a short story about {{input}}"}}
+  ],
+  "assets": []
+}
+```
+
+`root.kind` can also be `agent` or `prompt`. Each resource has a unique local
+`key`; an exported version UUID is just one possible key. References bind only to
+declared resources of the expected kind. Every resource is checked, including
+unused ones. Cycles, missing resources, invalid prompts or agent parameters,
+missing prompt bindings, incompatible kinds/schemas, and graph errors are
+reported together. A bare Studio workflow body is accepted if self-contained;
+references to external definitions require the complete bundle.
+
+The adapter translates `type`/`config` to `block`/`args` internally and reuses the
+same contract and typed-port validator. It returns `document` in the original
+format with a prepared copy of each body, preserving IDs, metadata and optional
+canvas coordinates. Paths point into the supplied document, for example
+`/resources/0/body/parameters/temp`. `resource_order` contains keys in dependency
+order for a consuming importer; validation itself does not import anything.
+
+The v1 envelope is bounded to 3 MiB, 3,300 resources, 3,200 asset descriptors,
+100 nodes per workflow, 64 subworkflow resources and 8 nested workflow levels.
+A manifest asset is `{ "key": "picture", "kind": "image", "sha256": "..." }`
+with a lowercase 64-digit hash. Bytes are not embedded or read. The report marks
+`assets_verified: false`; the application verifies actual content, access and
+runtime availability. A valid reserved operation remains unavailable for
+execution until its adapter exists. Future connection values are checked at
+execution, not invented by validation.
+
+For compatibility with v1 exports, empty object fields historically serialized
+as `[]` are normalized to `{}` only where the definition shape expects an
+object. Arrays of nodes, resources, assets and argument values remain arrays.
+When an old node retains both agent reference fields, `agent_version_ids` keeps
+its established precedence; the unused singular field is removed from the
+prepared copy. Neither normalization writes back to stored versions or results.
+
+`check_capabilities = FALSE` is an R-side policy for isolated fixture tests,
+including fixture agent controls. It is not part of the serialized block
+contract and cannot be enabled by a document. Applications own that policy.
+
 ## Public API and application boundary
 
 - `gen_block_contracts()` returns the installed catalog keyed by `block@version`.
 - `gen_validate_call()` prepares defaults and checks one call without executing it.
-- `gen_validate_structure()` checks an entire declarative graph or fragment.
+- `gen_validate_structure()` checks a graph, fragment or complete definition bundle.
+- `gen_validate_agent_definition()` prepares a portable agent body using the same
+  checks as a complete bundle, without resolving its prompt reference.
 - `gen_block_ports()` checks typed connections of an already prepared block.
 - `gen_check_schema()` checks the supported schema vocabulary and returns its
   `keywords`; `gen_validate_schema()` checks data without inserting defaults.
@@ -130,7 +201,8 @@ call ergonomics. JSON documents preserve the difference between `[]` and `{}`;
 schema data validation requires a named list for an object, including
 `structure(list(), names = character())` for `{}`.
 
-Genflow annotations are `x-ui` (presentation and backend-owned fields),
+Genflow annotations are `x-ui` (presentation only), `x-owner` (runtime/caller
+ownership of parameters in portable agent definitions),
 `x-content-kind` (connection kinds), `x-r-types` (direct-R input extensions),
 `x-default-by` (a declared field-dependent default/compatibility mapping) and
 `x-runtime-only` (defaults excluded from portable configurations, such as an API
@@ -140,7 +212,7 @@ explicit library functions rather than a new expression language in JSON.
 
 ## Maintaining a contract
 
-Version 1 is the first catalog version. Omitting a version currently selects 1;
+Version 1 is the first catalog version. Omitting a version selects 1;
 prepared documents make it explicit. Unknown versions fail. Treat published
 contracts and their defaults as immutable: a breaking argument/default change
 requires a new contract version, corresponding execution support, and an
@@ -152,3 +224,29 @@ release. Tests compare generator formals against contracts and verify failure
 before side effects. Applications must update their installed package and start
 a new R process to load a changed release; editing a source checkout does not
 change a running installed namespace.
+
+## Prepared graph metadata and drafts
+
+Complete bundles return `graph` for the root workflow and `plans` keyed by
+resource key for nested workflows. Each contains `order`, `ports`, `schemas`,
+`interface`, `exports`, `height`, and `derived` static configuration. Consumers
+can attach runtime identities and environment settings to that analysis instead
+of reimplementing graph rules. `derived` fields are separate from the editable
+`document`; they must not be written into authored node arguments.
+
+`valid` and `errors` still describe full static validity. `bundle_errors` contains
+blocking envelope, resource-reference and dependency diagnostics. Applications
+may store/copy an incomplete root as a draft only after checking those diagnostics
+and their own safe draft shape. They must retain the original invalid root values
+and require complete validation before publishing or executing. A successful draft
+import does not change `valid = FALSE` into permission to execute.
+
+JSON comparisons retain property names, ignore object-key order, preserve array
+order, and compare numbers exactly (R integer/double storage is equivalent).
+Omitted counts may be inferred from agents or a versioned default; explicit null
+counts are invalid and are never replaced by a default.
+
+Catalog entries are keyed by `(id, version)`. Consumers should choose a default
+version only when creating a new piece and always resolve a saved piece by its
+pinned version. `examples/definition-parity.json` provides shared cases for
+validity, preparation, ports and schemas without provider calls.

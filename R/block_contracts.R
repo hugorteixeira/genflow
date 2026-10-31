@@ -12,6 +12,24 @@
 .gen_object <- function(x) is.list(x) && !isTRUE(attr(x,"genflow.json_array")) && (!length(x) || (!is.null(names(x)) && !anyNA(names(x)) && !anyDuplicated(names(x)) && all(nzchar(names(x)))))
 .gen_scalar <- function(x, type = "character") typeof(x) %in% type && length(x) == 1L && !is.na(x)
 
+# JSON object order is irrelevant; property names, array order and exact values
+# are not. Integer/double storage is an R detail, not a different JSON number.
+.gen_json_canonical <- function(x) {
+  if (is.list(x)) {
+    if (!is.null(names(x))) x <- x[order(names(x))]
+    return(lapply(x, .gen_json_canonical))
+  }
+  if (is.numeric(x) && !is.complex(x)) return(as.numeric(x))
+  x
+}
+.gen_json_equal <- function(a, b) identical(.gen_json_canonical(a), .gen_json_canonical(b))
+
+# NULL means "whole catalog" only in gen_block_contracts(), never in a call.
+.gen_call_contract <- function(block, version) {
+  if (!.gen_scalar(block) || !nzchar(block)) stop("A block identifier is required.", call. = FALSE)
+  gen_block_contracts(block, version)
+}
+
 #' Read versioned contracts for workflow blocks
 #'
 #' Contracts include argument schemas and defaults, typed ports, and optional
@@ -60,7 +78,7 @@ gen_block_contracts <- function(block = NULL, version = 1L) {
 .gen_schema_keywords <- c("type", "properties", "required", "additionalProperties", "items", "enum",
   "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "pattern",
   "minItems", "maxItems", "uniqueItems", "default", "title", "description", "$comment",
-  "x-ui", "x-content-kind", "x-r-types", "x-default-by", "x-runtime-only")
+  "x-ui", "x-owner", "x-content-kind", "x-r-types", "x-default-by", "x-runtime-only")
 
 #' Validate the supported JSON Schema vocabulary
 #' @param schema A schema expressed as an R list. The supported vocabulary is
@@ -93,7 +111,8 @@ gen_check_schema <- function(schema) {
     }
     for (pair in list(c("minimum","maximum"),c("minLength","maxLength"),c("minItems","maxItems")))
       if (is.numeric(s[[pair[1]]]) && length(s[[pair[1]]])==1L && is.numeric(s[[pair[2]]]) && length(s[[pair[2]]])==1L && isTRUE(s[[pair[1]]] > s[[pair[2]]])) add(path,"Schema minimum exceeds maximum.")
-    if ("enum" %in% names(s) && (!length(s$enum) || !is.null(names(s$enum)) || anyDuplicated(s$enum))) add(path,"enum must contain unique choices in a non-empty array.")
+    if ("enum" %in% names(s) && (!length(s$enum) || !is.null(names(s$enum)) || anyDuplicated(lapply(s$enum, .gen_json_canonical)))) add(path,"enum must contain unique choices in a non-empty array.")
+    if ("x-owner" %in% names(s) && (!.gen_scalar(s[["x-owner"]]) || !s[["x-owner"]] %in% c("runtime","caller"))) add(path,"x-owner must be runtime or caller.")
     if ("uniqueItems" %in% names(s) && !.gen_scalar(s$uniqueItems,"logical")) add(path,"uniqueItems must be boolean.")
   }
   visit(schema)
@@ -117,7 +136,7 @@ gen_check_schema <- function(schema) {
   if (length(types) && !any(vapply(types,matches,logical(1)))) return(error("invalid_type",paste("Expected",paste(types,collapse=" or "))))
   errors <- list()
   add <- function(code,message) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message)
-  if (!is.null(schema$enum) && !any(vapply(schema$enum,function(x) isTRUE(all.equal(value,x,check.attributes=FALSE)),logical(1)))) add("invalid_enum","Value is outside the allowed choices.")
+  if (!is.null(schema$enum) && !any(vapply(schema$enum,function(x) .gen_json_equal(value,x),logical(1)))) add("invalid_enum","Value is outside the allowed choices.")
   if (is.null(value)) return(errors)
   if (.gen_scalar(value)) {
     if (!is.null(schema$pattern) && !grepl(schema$pattern,value,perl=TRUE)) add("invalid_pattern","Text does not match the required pattern (non-empty text must contain a non-space character).")
@@ -139,7 +158,7 @@ gen_check_schema <- function(schema) {
   } else if ("array" %in% types && matches("array")) {
     if (!is.null(schema$minItems) && length(value)<schema$minItems) add("too_few_items","Array has too few items.")
     if (!is.null(schema$maxItems) && length(value)>schema$maxItems) add("too_many_items","Array has too many items.")
-    if (isTRUE(schema$uniqueItems) && anyDuplicated(value)) add("duplicate_item","Array items must be unique.")
+    if (isTRUE(schema$uniqueItems) && anyDuplicated(lapply(value, .gen_json_canonical))) add("duplicate_item","Array items must be unique.")
     if (length(schema$items)) for (i in seq_along(value)) errors <- c(errors,.gen_schema_errors(value[[i]],schema$items,.gen_pointer(path,as.character(i-1L)),portable,depth+1L))
   }
   errors
@@ -183,7 +202,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
 }
 
 .gen_prepare_call <- function(block, args, version = 1L, bound = character(), check_capabilities = TRUE, portable = TRUE) {
-  contract <- tryCatch(gen_block_contracts(block,version),error=function(e)e)
+  contract <- tryCatch(.gen_call_contract(block,version),error=function(e)e)
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),args=args,defaulted=list(),pending=list()))
   schema <- contract$arguments
   if (!.gen_object(args)) return(list(valid=FALSE,errors=list(.gen_issue("invalid_arguments","/args","Arguments must be an object with unique names.")),args=args,defaulted=list(),pending=list()))

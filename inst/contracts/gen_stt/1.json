@@ -11,7 +11,8 @@
         "x-content-kind": "audio",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "service": {
         "type": "string",
@@ -21,7 +22,8 @@
         "x-ui": {
           "hidden": true
         },
-        "maxLength": 100
+        "maxLength": 100,
+        "x-owner": "runtime"
       },
       "model": {
         "type": [
@@ -34,7 +36,8 @@
         "x-ui": {
           "hidden": true
         },
-        "maxLength": 300
+        "maxLength": 300,
+        "x-owner": "runtime"
       },
       "language": {
         "type": [
@@ -62,7 +65,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "label": {
         "type": [
@@ -72,14 +76,16 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "save_txt": {
         "type": "boolean",
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "convert": {
         "type": "boolean",
@@ -212,7 +218,8 @@
         "x-ui": {
           "hidden": true
         },
-        "x-runtime-only": true
+        "x-runtime-only": true,
+        "x-owner": "runtime"
       },
       "response_format": {
         "type": "string",
@@ -253,21 +260,24 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "resume": {
         "type": "boolean",
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "chunk_retry_forever": {
         "type": "boolean",
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "chunk_max_retries": {
         "type": "integer",
@@ -275,7 +285,8 @@
         "default": 20,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "chunk_retry_wait_seconds": {
         "type": "number",
@@ -292,7 +303,8 @@
         "default": "full",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "chunk_format": {
         "type": "string",
@@ -313,7 +325,8 @@
         "default": "all",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       }
     },
     "required": [

@@ -12,7 +12,8 @@
         "title": "Descrição da imagem",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "add": {
         "type": [
@@ -28,7 +29,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "directory": {
         "type": [
@@ -39,7 +41,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "label": {
         "type": [
@@ -49,7 +52,8 @@
         "default": null,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       },
       "service": {
         "type": "string",
@@ -59,7 +63,8 @@
         "x-ui": {
           "hidden": true
         },
-        "maxLength": 100
+        "maxLength": 100,
+        "x-owner": "runtime"
       },
       "model": {
         "type": [
@@ -81,7 +86,8 @@
             "openai": "gpt-image-2"
           }
         },
-        "maxLength": 300
+        "maxLength": 300,
+        "x-owner": "runtime"
       },
       "temp": {
         "type": "number",
@@ -142,7 +148,8 @@
         "default": true,
         "x-ui": {
           "hidden": true
-        }
+        },
+        "x-owner": "runtime"
       }
     },
     "required": [

@@ -189,9 +189,11 @@ test_that("PSOCK workers receive only current batch state", {
     )
   })
   expect_length(raw_results, 2L)
-  expect_true(all(vapply(raw_results, function(result) {
-    is.list(result) && is.null(result$erro)
-  }, logical(1))))
+  # The unknown fixture provider is rejected by the installed argument contract.
+  # Workers must return that task error, not lose the result in transport.
+  expect_true(all(vapply(raw_results, is.list, logical(1))))
+  expect_identical(vapply(raw_results, `[[`, character(1), "erro"),
+                   rep("/args/service: Unknown provider: mock", 2L))
   expect_identical(vapply(raw_results, `[[`, character(1), "task_id"), c("1", "2"))
 })
 

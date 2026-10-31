@@ -53,7 +53,8 @@ failures without discarding generated content.
 Version 0.0.11 adds an offline, versioned block catalog shared by execution and
 workflow validation. `gen_validate_call("gen_img", list(prompt = "A garden"))`
 returns prepared defaults and all argument errors without generating an image.
-`gen_validate_structure(document)` checks a complete JSON workflow or fragment,
+`gen_validate_structure(document)` checks a JSON workflow, fragment, or complete
+Studio export bundle with its agents, prompts and subworkflows,
 including connections, types and cycles. Direct generators perform the same
 argument checks before provider work.
 

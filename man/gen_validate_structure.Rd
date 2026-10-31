@@ -6,17 +6,27 @@
 \usage{
 gen_validate_structure(
   document,
-  require_output = .gen_default("gen_validate_structure", "require_output")
+  require_output = .gen_default("gen_validate_structure", "require_output"),
+  check_capabilities = TRUE
 )
 }
 \arguments{
-\item{document}{A JSON string or parsed list containing a declarative graph.}
+\item{document}{A JSON string or parsed list: a compact declarative graph,
+a Studio workflow body, or a complete \code{genflow-studio-definition} v1 bundle.
+References to agents, prompts and subworkflows require the complete bundle.}
 
 \item{require_output}{Require an explicit final output for a complete graph.}
+
+\item{check_capabilities}{R-side policy for checking provider capabilities and
+rejecting fixture controls. Defaults to TRUE; FALSE is for isolated fixtures.
+This policy cannot be supplied inside the serialized document.}
 }
 \value{
 A report with \code{valid}, \code{errors}, \code{document} (a prepared copy), \code{ports},
-\code{order}, and \code{pending}. The supplied input is never modified.
+\code{order}, and \code{pending}. Complete bundles also return static \code{graph} and
+\code{plans} metadata and \code{bundle_errors} for envelope/dependency failures. Root
+execution diagnostics remain in \code{errors}, including incomplete drafts.
+The supplied input is never modified.
 }
 \description{
 A document contains \code{schema_version = 1}, \code{nodes}, and optional named

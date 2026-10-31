@@ -145,3 +145,25 @@ test_that("prepared STT scripts stay portable and schema arrays do not accept sc
   expect_true(gen_validate_structure(result$document)$valid)
   expect_false(gen_validate_schema("scalar",list(type="array",items=list(type="string")))$valid)
 })
+test_that("JSON equality preserves keys and exact values and ignores object order", {
+  schema <- list(type="object",enum=list(list(right=1)))
+  expect_false(gen_validate_schema(list(wrong=1),schema)$valid)
+  expect_false(gen_validate_schema(1+1e-9,list(type="number",enum=list(1)))$valid)
+  expect_true(gen_validate_schema(1L,list(type="number",enum=list(1)))$valid)
+  expect_true(gen_validate_schema(list(b=2,a=1),list(type="object",enum=list(list(a=1,b=2))))$valid)
+  expect_false(gen_validate_schema(list(2,1),list(type="array",enum=list(list(1,2))))$valid)
+  expect_false(gen_check_schema(list(enum=list(list(a=1,b=2),list(b=2,a=1))))$valid)
+  expect_false(gen_validate_schema(list(list(a=1,b=2),list(b=2,a=1)),list(type="array",uniqueItems=TRUE))$valid)
+})
+
+test_that("call and port validation require exactly one identified contract", {
+  for (block in list(NULL,"",NA_character_,c("gen_txt","gen_img"),list("gen_txt"),FALSE)) {
+    call <- gen_validate_call(block)
+    ports <- gen_block_ports(block)
+    expect_false(call$valid)
+    expect_false(ports$valid)
+    expect_identical(call$errors[[1]]$code,"unknown_contract")
+    expect_identical(ports$errors[[1]]$code,"unknown_contract")
+  }
+  expect_length(gen_block_contracts(),23L)
+})
