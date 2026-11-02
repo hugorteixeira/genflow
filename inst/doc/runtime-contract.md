@@ -38,7 +38,7 @@ Os campos públicos anteriores permanecem: `response_value`, `service`, `model`,
 | `inference_status` | `SUCCESS` ou `ERROR`, antes da publicação em disco |
 | `persistence$status` | `saved`, `temporary`, `not_requested` ou `failed` |
 | `persistence$path/bytes/sha256` | Identidade do arquivo quando disponível |
-| `error` | NULL ou `{code, message, retryable, stage}` |
+| `error` | NULL ou [diagnóstico v1](diagnostics.md), com código, contexto, causas e resultado |
 | `usage$source` | `provider`, `estimated` ou `unknown` |
 | `usage$input_tokens/output_tokens` | Uso disponível; campos desconhecidos ficam NA |
 

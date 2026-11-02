@@ -67,6 +67,7 @@ gen_img.default <- function(
   persist = .gen_default("gen_img", "persist"),
   ...
 ) {
+  withCallingHandlers({
 
   start_time <- Sys.time()
   .gen_internal_validate("gen_img")
@@ -86,6 +87,7 @@ gen_img.default <- function(
   error_occurred <- FALSE
   api_call_error_msg <- "" # Store specific error
   persistence_error <- NULL
+  provider_error <- NULL
 
   tryCatch({
     file_path <- switch(service,
@@ -121,7 +123,7 @@ gen_img.default <- function(
     )
   }, error = function(e) {
     error_occurred <<- TRUE
-    if (inherits(e, "genflow_persistence_error")) persistence_error <<- e
+    if (inherits(e, "genflow_persistence_error")) persistence_error <<- e else provider_error <<- .genflow_provider_failure(e)$error
     api_call_error_msg <<- conditionMessage(e) # Capture the specific error
     # Error message printed later
   })
@@ -204,9 +206,10 @@ gen_img.default <- function(
   if (!persist) resultado_com_atributos$saved_file <- NA_character_
   resultado_com_atributos <- .genflow_complete_result(resultado_com_atributos,
     inference_status = if (!is.null(persistence_error)) "SUCCESS" else final_status,
-    persistence = persistence)
+    persistence = persistence, error = provider_error)
   if (!is.null(persistence_error$recovery_file)) resultado_com_atributos$response_value <- persistence_error$recovery_file
   return(invisible(resultado_com_atributos))
+  }, error = .gen_boundary_error)
 }
 
 #' Hugging Face image generation (internal)
@@ -217,7 +220,7 @@ gen_img.default <- function(
   service_name <- "hf"
   # Get HF token
   hf_token <- Sys.getenv("HUGGINGFACE_API_TOKEN")
-  if (!nzchar(hf_token)) stop("HUGGINGFACE_API_TOKEN must be set.")
+  if (!nzchar(hf_token)) .gen_stop("missing_credential", params=list(credential="HUGGINGFACE_API_TOKEN"),stage="preflight")
 
   # Use 'model' directly as the model path
   model_path <- model
@@ -285,6 +288,7 @@ gen_img.default <- function(
 #'   `...` to replace the saved prompt for one call.
 #' @export
 gen_img.genflow_agent <- function(prompt, ...) {
+  withCallingHandlers({
   agent <- prompt
   if (is.null(agent$prompt) && !is.null(agent$context)) {
     agent$prompt <- agent$context
@@ -300,6 +304,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     override_label = "gen_img()"
   )
   do.call(gen_img.default, agent_args, quote = TRUE)
+  }, error = .gen_boundary_error)
 }
 #' FAL image generation (internal)
 #'
@@ -320,7 +325,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
                          clock = Sys.time) {
   service_name <- "fal"
   fal_token <- Sys.getenv("FAL_API_KEY")
-  if (!nzchar(fal_token)) stop("FAL_API_KEY must be set.")
+  if (!nzchar(fal_token)) .gen_stop("missing_credential", params=list(credential="FAL_API_KEY"),stage="preflight")
 
   poll_interval <- suppressWarnings(as.numeric(poll_interval)[1])
   max_poll_seconds <- suppressWarnings(as.numeric(max_poll_seconds)[1])
@@ -611,7 +616,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
                             label_sanitized,
                             request = .gen_img_openai_request) {
   openai_key <- Sys.getenv("OPENAI_API_KEY")
-  if (!nzchar(openai_key)) stop("OPENAI_API_KEY must be set.")
+  if (!nzchar(openai_key)) .gen_stop("missing_credential", params=list(credential="OPENAI_API_KEY"),stage="preflight")
 
   size_str <- .gen_img_openai_size(model, width = y, height = h)
   body <- list(
@@ -770,7 +775,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
                                clock = Sys.time) {
   service_name <- "replicate"
   replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
-  if (!nzchar(replicate_token)) stop("REPLICATE_API_TOKEN must be set.")
+  if (!nzchar(replicate_token)) .gen_stop("missing_credential", params=list(credential="REPLICATE_API_TOKEN"),stage="preflight")
 
   poll_interval <- suppressWarnings(as.numeric(poll_interval)[1])
   max_poll_seconds <- suppressWarnings(as.numeric(max_poll_seconds)[1])

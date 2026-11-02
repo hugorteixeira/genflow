@@ -103,7 +103,7 @@ test_that("OpenAI output caps reach both endpoints through direct, agent and bat
   for (value in list(0, -1, 1.5, Inf, NA_real_, "512", c(1, 2))) {
     expect_error(gen_txt("prompt", max_output_tokens = value, persist = FALSE), class = "genflow_validation_error")
   }
-  expect_error(gen_txt("prompt", service = "openrouter", max_output_tokens = 512, persist = FALSE), "only by service")
+  expect_error(gen_txt("prompt", service = "openrouter", max_output_tokens = 512, persist = FALSE), "só é aceito com o serviço")
   expect_length(seen, 3L)
 })
 

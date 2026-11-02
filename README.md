@@ -66,6 +66,12 @@ and returns the same portable format for an application to preview and apply.
 See [block contracts and the workflow format](inst/doc/block-contracts.md) for
 examples, supported schema keywords, validation limits and versioning.
 
+Version 0.0.15 adds [canonical diagnostics](inst/doc/diagnostics.md): stable codes,
+pt-BR messages, rule parameters, original document paths, piece/field context
+and nested causes. `gen_error_catalog()` exposes the schema and message catalog;
+`gen_error_summary()` formats a diagnostic for people. Execution decisions use
+explicit outcome and retry fields, independently of translated explanations.
+
 ## 🚀 Getting Started
 
 ### Installation

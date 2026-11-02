@@ -36,15 +36,15 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),ports=list()))
   errors <- list(); ports <- list()
   add <- function(key,message,code="incompatible_input") errors[[length(errors)+1L]] <<- .gen_issue(code,.gen_pointer("/inputs",key),message)
-  if (!.gen_object(args) || !.gen_object(inputs)) return(list(valid=FALSE,errors=list(.gen_issue("invalid_arguments","","Arguments and inputs must be objects.")),ports=list()))
-  for (key in names(inputs)) if (!.gen_scalar(inputs[[key]])) add(key,"Input must have one known content type.")
+  if (!.gen_object(args) || !.gen_object(inputs)) return(list(valid=FALSE,errors=list(.gen_issue("invalid_arguments","",gen_error_message("invalid_arguments"))),ports=list()))
+  for (key in names(inputs)) if (!.gen_scalar(inputs[[key]])) add(key,gen_error_message("input_content_type"))
   if (length(errors)) return(list(valid=FALSE,errors=errors,ports=ports))
   need <- function(key,type,required=TRUE) {
-    if (!key %in% names(inputs)) { if (required) add(key,"Required input connection is missing.","required_input"); return(NULL) }
-    if (!.gen_type_compatible(inputs[[key]],type)) add(key,paste("Expected",type,"but received",inputs[[key]]))
+    if (!key %in% names(inputs)) { if (required) add(key,gen_error_message("required_input"),"required_input"); return(NULL) }
+    if (!.gen_type_compatible(inputs[[key]],type)) add(key,gen_error_message("port_type",list(expected=type,actual=inputs[[key]])))
     inputs[[key]]
   }
-  only <- function(allowed) for (key in setdiff(names(inputs),allowed)) add(key,"Unknown input port.","unknown_input")
+  only <- function(allowed) for (key in setdiff(names(inputs),allowed)) add(key,gen_error_message("unknown_input"),"unknown_input")
   kind <- function(type) if (is.null(type)) NULL else sub("^[^:]+:","",type)
   config_kind <- args$kind %||% "text"
   if (contract$kind %in% c("function","reserved")) {
@@ -87,9 +87,9 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
   } else if (block %in% c("list.pack","list.concat")) {
     prefix <- if (block=="list.pack") "asset" else "list"
     for (key in names(inputs)) need(key,paste0(prefix,":*"))
-    if (length(unique(unlist(inputs)))>1L) add("","List inputs must have the same content type.")
+    if (length(unique(unlist(inputs)))>1L) add("",gen_error_message("list_content_type"))
     order <- unlist(args$order,use.names=FALSE)
-    if (anyDuplicated(order) || !setequal(order,names(inputs))) add("","order must name each input exactly once.","invalid_order")
+    if (anyDuplicated(order) || !setequal(order,names(inputs))) add("",gen_error_message("input_order"),"invalid_order")
     k <- if (length(inputs)) kind(inputs[[1L]]) else config_kind
     ports <- list(list=paste0("list:",k))
   } else if (block %in% c("list.split","json.get")) {
@@ -103,19 +103,19 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
     for (key in unique(c(.gen_template_variables(args$template),names(inputs)))) need(key,"asset:text|asset:json")
     ports <- list(asset="asset:text")
   } else if (block=="output") {
-    if (!length(inputs)) add("","Output requires at least one input.","required_input")
+    if (!length(inputs)) add("",gen_error_message("output_input"),"required_input")
     for (key in names(inputs)) need(key,"asset:*|list:*|candidates:*")
   } else if (block %in% c("subworkflow","foreach")) {
     wanted <- lapply(interface,function(x) if (is.list(x)) x$type else x)
     exported <- lapply(exports,function(x) if (is.list(x)) x$type else x)
     if (block=="foreach") {
       item <- args$item_input
-      if (!.gen_scalar(item) || !item %in% names(wanted)) add("items","Unknown child item input.") else {
+      if (!.gen_scalar(item) || !item %in% names(wanted)) add("items",gen_error_message("child_item_input")) else {
         need("items",sub("^asset:","list:",wanted[[item]])); wanted[[item]] <- NULL
       }
       only(c(names(wanted),"items"))
       for (key in names(exported)) {
-        if (!startsWith(exported[[key]],"asset:")) add(key,"foreach children must export individual artifacts.")
+        if (!startsWith(exported[[key]],"asset:")) add(key,gen_error_message("child_artifact_output"))
         exported[[key]] <- sub("^asset:","list:",exported[[key]])
       }
     } else only(names(wanted))
@@ -151,12 +151,19 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
 #'   The supplied input is never modified.
 #' @export
 gen_validate_structure <- function(document, require_output = .gen_default("gen_validate_structure","require_output"), check_capabilities = TRUE) {
+  report <- .gen_validate_structure_document(document, require_output, check_capabilities)
+  report$errors <- .gen_diagnostic_context(report$errors, if (missing(document)) NULL else document)
+  if (!is.null(report$bundle_errors)) report$bundle_errors <- .gen_diagnostic_context(report$bundle_errors, if (missing(document)) NULL else document)
+  report
+}
+
+.gen_validate_structure_document <- function(document, require_output, check_capabilities) {
   args <- list(require_output=require_output)
   if (!missing(document)) args["document"] <- list(document)
   call <- gen_validate_call("gen_validate_structure",args)
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL,ports=list(),order=list(),pending=list()))
   if (!is.logical(check_capabilities) || length(check_capabilities)!=1L || is.na(check_capabilities))
-    return(list(valid=FALSE,errors=list(.gen_issue("invalid_policy","/check_capabilities","check_capabilities must be boolean.")),document=NULL,ports=list(),order=list(),pending=list()))
+    return(list(valid=FALSE,errors=list(.gen_issue("invalid_policy","/check_capabilities",gen_error_message("invalid_policy"))),document=NULL,ports=list(),order=list(),pending=list()))
   parsed <- if (.gen_scalar(document)) tryCatch(.gen_parse_document(document),error=function(e)NULL) else document
   if (.gen_object(parsed) && "format" %in% names(parsed)) return(.gen_validate_definition_bundle(parsed,require_output,check_capabilities))
   if (.gen_object(parsed) && is.list(parsed$nodes) && any(vapply(parsed$nodes,function(n) .gen_object(n) && "type" %in% names(n),logical(1)))) {
@@ -169,12 +176,12 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
   }
   if (!.gen_object(parsed) || is.null(parsed$workflows) || !length(parsed$workflows)) return(.gen_validate_structure_graph(document,require_output,check_capabilities))
   definitions <- parsed$workflows
-  if (!.gen_object(definitions) || length(definitions)>64L) return(list(valid=FALSE,errors=list(.gen_issue("invalid_workflows","/workflows","workflows must contain at most 64 named definitions.")),document=parsed,ports=list(),order=list(),pending=list()))
+  if (!.gen_object(definitions) || length(definitions)>64L) return(list(valid=FALSE,errors=list(.gen_issue("invalid_workflows","/workflows",gen_error_message("invalid_workflows"))),document=parsed,ports=list(),order=list(),pending=list()))
   reports <- list(); interfaces <- list(); errors <- list(); active <- character()
   resolve <- function(key) {
     if (!is.null(reports[[key]])) return(reports[[key]])
     if (key %in% active || length(active)>=8L) {
-      issue <- .gen_issue("recursive_workflow",.gen_pointer("/workflows",key),"Subworkflows must be acyclic and at most 8 levels deep.")
+      issue <- .gen_issue("recursive_workflow",.gen_pointer("/workflows",key),gen_error_message("recursive_workflow"))
       errors[[length(errors)+1L]] <<- issue
       return(list(valid=FALSE,errors=list(issue)))
     }
@@ -188,7 +195,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         type <- if (is.list(port)) port$type else port
         ok <- ok && .gen_scalar(type) && grepl("^(asset|list|candidates|round):(text|json|image|audio|video)$",type)
       }
-      report <- list(valid=ok,errors=if(ok) list() else list(.gen_issue("invalid_interface","","Invalid external subworkflow interface.")),document=value)
+      report <- list(valid=ok,errors=if(ok) list() else list(.gen_issue("invalid_interface","",gen_error_message("invalid_interface"))),document=value)
       if (ok) interfaces[[key]] <<- value
     } else {
       active <<- c(active,key); on.exit(active <<- head(active,-1L))
@@ -244,12 +251,12 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
     if (is.null(document$id)) document$id <- "call"
     document <- list(schema_version=1L,nodes=list(document))
   }
-  if (!.gen_object(document)) { add("invalid_document","","Expected a workflow object."); return(finish()) }
-  for (key in setdiff(names(document),c("schema_version","nodes","outputs","workflows","metadata"))) add("unknown_field",.gen_pointer("",key),"Unknown workflow field.")
-  if (!is.numeric(document$schema_version) || length(document$schema_version)!=1L || !identical(as.numeric(document$schema_version),1)) add("unknown_format","/schema_version","Supported workflow schema_version is 1.")
+  if (!.gen_object(document)) { add("invalid_document","",gen_error_message("invalid_document")); return(finish()) }
+  for (key in setdiff(names(document),c("schema_version","nodes","outputs","workflows","metadata"))) add("unknown_field",.gen_pointer("",key),gen_error_message("unknown_field"))
+  if (!is.numeric(document$schema_version) || length(document$schema_version)!=1L || !identical(as.numeric(document$schema_version),1)) add("unknown_format","/schema_version",gen_error_message("unknown_format"))
   nodes <- document$nodes
   if (!is.list(nodes) || !is.null(names(nodes)) || !length(nodes) || length(nodes)>10000L) {
-    add("invalid_nodes","/nodes","nodes must be an array of 1 to 10000 blocks."); return(finish())
+    add("invalid_nodes","/nodes",gen_error_message("compact_node_count")); return(finish())
   }
   ids <- vapply(nodes,function(n) if (.gen_object(n) && .gen_scalar(n$id)) n$id else "",character(1))
   prepared <- vector("list",length(nodes))
@@ -258,27 +265,27 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
   usable <- rep(FALSE,length(nodes)); refs <- vector("list",length(nodes)); contracts <- vector("list",length(nodes))
   for (i in seq_along(nodes)) {
     n <- nodes[[i]]; path <- paste0("/nodes/",i-1L); id <- if (nzchar(ids[[i]])) ids[[i]] else NULL
-    if (!.gen_object(n)) { add("invalid_node",path,"A block must be an object.",id); next }
-    if (!valid_ids[[i]]) add(if (duplicate[[i]] && nzchar(ids[[i]])) "duplicate_id" else "invalid_id",paste0(path,"/id"),"Node IDs must be unique identifiers.",id)
-    for (key in setdiff(names(n),c("id","block","contract_version","args","inputs","label","metadata"))) add("unknown_field",.gen_pointer(path,key),"Unknown block field.",id)
+    if (!.gen_object(n)) { add("invalid_node",path,gen_error_message("invalid_node"),id); next }
+    if (!valid_ids[[i]]) add(if (duplicate[[i]] && nzchar(ids[[i]])) "duplicate_id" else "invalid_id",paste0(path,"/id"),gen_error_message("invalid_id"),id)
+    for (key in setdiff(names(n),c("id","block","contract_version","args","inputs","label","metadata"))) add("unknown_field",.gen_pointer(path,key),gen_error_message("unknown_field"),id)
     version <- n$contract_version %||% 1L
     contract <- tryCatch(gen_block_contracts(n$block,version),error=function(e)e)
     if (is.null(n$block) || inherits(contract,"error")) { add("unknown_contract",paste0(path,"/block"),if (inherits(contract,"error")) conditionMessage(contract) else "A block identifier is required.",id); next }
     contracts[[i]] <- contract
     bindings <- n$inputs %||% list()
-    if (!.gen_object(bindings)) { add("invalid_bindings",paste0(path,"/inputs"),"Inputs must be an object with unique port names.",id); bindings <- list() }
+    if (!.gen_object(bindings)) { add("invalid_bindings",paste0(path,"/inputs"),gen_error_message("invalid_bindings"),id); bindings <- list() }
     for (key in names(bindings)) {
       ref <- bindings[[key]]; rp <- .gen_pointer(paste0(path,"/inputs"),key)
       if (!.gen_object(ref) || !setequal(names(ref),c("node","port")) || !.gen_scalar(ref$node) || !.gen_scalar(ref$port)) {
-        add("invalid_reference",rp,"A connection must contain node and port strings.",id); next
+        add("invalid_reference",rp,gen_error_message("invalid_reference"),id); next
       }
       source <- which(ids==ref$node & valid_ids)
-      if (length(source)!=1L) { add("unknown_node",paste0(rp,"/node"),paste("Unknown or ambiguous source node:",ref$node),id); next }
+      if (length(source)!=1L) { add("unknown_node",paste0(rp,"/node"),gen_error_message("unknown_node",list(target=ref$node)),id); next }
       refs[[i]][key] <- list(ref)
     }
     checked <- gen_validate_call(n$block,n$args %||% list(),version,
       bound=if (contract$kind=="function") names(bindings) else character(), check_capabilities=check_capabilities)
-    for (e in checked$errors) add(e$code,paste0(path,e$path),e$message,id)
+    for (e in checked$errors) { e$path <- paste0(path,e$path); e$node_id <- id; errors[[length(errors)+1L]] <- e }
     n$args <- checked$args; n$inputs <- bindings; n$contract_version <- version
     prepared[[i]] <- n
     pending[[ids[[i]] %||% as.character(i)]] <- checked$pending
@@ -289,11 +296,11 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
     n <- prepared[[i]]
     if (is.null(n) || !.gen_object(n$args)) next
     if (n$block=="input" && .gen_scalar(n$args$key)) {
-      if (n$args$key %in% input_keys) add("duplicate_input",paste0("/nodes/",i-1L,"/args/key"),"Input keys must be unique within a workflow.",n$id)
+      if (n$args$key %in% input_keys) add("duplicate_input",paste0("/nodes/",i-1L,"/args/key"),gen_error_message("duplicate_input"),n$id)
       input_keys <- c(input_keys,n$args$key)
     }
     if (n$block=="output") {
-      for (key in intersect(names(n$inputs),output_keys)) add("duplicate_output",.gen_pointer(paste0("/nodes/",i-1L,"/inputs"),key),"Output names must be unique across the workflow.",n$id)
+      for (key in intersect(names(n$inputs),output_keys)) add("duplicate_output",.gen_pointer(paste0("/nodes/",i-1L,"/inputs"),key),gen_error_message("duplicate_output"),n$id)
       output_keys <- c(output_keys,names(n$inputs))
     }
   }
@@ -323,7 +330,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         ref <- refs[[i]][[key]]; source <- match(ref$node,ids)
         type <- ports[[ref$node]][[ref$port]]
         if (is.null(type)) {
-          if (usable[[source]]) add("unknown_port",paste0(.gen_pointer(paste0(path,"/inputs"),key),"/port"),paste("Unknown output port:",ref$port),id)
+          if (usable[[source]]) add("unknown_port",paste0(.gen_pointer(paste0(path,"/inputs"),key),"/port"),gen_error_message("unknown_port",list(port=ref$port)),id)
           complete <- FALSE
         } else input_types[[key]] <- type
       }
@@ -332,30 +339,30 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         child <- list()
         if (n$block %in% c("subworkflow","foreach")) {
           child <- document$workflows[[n$args$workflow_version_id]]
-          if (is.null(child)) { add("unknown_workflow",paste0(path,"/args/workflow_version_id"),"Subworkflow must be declared in workflows.",id); usable[[i]] <- FALSE; next }
+          if (is.null(child)) { add("unknown_workflow",paste0(path,"/args/workflow_version_id"),gen_error_message("unknown_workflow"),id); usable[[i]] <- FALSE; next }
           # Definitions supply contracts, not arbitrary R resolvers or DB access.
           if (!.gen_object(child) || !.gen_object(child$interface %||% list()) || !.gen_object(child$exports %||% list())) {
-            add("invalid_workflow",paste0(path,"/args/workflow_version_id"),"Subworkflow requires interface and exports objects.",id); usable[[i]] <- FALSE; next
+            add("invalid_workflow",paste0(path,"/args/workflow_version_id"),gen_error_message("invalid_workflow"),id); usable[[i]] <- FALSE; next
           }
         }
         checked <- gen_block_ports(n$block,n$args,input_types,n$contract_version,child$interface %||% list(),child$exports %||% list())
-        for (e in checked$errors) add(e$code,paste0(path,e$path),e$message,id)
+        for (e in checked$errors) { e$path <- paste0(path,e$path); e$node_id <- id; errors[[length(errors)+1L]] <- e }
         usable[[i]] <- checked$valid
         ports[id] <- list(checked$ports)
         if (n$block=="select" && !is.null(n$inputs$evaluation)) {
           producer <- prepared[[match(n$inputs$evaluation$node,ids)]]
-          if (!identical(producer$inputs$candidates,n$inputs$candidates)) add("candidate_set_mismatch",paste0(path,"/inputs/evaluation"),"Selection and voting must reference the same candidate set.",id)
+          if (!identical(producer$inputs$candidates,n$inputs$candidates)) add("candidate_set_mismatch",paste0(path,"/inputs/evaluation"),gen_error_message("candidate_set_mismatch"),id)
         }
       }
       ordered <- c(ordered,id)
   }
-  for (i in remaining) add("cycle",paste0("/nodes/",i-1L,"/inputs"),"Dependency cycle prevents this block from being ordered.",ids[[i]])
+  for (i in remaining) add("cycle",paste0("/nodes/",i-1L,"/inputs"),gen_error_message("cycle"),ids[[i]])
   output <- document$outputs %||% list()
-  if (!.gen_object(output)) add("invalid_outputs","/outputs","Outputs must be named references.") else for (key in names(output)) {
+  if (!.gen_object(output)) add("invalid_outputs","/outputs",gen_error_message("invalid_outputs")) else for (key in names(output)) {
     ref <- output[[key]]
-    if (!.gen_object(ref) || !.gen_scalar(ref$node) || !.gen_scalar(ref$port) || is.null(ports[[ref$node]][[ref$port]])) add("invalid_output",.gen_pointer("/outputs",key),"Output refers to an unavailable node or port.")
+    if (!.gen_object(ref) || !.gen_scalar(ref$node) || !.gen_scalar(ref$port) || is.null(ports[[ref$node]][[ref$port]])) add("invalid_output",.gen_pointer("/outputs",key),gen_error_message("invalid_output"))
   }
-  if (require_output && !length(output) && !any(vapply(nodes,function(n) .gen_object(n) && identical(n$block,"output"),logical(1)))) add("required_output","/outputs","A complete workflow requires a final output.")
+  if (require_output && !length(output) && !any(vapply(nodes,function(n) .gen_object(n) && identical(n$block,"output"),logical(1)))) add("required_output","/outputs",gen_error_message("required_output"))
   document$nodes <- lapply(seq_along(nodes),function(i) prepared[[i]] %||% nodes[[i]])
   finish(document)
 }

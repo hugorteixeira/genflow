@@ -1,0 +1,274 @@
+{
+  "diagnostic_version": 1,
+  "locale": "pt-BR",
+  "schema": {
+    "type": "object",
+    "required": [
+      "diagnostic_version",
+      "code",
+      "source",
+      "category",
+      "stage",
+      "message_key",
+      "message",
+      "hint",
+      "params",
+      "retryable",
+      "outcome"
+    ],
+    "properties": {
+      "diagnostic_version": {
+        "type": "integer",
+        "enum": [
+          1
+        ]
+      },
+      "code": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "source": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "category": {
+        "type": "string",
+        "enum": [
+          "validation",
+          "schema",
+          "workflow",
+          "provider",
+          "storage",
+          "access",
+          "conflict",
+          "transport",
+          "internal"
+        ]
+      },
+      "stage": {
+        "type": "string"
+      },
+      "message_key": {
+        "type": "string"
+      },
+      "message": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "hint": {
+        "type": "string"
+      },
+      "params": {
+        "type": "object"
+      },
+      "retryable": {
+        "type": "boolean"
+      },
+      "outcome": {
+        "type": "string",
+        "enum": [
+          "not_started",
+          "failed",
+          "unknown",
+          "succeeded"
+        ]
+      },
+      "path": {
+        "type": "string"
+      },
+      "schema_path": {
+        "type": "string"
+      },
+      "node_id": {
+        "type": "string"
+      },
+      "node_label": {
+        "type": "string"
+      },
+      "field": {
+        "type": "string"
+      },
+      "block": {
+        "type": "string"
+      },
+      "reference": {
+        "type": "string"
+      },
+      "condition_class": {
+        "type": "string"
+      },
+      "contract_version": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "causes": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "condition_call": {
+        "type": "string"
+      },
+      "details": {
+        "type": "object"
+      }
+    },
+    "additionalProperties": false
+  },
+  "messages": {
+    "unsupported_input_file": {"message": "Este formato de arquivo não é aceito como texto de entrada. Use .txt ou .csv.", "category": "validation"},
+    "unsupported_modality": {"message": "Este tipo de agente não é suportado pelo executor de lotes.", "category": "validation"},
+    "vote_trigger": {"message": "O marcador de voto não contém caracteres reconhecíveis.", "hint": "Use um marcador como opção ou alternativa.", "category": "validation"},
+    "vote_tie": {"message": "A votação terminou empatada.", "hint": "Confira os votos ou altere a regra de desempate.", "category": "workflow"},
+    "missing_credential": {"message": "Configure a credencial {credential} para usar este serviço.", "fallback": "Configure a credencial exigida por este serviço.", "category": "access", "stage": "preflight"},
+    "worker_result_invalid": {"message": "Uma tarefa retornou um resultado em formato inesperado.", "hint": "Confira o resultado da tarefa antes de autorizar outra geração.", "category": "internal", "stage": "execution"},
+    "worker_result_missing": {"message": "Uma tarefa terminou sem um resultado que possa ser confirmado.", "hint": "Confira o resultado da tarefa antes de autorizar outra geração.", "category": "internal", "stage": "execution"},
+    "invalid_enum_choices": {"message": "Escolha um dos valores permitidos: {allowed}.", "fallback": "Escolha um dos valores permitidos para este campo.", "category": "validation"},
+    "API_ERROR": {"message": "O serviço recusou ou não conseguiu concluir a solicitação.", "category": "provider", "stage": "inference"},
+    "API_ERRORR": {"message": "O serviço recusou ou não conseguiu concluir a solicitação.", "category": "provider", "stage": "inference"},
+    "API_RESPONSE_ERROR": {"message": "A resposta do serviço tem um formato inesperado.", "category": "provider", "stage": "inference"},
+    "API_RESPONSE_ERRORR": {"message": "A resposta do serviço tem um formato inesperado.", "category": "provider", "stage": "inference"},
+    "CONTENT_FILTERED": {"message": "O serviço bloqueou a geração por sua política de conteúdo.", "category": "provider", "stage": "inference"},
+    "DEADLINE_EXCEEDED": {"message": "O prazo disponível para a geração foi atingido.", "hint": "Confira as tentativas registradas antes de iniciar outra geração.", "category": "provider", "stage": "inference"},
+    "EMPTY_OR_NULL_RESPONSE": {"message": "O serviço retornou uma resposta vazia.", "category": "provider", "stage": "inference"},
+    "FUNCTION_CALL_ERROR": {"message": "O serviço retornou uma chamada de função inválida.", "category": "provider", "stage": "inference"},
+    "FUNCTION_CALL_ERRORR": {"message": "O serviço retornou uma chamada de função inválida.", "category": "provider", "stage": "inference"},
+    "GENERATION_ERROR": {"message": "Não foi possível confirmar o resultado da geração.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "HF_MODEL_LOADING": {"message": "O serviço ainda está carregando o modelo.", "category": "provider", "stage": "inference"},
+    "HTTR_ERROR": {"message": "A comunicação com o serviço foi interrompida.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "HTTR_ERRORR": {"message": "A comunicação com o serviço foi interrompida.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "PERSISTENCE_ERROR": {"message": "O conteúdo foi gerado, mas não foi possível salvá-lo.", "hint": "Recupere o conteúdo preservado; esta falha não exige uma nova geração.", "category": "storage", "stage": "persistence"},
+    "PROMPT_BLOCKED": {"message": "O serviço bloqueou o prompt por sua política de conteúdo.", "category": "provider", "stage": "inference"},
+    "SERVICE_NOT_IMPLEMENTED": {"message": "Este serviço ainda não oferece esta operação no adaptador.", "category": "provider", "stage": "inference"},
+    "TIMEOUT_ERROR": {"message": "O serviço não confirmou a geração dentro do prazo.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "TIMEOUT_ERRORR": {"message": "O serviço não confirmou a geração dentro do prazo.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "TIMEOUT_ERRORR_HTTR": {"message": "A conexão com o serviço excedeu o prazo.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "TIMEOUT_ERROR_HTTR": {"message": "A conexão com o serviço excedeu o prazo.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "TOOL_CALL_ERROR": {"message": "O serviço retornou uma chamada de ferramenta inválida.", "category": "provider", "stage": "inference"},
+    "TOOL_CALL_ERRORR": {"message": "O serviço retornou uma chamada de ferramenta inválida.", "category": "provider", "stage": "inference"},
+    "agent_count": {"message": "Use um único agente compartilhado ou um agente para cada candidato.", "category": "workflow"},
+    "argument_evaluation": {"message": "Não foi possível obter o valor deste argumento antes de executar a função.", "category": "validation"},
+    "asset_kind": {"message": "O tipo do conteúdo não corresponde ao esperado pela peça.", "category": "workflow"},
+    "audio_only_transcription": {"message": "Somente a transcrição aceita uma entrada de áudio.", "category": "workflow"},
+    "backend_owned_argument": {"message": "Este argumento é preenchido pelo executor e não pode ser definido no documento.", "category": "validation"},
+    "blank_text": {"message": "Preencha este campo com texto; espaços em branco não são suficientes.", "category": "validation"},
+    "candidate_set_mismatch": {"message": "A seleção e a votação precisam usar o mesmo conjunto de candidatos.", "category": "workflow"},
+    "child_artifact_output": {"message": "Cada saída de uma repetição deve ser um conteúdo individual.", "category": "workflow"},
+    "child_item_input": {"message": "Esta entrada de item não existe no subworkflow.", "category": "workflow"},
+    "compact_node_count": {"message": "Informe uma lista de 1 a 10000 peças no grafo compacto.", "category": "workflow"},
+    "contract_catalog_unavailable": {"message": "O catálogo de contratos não foi encontrado na instalação da Genflow.", "category": "schema", "hint": "Confira a instalação e os contratos da biblioteca."},
+    "cycle": {"message": "Existe um ciclo de dependências que impede ordenar esta peça.", "category": "workflow"},
+    "depth_limit": {"message": "O conteúdo excede o limite de profundidade permitido.", "category": "validation"},
+    "document_limit": {"message": "O documento excede o limite de 3 MiB.", "category": "workflow"},
+    "duplicate_asset": {"message": "Esta chave de conteúdo está repetida no documento.", "category": "workflow"},
+    "duplicate_binding": {"message": "Este argumento foi informado como valor e como conexão. Use apenas uma das formas.", "category": "validation"},
+    "duplicate_id": {"message": "Este identificador de peça está repetido no workflow.", "category": "workflow"},
+    "duplicate_input": {"message": "Esta chave de entrada está repetida no workflow.", "category": "workflow"},
+    "duplicate_item": {"message": "A lista contém itens repetidos; cada item deve ser único.", "category": "validation"},
+    "duplicate_output": {"message": "Este nome de saída está repetido no workflow.", "category": "workflow"},
+    "duplicate_resource": {"message": "Esta chave de recurso está repetida no documento.", "category": "workflow"},
+    "fixture_disabled": {"message": "Controles de teste não são aceitos no ambiente de geração real.", "category": "validation"},
+    "image_not_supported": {"message": "Esta operação ou serviço não aceita uma entrada de imagem.", "category": "workflow"},
+    "incompatible_input": {"message": "O tipo desta conexão não é aceito pela entrada.", "category": "workflow"},
+    "input_content_type": {"message": "Informe um único tipo de conteúdo conhecido para esta entrada.", "category": "workflow"},
+    "input_name_length": {"message": "O nome de uma porta de entrada deve ter no máximo 64 bytes.", "category": "workflow"},
+    "input_order": {"message": "A ordem deve listar cada entrada exatamente uma vez.", "category": "workflow"},
+    "internal_error": {"message": "Ocorreu uma falha interna ao processar a operação.", "category": "internal"},
+    "invalid_arguments": {"message": "Os argumentos devem formar um objeto com nomes únicos.", "category": "validation"},
+    "invalid_bindings": {"message": "As conexões devem formar um objeto com nomes de entrada únicos.", "category": "validation"},
+    "invalid_combination": {"message": "Esta combinação de argumentos não é aceita pelo contrato.", "category": "validation"},
+    "invalid_contract_catalog": {"message": "O catálogo de contratos instalado contém um arquivo inválido ou identificadores repetidos.", "category": "schema", "hint": "Confira a instalação e os contratos da biblioteca."},
+    "invalid_contract_reference": {"message": "Informe um identificador de peça e uma versão inteira maior que zero.", "category": "validation"},
+    "invalid_document": {"message": "Informe um objeto de workflow válido.", "category": "workflow"},
+    "invalid_enum": {"message": "Escolha um dos valores permitidos pelo contrato.", "category": "validation"},
+    "invalid_id": {"message": "O identificador da peça é inválido. Use um nome único no formato permitido.", "category": "workflow"},
+    "invalid_interface": {"message": "A interface do subworkflow é inválida.", "category": "workflow"},
+    "invalid_json": {"message": "O texto não é um JSON válido. Confira aspas, vírgulas, chaves e colchetes.", "category": "validation"},
+    "invalid_judge": {"message": "O juiz deve usar um agente de texto sem schema de saída próprio.", "category": "workflow"},
+    "invalid_node": {"message": "Cada peça deve ser um objeto.", "category": "workflow"},
+    "invalid_node_type": {"message": "Este tipo não é uma peça de workflow disponível no catálogo.", "category": "workflow"},
+    "invalid_nodes": {"message": "A lista de peças está vazia, malformada ou excede o limite deste formato.", "category": "workflow"},
+    "invalid_order": {"message": "A ordem deve listar cada entrada exatamente uma vez.", "category": "workflow"},
+    "invalid_output": {"message": "Esta saída aponta para uma peça ou porta indisponível.", "category": "workflow"},
+    "invalid_outputs": {"message": "As saídas devem ser referências nomeadas a peças e portas.", "category": "workflow"},
+    "invalid_pattern": {"message": "O texto não segue o formato exigido por este campo.", "category": "validation"},
+    "invalid_pointer": {"message": "O caminho JSON é inválido. Use / entre os campos e ~0 ou ~1 para escapar ~ e /.", "category": "validation"},
+    "invalid_policy": {"message": "A opção check_capabilities deve ser verdadeiro ou falso.", "category": "validation"},
+    "invalid_port": {"message": "O nome desta porta é inválido.", "category": "workflow"},
+    "invalid_quorum": {"message": "O quórum não pode ser maior que o número de votantes.", "category": "workflow"},
+    "invalid_reference": {"message": "A referência está incompleta ou tem um formato inválido.", "category": "workflow"},
+    "invalid_schema": {"message": "A definição deste schema é inválida.", "category": "schema"},
+    "invalid_type": {"message": "Esperado {expected}; recebido {actual}.", "category": "validation", "fallback": "O tipo do valor não corresponde ao exigido pelo contrato."},
+    "invalid_workflow": {"message": "O subworkflow precisa declarar suas entradas e saídas.", "category": "workflow"},
+    "invalid_workflows": {"message": "Informe no máximo 64 definições de subworkflow com nomes únicos.", "category": "workflow"},
+    "json_output_schema": {"message": "Um schema de saída requer conteúdo do tipo JSON.", "category": "workflow"},
+    "list_content_type": {"message": "Todas as entradas da lista devem ter o mesmo tipo de conteúdo.", "category": "workflow"},
+    "missing_default": {"message": "O contrato desta peça não declara um valor padrão para o argumento solicitado.", "category": "schema", "hint": "Confira a instalação e os contratos da biblioteca."},
+    "mixed_outputs": {"message": "Todos os candidatos devem produzir o mesmo tipo de conteúdo.", "category": "workflow"},
+    "mixed_schemas": {"message": "As entradas devem usar o mesmo schema de saída.", "category": "workflow"},
+    "nonportable_arguments": {"message": "Os argumentos contêm dados que não podem ser transportados. Use dados simples e referências a credenciais.", "category": "validation"},
+    "nonportable_document": {"message": "O documento contém dados que não podem ser transportados. Não inclua funções, objetos R executáveis ou credenciais.", "category": "validation"},
+    "only_local_base_url": {"message": "base_url só é aceito nos serviços locais ollama e llamacpp.", "category": "validation"},
+    "only_openai_tokens": {"message": "max_output_tokens só é aceito com o serviço openai.", "category": "validation"},
+    "out_of_range": {"message": "O número deve ser {comparison} {limit}.", "category": "validation", "fallback": "O valor está fora dos limites exigidos pelo contrato."},
+    "output_input": {"message": "Conecte pelo menos uma entrada à peça de saída.", "category": "workflow"},
+    "port_type": {"message": "A entrada espera {expected}; a conexão fornece {actual}.", "category": "workflow", "hint": "Conecte uma saída com um tipo compatível."},
+    "prompt_binding": {"message": "Uma variável do prompt está sem uma entrada de texto ou JSON compatível.", "category": "workflow"},
+    "provider_forbidden": {"message": "A credencial não tem permissão para esta solicitação.", "hint": "Confira as permissões de acesso ao modelo e ao serviço.", "category": "provider", "stage": "inference"},
+    "provider_not_found": {"message": "O serviço não encontrou o modelo ou o endereço solicitado.", "hint": "Confira o modelo e o endereço configurados.", "category": "provider", "stage": "inference"},
+    "provider_rate_limit": {"message": "O serviço atingiu um limite de uso.", "hint": "Confira a cota e as tentativas registradas antes de tentar novamente.", "category": "provider", "stage": "inference"},
+    "provider_request_rejected": {"message": "O serviço recusou os dados da solicitação (HTTP {status_code}).", "hint": "Confira os argumentos, o modelo e os limites do serviço.", "category": "provider", "stage": "inference"},
+    "provider_unauthorized": {"message": "O serviço não aceitou a credencial configurada.", "hint": "Confira a chave de acesso usada por este serviço.", "category": "provider", "stage": "inference"},
+    "provider_unavailable": {"message": "O serviço está indisponível ou apresentou uma falha.", "hint": "Confira o resultado da solicitação antes de autorizar outra geração.", "category": "provider", "stage": "inference"},
+    "recursive_resource": {"message": "As dependências formam um ciclo ou excedem o limite de profundidade.", "category": "workflow"},
+    "recursive_workflow": {"message": "Os subworkflows formam um ciclo ou excedem o limite de 8 níveis.", "category": "workflow"},
+    "required": {"message": "Este campo é obrigatório e não foi informado.", "category": "validation"},
+    "required_agent": {"message": "Selecione uma versão de agente para esta geração.", "category": "workflow"},
+    "required_assets": {"message": "Informe de 1 a 32 conteúdos para esta produção.", "category": "workflow"},
+    "required_audio": {"message": "Conecte um conteúdo de áudio à entrada de transcrição.", "category": "workflow"},
+    "required_input": {"message": "Conecte a entrada obrigatória desta peça.", "category": "workflow"},
+    "required_kind": {"message": "Informe o tipo de conteúdo desta produção manual ou fornecida.", "category": "workflow"},
+    "required_output": {"message": "Conecte uma saída final para completar o workflow.", "category": "workflow"},
+    "required_tool_definitions": {"message": "Ao habilitar tools, informe as definições em my_tools.", "category": "validation"},
+    "required_underlying_list": {"message": "Para retornar o conteúdo vencedor, informe underlying_list.", "category": "validation"},
+    "reserved_provider": {"message": "Esta operação reservada requer o serviço {service}.", "category": "validation"},
+    "resource_kind": {"message": "O tipo do recurso não corresponde ao esperado por esta referência.", "category": "workflow"},
+    "schema_additional_properties": {"message": "additionalProperties deve ser verdadeiro ou falso.", "category": "schema"},
+    "schema_bound": {"message": "O limite numérico do schema é inválido.", "category": "schema"},
+    "schema_enum": {"message": "enum deve ser uma lista não vazia de opções únicas.", "category": "schema"},
+    "schema_keyword": {"message": "Esta palavra-chave não é suportada pelo validador de schemas.", "category": "schema"},
+    "schema_object": {"message": "O schema deve ser um objeto e ter no máximo 32 níveis.", "category": "schema"},
+    "schema_owner": {"message": "x-owner deve ser runtime ou caller.", "category": "schema"},
+    "schema_pattern": {"message": "A expressão regular de pattern é inválida.", "category": "schema"},
+    "schema_properties": {"message": "properties deve ser um objeto de propriedades nomeadas.", "category": "schema"},
+    "schema_range": {"message": "O limite mínimo do schema é maior que o máximo.", "category": "schema"},
+    "schema_required": {"message": "required deve listar propriedades declaradas, sem repetições.", "category": "schema"},
+    "schema_type": {"message": "O tipo declarado no schema não é suportado ou está repetido.", "category": "schema"},
+    "schema_unique": {"message": "uniqueItems deve ser verdadeiro ou falso.", "category": "schema"},
+    "selected_node_missing": {"message": "A seleção contém uma peça que não existe no workflow principal.", "category": "workflow"},
+    "studio_node_count": {"message": "Um workflow do Studio deve conter de 1 a 100 peças.", "category": "workflow"},
+    "text_output_schema": {"message": "Um schema de saída só pode ser usado com a operação text.generate.", "category": "workflow"},
+    "too_few_items": {"message": "A lista deve conter pelo menos {limit} item(ns).", "category": "validation", "fallback": "O valor está fora dos limites exigidos pelo contrato."},
+    "too_long": {"message": "O texto deve ter no máximo {limit} {unit}.", "category": "validation", "fallback": "O valor está fora dos limites exigidos pelo contrato."},
+    "too_many_items": {"message": "A lista deve conter no máximo {limit} item(ns).", "category": "validation", "fallback": "O valor está fora dos limites exigidos pelo contrato."},
+    "too_short": {"message": "O texto deve ter pelo menos {limit} {unit}.", "category": "validation", "fallback": "O valor está fora dos limites exigidos pelo contrato."},
+    "unclassified_error": {"message": "Não foi possível concluir esta operação.", "category": "internal"},
+    "unknown_argument": {"message": "Este argumento não existe no contrato da peça.", "category": "validation"},
+    "unknown_asset": {"message": "Este conteúdo foi referenciado, mas não foi declarado no documento.", "category": "workflow"},
+    "unknown_contract": {"message": "O tipo ou a versão desta peça não existe no catálogo instalado.", "category": "validation"},
+    "unknown_field": {"message": "Este campo não existe no formato do documento.", "category": "validation"},
+    "unknown_format": {"message": "A versão do formato não é aceita; use schema_version igual a 1.", "category": "workflow"},
+    "unknown_input": {"message": "Esta entrada não existe no contrato da peça.", "category": "workflow"},
+    "unknown_node": {"message": "A referência aponta para uma peça inexistente ou com identificador repetido.", "category": "workflow"},
+    "unknown_operation": {"message": "A operação ou a versão do contrato não existe no catálogo instalado.", "category": "validation"},
+    "unknown_port": {"message": "A referência aponta para uma porta de saída que não existe.", "category": "workflow"},
+    "unknown_resource": {"message": "Este recurso foi referenciado, mas não foi declarado no documento.", "category": "workflow"},
+    "unknown_workflow": {"message": "Declare o subworkflow referenciado antes de usá-lo.", "category": "workflow"},
+    "unsupported_document": {"message": "A montagem requer um corpo de workflow do Studio ou um pacote de definição.", "category": "workflow"},
+    "unsupported_provider": {"message": "O serviço escolhido não oferece esta operação no adaptador instalado.", "category": "validation"},
+    "validation_failed": {"message": "Há erros nos argumentos. Corrija os campos indicados antes de executar.", "category": "validation"},
+    "workflow_depth": {"message": "Os subworkflows excedem o limite de 8 níveis.", "category": "workflow"},
+    "workflow_limit": {"message": "O documento excede o limite de 64 definições de subworkflow.", "category": "workflow"}
+  }
+}

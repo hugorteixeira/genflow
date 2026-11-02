@@ -612,20 +612,21 @@
   task_id <- if (!is.na(task_name) && nzchar(task_name)) task_name else as.character(i)
   response <- NULL
   error <- NULL
+  diagnostic <- NULL
   type <- "unknown"
   logs <- paste0("[Starting] ", label, "\n")
   tryCatch({
     config <- if (!is.null(agent)) agent else get(label, envir = .GlobalEnv, inherits = FALSE)
-    if (!is.list(config)) stop("Agent configuration must be a list.")
+    if (!is.list(config)) .gen_stop("invalid_type",path="/agent",params=list(expected_types=list("object"),actual_type=.gen_value_type(config)))
     config <- .genflow_normalize_agent_fields(config)
     type <- tolower(trimws(config$type %||% "Chat"))
-    if (!type %in% c("chat", "vision", "image")) stop("Agent type not supported: ", type)
-    if (is.null(config$service) || !nzchar(config$service)) stop("Field 'service' cannot be empty.")
-    if (type != "image" && (is.null(config$model) || !nzchar(config$model))) stop("A non-empty 'model' is required.")
+    if (!type %in% c("chat", "vision", "image")) .gen_stop("unsupported_modality",path="/agent/type")
+    if (is.null(config$service) || !nzchar(config$service)) .gen_stop("required",path="/agent/service")
+    if (type != "image" && (is.null(config$model) || !nzchar(config$model))) .gen_stop("required",path="/agent/model")
     field <- if (type == "image") "prompt" else "context"
     original <- config[[field]] %||% config$context %||% config$instructions
     config[[field]] <- .genflow_batch_combine(original, instructions, append_modes$instructions, text = TRUE)
-    if (is.null(config[[field]])) stop("No instructions/context available for agent '", label, "'.")
+    if (is.null(config[[field]])) .gen_stop("required",path=paste0("/agent/",field))
     config$add <- .genflow_batch_combine(config$add, add, append_modes$add)
     if (!is.null(one_item_each) && i <= length(one_item_each)) {
       config$add <- c(list(one_item_each[[i]]), .genflow_add_items(config$add))
@@ -638,22 +639,24 @@
     target <- if (type == "image") gen_img.default else gen_txt.default
     args <- .genflow_prepare_agent_args(config, overrides, formals(target), required = field)
     response <- do.call(target, args, quote = TRUE)
-    if (!is.list(response) || is.null(response$status_api)) stop("Generator returned an invalid result.")
+    if (!is.list(response) || is.null(response$status_api)) .gen_stop("worker_result_invalid",stage="execution",outcome="unknown")
   }, error = function(e) {
-    error <<- conditionMessage(e)
+    diagnostic <<- gen_diagnostic(e,stage=if (is.null(e$diagnostic$stage)) "execution" else NULL,
+      log=!inherits(e,c("genflow_error","genflow_validation_error")))
+    error <<- gen_error_summary(diagnostic)
   })
   finished <- Sys.time()
   duration <- as.numeric(difftime(finished, started, units = "secs"))
   if (!is.null(checkpoint_each)) {
     checkpoint <- list(schema_version = 1L, task_id = task_id,
                        completed_at = format(finished, "%Y-%m-%dT%H:%M:%OS6%z"),
-                       response = response, error = error, duration_seconds = duration)
+                       response = response, error = error, diagnostic = diagnostic, duration_seconds = duration)
     tryCatch(.genflow_atomic_save_rds(checkpoint, checkpoint_each[[i]]),
       error = function(e) error <<- paste(c(error, paste0("Could not save task checkpoint: ", conditionMessage(e))), collapse = "; "))
   }
   logs <- c(logs, paste0(if (!is.null(error)) error else response$status_msg, "\n"))
   list(index = i, task_id = task_id, label = label, tipo_agente = type,
-       response = response, erro = error, logs = logs, duration_individual = duration)
+       response = response, erro = error, diagnostic = diagnostic, logs = logs, duration_individual = duration)
 }
 
 #' Normalize and map worker results (internal)
@@ -668,6 +671,7 @@
   # Initialization
   results_finais <- vector("list", qty) # Will hold the LISTS from workers (or NULLs)
   final_errors <- vector("list", qty) # Stores final error status message for each index
+  diagnostics <- vector("list", qty)
   logs_list <- vector("list", qty)
   single_durations <- rep(NA_real_, qty)
   agent_types <- rep("unknown", qty) # Default until read from worker result
@@ -679,17 +683,18 @@
     if (length(expected_indices)) warning("No raw results received from workers.")
     for (i in expected_indices) {
       final_errors[[i]] <- paste0("Index ", i, ": No result received from worker.")
+      diagnostics[[i]] <- gen_diagnostic("worker_result_missing",stage="execution",outcome="unknown")
     }
     # Return empty/NA structure matching the expected output format
     return(list(
-      results = results_finais, erros = final_errors, logs_list = logs_list,
+      results = results_finais, erros = final_errors, diagnostics = diagnostics, logs_list = logs_list,
       single_durations = single_durations, agent_types = agent_types,
       valid_results_count = 0
     ))
   } else if (n_results_recebidos == 0 && qty == 0) {
     # Handle edge case qty = 0
     return(list(
-      results = list(), erros = list(), logs_list = list(),
+      results = list(), erros = list(), diagnostics = list(), logs_list = list(),
       single_durations = numeric(), agent_types = character(),
       valid_results_count = 0
     ))
@@ -810,6 +815,10 @@
 
       # Assign the determined error message (or NULL if success)
       final_errors[original_i] <- list(final_error_msg_for_index)
+      if (!is.null(final_error_msg_for_index)) diagnostics[original_i] <- list(
+        res_item$diagnostic %||% if (is.list(response_estrutura_api)) response_estrutura_api$error else NULL)
+      if (!is.null(final_error_msg_for_index) && is.null(diagnostics[[original_i]]))
+        diagnostics[[original_i]] <- gen_diagnostic("worker_result_invalid",stage="execution",outcome="unknown")
 
       # Increment valid count only if no final error was recorded
       if (is.null(final_error_msg_for_index)) {
@@ -824,6 +833,7 @@
     for (i_faltante in indices_nao_processados) {
       if (is.null(final_errors[[i_faltante]])) { # If no specific error was logged yet
         final_errors[i_faltante] <- list(paste0("Index ", i_faltante, ": No valid result received or mapped from worker."))
+        diagnostics[[i_faltante]] <- gen_diagnostic("worker_result_missing",stage="execution",outcome="unknown")
         warning(final_errors[[i_faltante]])
       }
     }
@@ -833,6 +843,7 @@
   list(
     results = results_finais, # List of LISTS (or NULLs)
     erros = final_errors, # List of error messages (or NULLs)
+    diagnostics = diagnostics,
     logs_list = logs_list,
     single_durations = single_durations,
     agent_types = agent_types,

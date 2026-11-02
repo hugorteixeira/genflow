@@ -192,8 +192,8 @@ test_that("PSOCK workers receive only current batch state", {
   # The unknown fixture provider is rejected by the installed argument contract.
   # Workers must return that task error, not lose the result in transport.
   expect_true(all(vapply(raw_results, is.list, logical(1))))
-  expect_identical(vapply(raw_results, `[[`, character(1), "erro"),
-                   rep("/args/service: Unknown provider: mock", 2L))
+  expect_true(all(vapply(raw_results,function(x) identical(x$diagnostic$causes[[1]]$code,"unsupported_provider"),logical(1))))
+  expect_true(all(vapply(raw_results,function(x) identical(x$diagnostic$causes[[1]]$path,"/args/service"),logical(1))))
   expect_identical(vapply(raw_results, `[[`, character(1), "task_id"), c("1", "2"))
 })
 
@@ -425,7 +425,8 @@ test_that("a failed worker does not shift later named results", {
   expect_equal(result$one$response_value, "one.jpg")
   expect_null(result$two)
   expect_equal(result$three$response_value, "three.jpg")
-  expect_match(result$combined_stats$detailed_errors[[2]], "simulated worker error")
+  expect_identical(result$combined_stats$diagnostics[[2]]$code,"internal_error")
+  expect_true(nzchar(result$combined_stats$diagnostics[[2]]$reference))
 })
 
 test_that("always_fix_errors retries only failures without duplicate persistence", {
@@ -640,7 +641,7 @@ test_that("batch tasks reject unknown modalities and unsupported files", {
       )
     )
   )
-  expect_match(unknown$erro, "not supported")
+  expect_identical(unknown$diagnostic$code,"unsupported_modality")
   expect_null(unknown$response)
 
   unsupported <- tempfile(fileext = ".pdf")
@@ -661,6 +662,6 @@ test_that("batch tasks reject unknown modalities and unsupported files", {
       )
     )
   )
-  expect_match(bad_file$erro, "Unsupported file format")
+  expect_identical(bad_file$diagnostic$code,"unsupported_input_file")
   expect_null(bad_file$response)
 })

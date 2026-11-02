@@ -38,10 +38,10 @@ gen_materialize_structure <- function(document, prefix = .gen_default("gen_mater
   if (bundled && !identical(value$root$kind,"workflow") ||
       !is.list(body$nodes) || !length(body$nodes) ||
       any(!vapply(body$nodes,function(n) .gen_object(n) && .gen_scalar(n$type),logical(1))))
-    return(fail("unsupported_document","","Materialization requires a Studio workflow body or workflow definition bundle."))
+    return(fail("unsupported_document","",gen_error_message("unsupported_document")))
   ids <- vapply(body$nodes,`[[`,character(1),"id")
   selected <- if (is.null(node_ids)) ids else unlist(call$args$node_ids,use.names=FALSE)
-  if (any(!selected %in% ids)) return(fail("unknown_node","/node_ids","Selection contains an unknown root node."))
+  if (any(!selected %in% ids)) return(fail("unknown_node","/node_ids",gen_error_message("selected_node_missing")))
   repeat {
     parents <- unlist(lapply(body$nodes[ids %in% selected],function(n) lapply(n$inputs,`[[`,"node")),use.names=FALSE)
     next_ids <- union(selected,parents)

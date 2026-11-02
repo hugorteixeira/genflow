@@ -1,13 +1,26 @@
 # Common boundaries for all generators. Public legacy fields remain intact.
-.genflow_error <- function(code, message, retryable = FALSE, stage = "inference") {
-  list(code = code, message = message, retryable = isTRUE(retryable), stage = stage)
+.genflow_error <- function(code, message, retryable = FALSE, stage = "inference", outcome = "failed", message_key = NULL, params = list()) {
+  gen_diagnostic(list(code=code, message=as.character(message)),
+    message=if (is.null(message_key)) message else gen_error_message(message_key,params),
+    retryable=retryable, stage=stage, outcome=outcome, log=TRUE,
+    category=if (stage=="persistence") "storage" else "provider")
 }
 
 .genflow_error_from_message <- function(message, stage = "inference") {
   message <- paste(as.character(message), collapse = "\n")
-  code <- if (grepl("^[A-Z][A-Z0-9_]+:", message)) sub(":.*", "", message) else "GENERATION_ERROR"
+  code <- if (grepl("^[A-Z][A-Z0-9_]+:", message)) sub(":.*", "", message) else if (message %in% names(gen_error_catalog()$messages)) message else "GENERATION_ERROR"
   transient <- grepl("TIMEOUT|HF_MODEL_LOADING|EMPTY_OR_NULL_RESPONSE|\\b(429|500|502|503|504)\\b", message)
-  .genflow_error(code, message, transient && stage == "inference", stage)
+  # Legacy adapters and third-party mocks may still return sentinel strings.
+  # Classify only here, before translation; consumers use outcome, never text.
+  unknown <- grepl("TIMEOUT|HTTR|connection|timed out|GENERATION_ERROR", paste(code,message), ignore.case=TRUE)
+  http <- regmatches(message,regexpr("\\bHTTP[ :]+[1-5][0-9]{2}\\b",message,ignore.case=TRUE,perl=TRUE))
+  status <- if (length(http)) as.integer(sub(".*([1-5][0-9]{2})$","\\1",http)) else NULL
+  key <- if (is.null(status)) NULL else switch(as.character(status),
+    `401`="provider_unauthorized", `403`="provider_forbidden", `404`="provider_not_found",
+    `429`="provider_rate_limit", if (status >= 500) "provider_unavailable" else "provider_request_rejected")
+  .genflow_error(code, message, transient && stage == "inference", stage,
+    if (stage == "persistence") "succeeded" else if (unknown) "unknown" else "failed",
+    message_key=key, params=if (is.null(status)) list() else list(status_code=status))
 }
 
 .genflow_complete_result <- function(result, inference_status = result$status_api,
@@ -18,7 +31,7 @@
   if (identical(result$persistence$status, "failed")) {
     result$status_api <- "ERROR"
     result$status_msg <- paste0("PERSISTENCE_ERROR: ", result$persistence$message)
-    error <- .genflow_error("PERSISTENCE_ERROR", result$status_msg, stage = "persistence")
+    error <- .genflow_error("PERSISTENCE_ERROR", result$status_msg, stage = "persistence", outcome="succeeded")
   }
   result["error"] <- list(error %||% if (identical(result$status_api, "ERROR")) .genflow_error_from_message(result$status_msg) else NULL)
   if (is.null(result$usage)) {
@@ -40,9 +53,14 @@
   structure(list(value = value, error = NULL, metadata = metadata), class = "genflow_provider_result")
 }
 
-.genflow_provider_failure <- function(message, code = NULL, retryable = NULL) {
-  error <- .genflow_error_from_message(message)
-  if (!is.null(code)) error$code <- code
+.genflow_provider_failure <- function(message, code = NULL, retryable = NULL, outcome = NULL) {
+  error <- if (inherits(message,"condition") && !is.null(message$diagnostic)) gen_diagnostic(message) else
+    .genflow_error_from_message(if (inherits(message,"condition")) conditionMessage(message) else message)
+  if (!is.null(code)) {
+    error$code <- code; error$message_key <- NULL
+    error <- gen_diagnostic(error)
+  }
+  if (!is.null(outcome)) error$outcome <- outcome
   if (!is.null(retryable)) error$retryable <- isTRUE(retryable)
   structure(list(value = NULL, error = error, metadata = list()), class = "genflow_provider_result")
 }
@@ -140,7 +158,7 @@
     ext <- tolower(tools::file_ext(item))
     if (identical(ext, "txt")) return(paste(readLines(item, encoding = "UTF-8", warn = FALSE), collapse = "\n"))
     if (identical(ext, "csv")) return(paste(capture.output(print(utils::read.csv(item, stringsAsFactors = FALSE))), collapse = "\n"))
-    stop("Unsupported file format. Use .txt or .csv.", call. = FALSE)
+    .gen_stop("unsupported_input_file")
   }
   if (is.data.frame(item) || is.matrix(item)) return(paste(capture.output(print(item)), collapse = "\n"))
   if (is.list(item)) return(paste(vapply(item, .genflow_input_text, character(1)), collapse = "\n"))

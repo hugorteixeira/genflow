@@ -67,6 +67,7 @@ gen_tts.default <- function(
   persist = .gen_default("gen_tts", "persist"),
   ...
 ) {
+  withCallingHandlers({
   start_time <- Sys.time()
   .gen_internal_validate("gen_tts")
   if (!is.null(add) && nzchar(add)) text <- paste(text, add)
@@ -79,7 +80,7 @@ gen_tts.default <- function(
       {
         replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
         if (!nzchar(replicate_token)) {
-          stop("REPLICATE_API_TOKEN must be set.", call. = FALSE)
+          .gen_stop("missing_credential", params=list(credential="REPLICATE_API_TOKEN"),stage="preflight")
         }
         model_parts <- .tts_replicate_model_parts(model)
         .tts_replicate_model_info(
@@ -90,7 +91,7 @@ gen_tts.default <- function(
         )
       },
       error = function(e) {
-        replicate_model_info_error <<- conditionMessage(e)
+        replicate_model_info_error <<- e
         NULL
       }
     )
@@ -140,6 +141,7 @@ gen_tts.default <- function(
 
   audio_tmp <- NULL
   error_message <- NULL
+  provider_error <- NULL
   persistence_error <- NULL
   on.exit(
     {
@@ -173,6 +175,7 @@ gen_tts.default <- function(
     )
   }, error = function(e) {
     error_message <<- conditionMessage(e)
+    provider_error <<- .genflow_provider_failure(e)$error
     NULL
   })
 
@@ -194,6 +197,7 @@ gen_tts.default <- function(
       ),
       error = function(e) {
         error_message <<- conditionMessage(e)
+        provider_error <<- .genflow_provider_failure(e)$error
         NULL
       }
     )
@@ -239,10 +243,11 @@ gen_tts.default <- function(
   )
 
   persistence <- .genflow_persistence(final_path, requested = persist, error = persistence_error)
-  result <- .genflow_complete_result(result, persistence = persistence)
+  result <- .genflow_complete_result(result, persistence = persistence, error = provider_error)
   if (!is.null(persistence_error)) result$response_value <- audio_tmp
   if (!persist) result$saved_file <- NA_character_
   return(invisible(result))
+  }, error = .gen_boundary_error)
 }
 
 #' @rdname gen_tts
@@ -252,6 +257,7 @@ gen_tts.default <- function(
 #'   replace the saved text for one call.
 #' @export
 gen_tts.genflow_agent <- function(text, ...) {
+  withCallingHandlers({
   agent <- text
   if (is.null(agent$text) && !is.null(agent$context)) {
     agent$text <- agent$context
@@ -267,6 +273,7 @@ gen_tts.genflow_agent <- function(text, ...) {
     override_label = "gen_tts()"
   )
   do.call(gen_tts.default, agent_args, quote = TRUE)
+  }, error = .gen_boundary_error)
 }
 
 # --- Internal helpers -------------------------------------------------------
@@ -581,7 +588,7 @@ gen_tts.genflow_agent <- function(text, ...) {
 #' @noRd
 .tts_openai <- function(text, model, voice, format, speed, instructions, timeout_secs) {
   api_key <- Sys.getenv("OPENAI_API_KEY")
-  if (!nzchar(api_key)) stop("OPENAI_API_KEY must be set.")
+  if (!nzchar(api_key)) .gen_stop("missing_credential", params=list(credential="OPENAI_API_KEY"),stage="preflight")
 
   body <- list(
     model = model,
@@ -651,7 +658,7 @@ gen_tts.genflow_agent <- function(text, ...) {
                            poll_interval = 5, max_poll_seconds = 600,
                            model_info = NULL) {
   replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
-  if (!nzchar(replicate_token)) stop("REPLICATE_API_TOKEN must be set.")
+  if (!nzchar(replicate_token)) .gen_stop("missing_credential", params=list(credential="REPLICATE_API_TOKEN"),stage="preflight")
 
   model_parts <- .tts_replicate_model_parts(model)
   model_info <- model_info %||% .tts_replicate_model_info(
@@ -1154,7 +1161,7 @@ gen_tts_voices <- function(service = "replicate", model = NULL, timeout_api = 30
   }
 
   replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
-  if (!nzchar(replicate_token)) stop("REPLICATE_API_TOKEN must be set.")
+  if (!nzchar(replicate_token)) .gen_stop("missing_credential", params=list(credential="REPLICATE_API_TOKEN"),stage="preflight")
 
   model_parts <- .tts_replicate_model_parts(model)
   info <- .tts_replicate_model_info(

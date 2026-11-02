@@ -233,6 +233,7 @@ gen_stt.default <- function(
   checkpoint_retention = .gen_default("gen_stt", "checkpoint_retention"),
   ...
 ) {
+  withCallingHandlers({
   start_time <- Sys.time()
   .gen_internal_validate("gen_stt")
   chunk_options <- .stt_chunk_validate_options(
@@ -407,6 +408,7 @@ gen_stt.default <- function(
   transcribed_text <- NULL
   provider_metadata <- list()
   error_message <- NULL
+  provider_error <- NULL
 
   raw_transcription <- tryCatch({
     if (isTRUE(chunk_plan$chunked)) {
@@ -484,6 +486,7 @@ gen_stt.default <- function(
     )
   }, error = function(e) {
     error_message <<- conditionMessage(e)
+    provider_error <<- .genflow_provider_failure(e)$error
     NULL
   })
 
@@ -718,9 +721,10 @@ gen_stt.default <- function(
 
 
   result <- .genflow_complete_result(result, inference_status = inference_status,
-    persistence = .genflow_persistence(saved_file, requested = save_txt, error = persistence_error))
+    persistence = .genflow_persistence(saved_file, requested = save_txt, error = persistence_error), error = provider_error)
   .stt_report_result(result)
   return(invisible(.stt_project_output(result, chunk_options$output)))
+  }, error = .gen_boundary_error)
 }
 
 #' @rdname gen_stt
@@ -729,6 +733,7 @@ gen_stt.default <- function(
 #'   transcribe a different input file without changing the saved agent.
 #' @export
 gen_stt.genflow_agent <- function(audio, ...) {
+  withCallingHandlers({
   agent <- audio
   overrides <- list(...)
   formals_default <- formals(gen_stt.default)
@@ -741,6 +746,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     override_label = "gen_stt()"
   )
   do.call(gen_stt.default, agent_args, quote = TRUE)
+  }, error = .gen_boundary_error)
 }
 
 # --- Internal helpers -------------------------------------------------------
@@ -1428,7 +1434,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @noRd
 .stt_openai <- function(audio_path, model, language, prompt, timeout_secs) {
   api_key <- Sys.getenv("OPENAI_API_KEY")
-  if (!nzchar(api_key)) stop("OPENAI_API_KEY must be set.")
+  if (!nzchar(api_key)) .gen_stop("missing_credential", params=list(credential="OPENAI_API_KEY"),stage="preflight")
 
   audio_file <- httr::upload_file(audio_path)
   body <- list(
@@ -1461,7 +1467,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @noRd
 .stt_groq <- function(audio_path, model, language, prompt, timeout_secs) {
   api_key <- Sys.getenv("GROQ_API_KEY")
-  if (!nzchar(api_key)) stop("GROQ_API_KEY must be set.")
+  if (!nzchar(api_key)) .gen_stop("missing_credential", params=list(credential="GROQ_API_KEY"),stage="preflight")
 
   audio_file <- httr::upload_file(audio_path)
   body <- list(
@@ -1494,7 +1500,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @noRd
 .stt_assemblyai <- function(audio_path, language, poll_interval, max_poll_seconds, timeout_secs) {
   api_key <- Sys.getenv("ASSEMBLYAI_API_KEY")
-  if (!nzchar(api_key)) stop("ASSEMBLYAI_API_KEY must be set.")
+  if (!nzchar(api_key)) .gen_stop("missing_credential", params=list(credential="ASSEMBLYAI_API_KEY"),stage="preflight")
 
   upload_response <- httr::POST(
     url = "https://api.assemblyai.com/v2/upload",
@@ -1563,7 +1569,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   account_id <- Sys.getenv("CLOUDFLARE_ACCOUNT_ID")
   api_token <- Sys.getenv("CLOUDFLARE_API_TOKEN")
   if (!nzchar(account_id) || !nzchar(api_token)) {
-    stop("CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN must be set.")
+    .gen_stop("missing_credential",params=list(credential="CLOUDFLARE_ACCOUNT_ID e CLOUDFLARE_API_TOKEN"),stage="preflight")
   }
 
   url <- paste0(
@@ -1602,7 +1608,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   }
 
   api_key <- Sys.getenv("VOICEGAIN_API_KEY")
-  if (!nzchar(api_key)) stop("VOICEGAIN_API_KEY must be set.")
+  if (!nzchar(api_key)) .gen_stop("missing_credential", params=list(credential="VOICEGAIN_API_KEY"),stage="preflight")
 
   payload <- list(
     sessions = list(
@@ -1686,7 +1692,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @noRd
 .stt_hf <- function(audio_path, model, timeout_secs) {
   token <- Sys.getenv("HUGGINGFACE_API_TOKEN")
-  if (!nzchar(token)) stop("HUGGINGFACE_API_TOKEN must be set.")
+  if (!nzchar(token)) .gen_stop("missing_credential", params=list(credential="HUGGINGFACE_API_TOKEN"),stage="preflight")
 
   model_id <- model %||% .stt_default_model("hf")
   url <- paste0("https://router.huggingface.co/hf-inference/models/", model_id)
@@ -3891,7 +3897,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 #' @noRd
 .stt_replicate <- function(audio_path, model, timeout_secs, poll_interval, max_poll_seconds) {
   replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
-  if (!nzchar(replicate_token)) stop("REPLICATE_API_TOKEN must be set.")
+  if (!nzchar(replicate_token)) .gen_stop("missing_credential", params=list(credential="REPLICATE_API_TOKEN"),stage="preflight")
 
   model_id <- model %||% .stt_default_model("replicate")
   if (!grepl("/", model_id, fixed = TRUE)) {

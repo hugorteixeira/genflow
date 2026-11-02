@@ -12,8 +12,8 @@ test_that("installed contracts own every public argument and default", {
       }
     }
   }
-  expect_error(gen_block_contracts("gen_img",999),"Unknown block contract")
-  expect_error(gen_block_contracts("gen_img","../1"),"positive integer")
+  expect_error(gen_block_contracts("gen_img",999),class="genflow_validation_error")
+  expect_error(gen_block_contracts("gen_img","../1"),class="genflow_validation_error")
 })
 
 test_that("omission, explicit NULL, invalid values, and connections stay distinct", {

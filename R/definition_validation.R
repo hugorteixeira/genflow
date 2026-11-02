@@ -15,7 +15,7 @@
   bytes <- function(x, schema, at) {
     errors <- list()
     if (.gen_scalar(x) && !is.null(schema$maxLength) && nchar(x)<=schema$maxLength && nchar(x,type="bytes")>schema$maxLength)
-      errors <- list(.gen_issue("too_long",at,"Text exceeds the maximum byte length."))
+      errors <- list(.gen_issue("too_long",at,params=list(limit=schema$maxLength,unit="bytes")))
     if (is.list(x) && !is.null(schema$items)) for (i in seq_along(x)) errors <- c(errors,bytes(x[[i]],schema$items,.gen_pointer(at,as.character(i-1L))))
     errors
   }
@@ -44,7 +44,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     prompt_version_id=list(type=c("string","null"),pattern="\\S",maxLength=100),
     contract_version=list(type="integer",minimum=1),output_schema=list(type=c("object","null")),
     fixture=list(type="object")),"operation")
-  finish <- function(contract=NULL) list(valid=!length(errors),errors=errors,body=body,contract=contract)
+  finish <- function(contract=NULL) list(valid=!length(errors),errors=.gen_diagnostic_context(errors,body,contract$id),body=body,contract=contract)
   portable <- tryCatch({ .genflow_validate_portable(body); NULL }, error=function(e)e)
   if (!is.null(portable)) errors <- c(errors,list(.gen_issue("nonportable_document","",conditionMessage(portable))))
   policy <- .gen_schema_errors(check_capabilities,list(type="boolean"),"/check_capabilities")
@@ -55,10 +55,10 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   if (!is.numeric(version) || length(version)!=1L || !is.finite(version) || version<1 || version!=floor(version)) return(finish())
   catalog <- Filter(function(c) !is.null(c$studio) && identical(c$studio$id,body$operation) &&
     isTRUE(c$version == version),gen_block_contracts())
-  if (length(catalog)!=1L) { add("unknown_operation","/operation","Unknown operation or contract version."); return(finish()) }
+  if (length(catalog)!=1L) { add("unknown_operation","/operation",gen_error_message("unknown_operation")); return(finish()) }
   contract <- catalog[[1L]]; params <- body$parameters %||% list()
   owned <- names(Filter(function(p) identical(p[["x-owner"]],"runtime"),contract$arguments$properties))
-  for (key in intersect(names(params),owned)) add("backend_owned_argument",.gen_pointer("/parameters",key),paste("Unsupported or backend-owned parameter:",key))
+  for (key in intersect(names(params),owned)) add("backend_owned_argument",.gen_pointer("/parameters",key),gen_error_message("backend_owned_argument",list(argument=key)))
   if (!.gen_object(params)) return(finish(contract))
   args <- params
   if (isTRUE(contract$studio$available)) for (key in intersect(names(body),c("service","model"))) args[key] <- body[key]
@@ -70,12 +70,12 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     errors[[length(errors)+1L]] <- e
   }
   if (!is.null(body$output_schema)) {
-    if (!identical(body$operation,"text.generate")) add("invalid_schema","/output_schema","Structured output requires text.generate.")
+    if (!identical(body$operation,"text.generate")) add("invalid_schema","/output_schema",gen_error_message("text_output_schema"))
     for (e in gen_check_schema(body$output_schema)$errors) { e$path <- paste0("/output_schema",e$path); errors[[length(errors)+1L]] <- e }
   }
   if (!isTRUE(contract$studio$available) && !identical(body$service,contract$studio$planned_service))
-    add("unsupported_provider","/service",paste("The reserved adapter requires",contract$studio$planned_service))
-  if (check_capabilities && !is.null(body$fixture)) add("fixture_disabled","/fixture","Fixture controls are disabled in the real runtime.")
+    add("unsupported_provider","/service",gen_error_message("reserved_provider",list(service=contract$studio$planned_service)))
+  if (check_capabilities && !is.null(body$fixture)) add("fixture_disabled","/fixture",gen_error_message("fixture_disabled"))
   body$contract_version <- contract$version
   body$parameters <- checked$args[setdiff(names(checked$args),owned)]
   if (isTRUE(contract$studio$available)) for (key in c("service","model")) body[key] <- checked$args[key]
@@ -95,7 +95,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   }
   if (!.gen_object(body)) return(finish())
   if (!is.list(body$nodes) || !is.null(names(body$nodes)) || !length(body$nodes) || length(body$nodes)>100L) {
-    add("invalid_nodes","/nodes","Workflow requires 1 to 100 nodes."); return(finish())
+    add("invalid_nodes","/nodes",gen_error_message("studio_node_count")); return(finish())
   }
   coordinates <- function(value,path,viewport=FALSE) {
     props <- list(x=list(type="number",minimum=-1e6,maximum=1e6),y=list(type="number",minimum=-1e6,maximum=1e6))
@@ -114,20 +114,20 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     if (!is.null(n$position)) coordinates(n$position,paste0(path,"/position"))
     if (.gen_object(n$inputs)) for (key in names(n$inputs)) {
       ip <- .gen_pointer(paste0(path,"/inputs"),key)
-      if (nchar(key,type="bytes")>64L) add("invalid_port",ip,"Input port names are limited to 64 bytes.",n$id)
+      if (nchar(key,type="bytes")>64L) add("invalid_port",ip,gen_error_message("input_name_length"),n$id)
       errors <- c(errors,.gen_definition_shape(n$inputs[[key]],list(node=list(type="string",maxLength=64),
         port=list(type="string",maxLength=64)),c("node","port"),ip))
     }
     block <- if (identical(n$type,"validate")) "gen_validate_structure" else if (identical(n$type,"materialize")) "gen_materialize_structure" else n$type
     contract <- if (.gen_scalar(block)) tryCatch(gen_block_contracts(block,n$contract_version %||% 1L),error=function(e)NULL) else NULL
     if (!is.null(contract) && contract$kind!="workflow" && !n$type %in% c("validate","materialize"))
-      add("invalid_node_type",paste0(path,"/type"),"Studio nodes require a workflow block type.",n$id)
+      add("invalid_node_type",paste0(path,"/type"),gen_error_message("invalid_node_type"),n$id)
     config <- n$config %||% list()
     if (.gen_object(config)) {
       if (.gen_scalar(n$type) && n$type %in% c("generate","judge") &&
           (n$type=="judge" || identical(config$source %||% contract$arguments$properties$source$default,"ai"))) {
         ids <- config$agent_version_ids %||% if (!is.null(config$agent_version_id)) list(config$agent_version_id) else list()
-        if (!length(ids)) add("required_agent",paste0(path,"/config/agent_version_id"),"Generation requires an agent version.",n$id)
+        if (!length(ids)) add("required_agent",paste0(path,"/config/agent_version_id"),gen_error_message("required_agent"),n$id)
         # v1 saves can retain the singular field after editing candidate slots.
         # The plural form has always taken precedence in execution.
         if (!is.null(config$agent_version_ids)) config$agent_version_id <- NULL
@@ -139,30 +139,30 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
             # Validate author-supplied fields before replacing derived values.
             for (field in intersect(names(config),c("kind","output_schema"))) {
               for (e in .gen_schema_errors(config[[field]],contract$arguments$properties[[field]],paste0(path,"/config/",field)))
-                add(e$code,e$path,e$message,n$id)
+                { e$node_id <- n$id; errors[[length(errors)+1L]] <- e }
             }
             if (!"count" %in% names(config)) config$count <- contract$arguments$properties$count$default %||% length(ids)
-            if (length(ids)!=1L && !isTRUE(length(ids)==config$count)) add("agent_count",paste0(path,"/config/count"),"Provide one shared agent or one per candidate.",n$id)
-            if (length(unique(kinds))!=1L) add("mixed_outputs",paste0(path,"/config"),"All candidates must share an output kind.",n$id) else config$kind <- kinds[[1L]]
+            if (length(ids)!=1L && !isTRUE(length(ids)==config$count)) add("agent_count",paste0(path,"/config/count"),gen_error_message("agent_count"),n$id)
+            if (length(unique(kinds))!=1L) add("mixed_outputs",paste0(path,"/config"),gen_error_message("mixed_outputs"),n$id) else config$kind <- kinds[[1L]]
             schemas <- lapply(selected,function(a) a$body$output_schema)
-            if (!all(vapply(schemas,function(s) .gen_json_equal(s,schemas[[1L]]),logical(1)))) add("mixed_schemas",paste0(path,"/config"),"All candidates must share an output schema.",n$id)
+            if (!all(vapply(schemas,function(s) .gen_json_equal(s,schemas[[1L]]),logical(1)))) add("mixed_schemas",paste0(path,"/config"),gen_error_message("mixed_schemas"),n$id)
             config["output_schema"] <- schemas[1L]
           } else {
             if (length(selected)!=1L || any(vapply(selected,function(a) !identical(a$body$operation,"text.generate") || !is.null(a$body$output_schema),logical(1))))
-              add("invalid_judge",paste0(path,"/config"),"Judges must use one text.generate agent without an output schema.",n$id)
+              add("invalid_judge",paste0(path,"/config"),gen_error_message("invalid_judge"),n$id)
           }
         }
       }
       if (identical(n$type,"generate") && identical(config$source,"provided")) {
-        if (!length(config$artifact_ids)) add("required_assets",paste0(path,"/config/artifact_ids"),"Provided production requires 1 to 32 artifacts.",n$id)
+        if (!length(config$artifact_ids)) add("required_assets",paste0(path,"/config/artifact_ids"),gen_error_message("required_assets"),n$id)
         for (key in config$artifact_ids) if (.gen_scalar(key) && !is.null(assets[[key]]) && !identical(assets[[key]]$kind,config$kind))
-          add("asset_kind",paste0(path,"/config/artifact_ids"),"Artifact kind mismatch.",n$id)
+          add("asset_kind",paste0(path,"/config/artifact_ids"),gen_error_message("asset_kind"),n$id)
       }
       if (identical(n$type,"generate") && .gen_scalar(config$source) && config$source %in% c("manual","provided") && is.null(config$kind))
-        add("required_kind",paste0(path,"/config/kind"),"Manual/provided production requires an output kind.",n$id)
+        add("required_kind",paste0(path,"/config/kind"),gen_error_message("required_kind"),n$id)
       if (!is.null(config$output_schema)) {
-        if (!identical(config$kind,"json")) add("invalid_schema",paste0(path,"/config/output_schema"),"An output schema requires JSON content.",n$id)
-        for (e in gen_check_schema(config$output_schema)$errors) add(e$code,paste0(path,"/config/output_schema",e$path),e$message,n$id)
+        if (!identical(config$kind,"json")) add("invalid_schema",paste0(path,"/config/output_schema"),gen_error_message("json_output_schema"),n$id)
+        for (e in gen_check_schema(config$output_schema)$errors) { e$path <- paste0(path,"/config/output_schema",e$path); e$node_id <- n$id; errors[[length(errors)+1L]] <- e }
       }
     }
     nodes[[i]] <- list(id=n$id,block=block,contract_version=n$contract_version %||% 1L,args=config,inputs=n$inputs %||% list())
@@ -182,19 +182,19 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       vars <- .gen_template_variables(template)
       textual <- names(Filter(function(t) !is.null(t) && t %in% c("asset:text","asset:json"),types))
       if (n$block=="judge") textual <- setdiff(textual,"candidates")
-      if (a$body$operation!="audio.transcribe" && !all(vars %in% textual)) add("prompt_binding",paste0(path,"/inputs"),paste("Prompt variables need textual input bindings:",paste(setdiff(vars,textual),collapse=", ")),n$id)
+      if (a$body$operation!="audio.transcribe" && !all(vars %in% textual)) add("prompt_binding",paste0(path,"/inputs"),gen_error_message("prompt_binding",list(variables=paste(setdiff(vars,textual),collapse=", "))),n$id)
       if (n$block=="generate") {
-        if (a$body$operation=="audio.transcribe" && !identical(types$audio,"asset:audio")) add("required_audio",paste0(path,"/inputs/audio"),"Transcription requires an audio port.",n$id)
-        if (!is.null(types$audio) && a$body$operation!="audio.transcribe") add("incompatible_input",paste0(path,"/inputs/audio"),"Only transcription accepts the audio input port.",n$id)
+        if (a$body$operation=="audio.transcribe" && !identical(types$audio,"asset:audio")) add("required_audio",paste0(path,"/inputs/audio"),gen_error_message("required_audio"),n$id)
+        if (!is.null(types$audio) && a$body$operation!="audio.transcribe") add("incompatible_input",paste0(path,"/inputs/audio"),gen_error_message("audio_only_transcription"),n$id)
         if (!is.null(types$image)) {
           accepts <- "image" %in% names(a$contract$studio$inputs)
           if (accepts && check_capabilities && a$body$operation=="text.generate") accepts <- isTRUE(gen_capabilities(a$body$service,a$body$model)$adapter_features$vision)
-          if (!accepts) add("incompatible_input",paste0(path,"/inputs/image"),"This operation/provider does not accept image inputs.",n$id)
+          if (!accepts) add("incompatible_input",paste0(path,"/inputs/image"),gen_error_message("image_not_supported"),n$id)
         }
       }
     }
     if (n$block=="judge" && .gen_object(n$args$policy) && is.numeric(n$args$policy$quorum) && is.numeric(n$args$count) &&
-        isTRUE(n$args$policy$quorum > n$args$count)) add("invalid_quorum",paste0(path,"/config/policy/quorum"),"Judge quorum cannot exceed its voter count.",n$id)
+        isTRUE(n$args$policy$quorum > n$args$count)) add("invalid_quorum",paste0(path,"/config/policy/quorum"),gen_error_message("invalid_quorum"),n$id)
     if (n$block %in% c("judge","vote","select") && .gen_scalar(n$id) && .gen_scalar(types$candidates))
       derived[[n$id]] <- list(kind=sub("^candidates:","",types$candidates))
     if (n$block=="generate" && identical(n$args$source,"provided") && is.list(n$args$artifact_ids))
@@ -212,7 +212,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     if (n$block %in% c("input","generate")) out[] <- rep(list(n$args$output_schema),length(out))
     if (n$block %in% c("list.pack","list.concat") && length(incoming)) {
       if (!all(vapply(incoming,function(s) .gen_json_equal(s,incoming[[1L]]),logical(1))))
-        add("mixed_schemas",paste0("/nodes/",i-1L,"/inputs"),"List inputs must share an output schema.",id)
+        add("mixed_schemas",paste0("/nodes/",i-1L,"/inputs"),gen_error_message("mixed_schemas"),id)
       out[] <- list(incoming[[1L]])
     }
     if (n$block %in% c("list.item","candidates")) out[] <- list(incoming$list)
@@ -256,7 +256,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   errors <- .gen_definition_shape(document,list(format=list(type="string",enum=list("genflow-studio-definition")),
     schema_version=list(type="integer",enum=list(1L)),source=list(type="string",enum=list("draft","version")),
     root=object,resources=list(type="array",maxItems=3300,items=object),assets=list(type="array",maxItems=3200,items=object)),c("format","schema_version","root"))
-  if (nchar(jsonlite::toJSON(document,auto_unbox=TRUE,null="null",force=TRUE,digits=NA),type="bytes")>3*1024^2) { add("document_limit","","Bundle exceeds 3 MiB."); return(finish()) }
+  if (nchar(jsonlite::toJSON(document,auto_unbox=TRUE,null="null",force=TRUE,digits=NA),type="bytes")>3*1024^2) { add("document_limit","",gen_error_message("document_limit")); return(finish()) }
   resources <- document$resources %||% list(); manifest <- document$assets %||% list()
   array <- function(x,limit) is.list(x) && is.null(names(x)) && length(x)<=limit
   if (!array(resources,3300) || !array(manifest,3200)) return(finish())
@@ -273,7 +273,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     if (.gen_scalar(e$kind)) kinds[[i]] <- e$kind
   }
   duplicate <- duplicated(keys) | duplicated(keys,fromLast=TRUE)
-  for (i in which(duplicate & nzchar(keys))) add("duplicate_resource",paste0(paths[[i]],"/key"),"Duplicate bundle resource key.")
+  for (i in which(duplicate & nzchar(keys))) add("duplicate_resource",paste0(paths[[i]],"/key"),gen_error_message("duplicate_resource"))
   index <- stats::setNames(as.list(which(nzchar(keys) & !duplicate)),keys[nzchar(keys) & !duplicate])
   assets <- list()
   for (i in seq_along(manifest)) {
@@ -282,16 +282,16 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       kind=list(type="string",enum=as.list(c("text","json","image","audio","video"))),
       sha256=list(type="string",pattern="^[a-f0-9]{64}$")),c("key","kind","sha256")),path)
     if (.gen_object(a) && .gen_scalar(a$key)) {
-      if (!is.null(assets[[a$key]])) add("duplicate_asset",paste0(path,"/key"),"Duplicate asset key.")
+      if (!is.null(assets[[a$key]])) add("duplicate_asset",paste0(path,"/key"),gen_error_message("duplicate_asset"))
       assets[[a$key]] <- a
     }
   }
   dependencies <- vector("list",length(entries))
   ref <- function(i,key,kind,path) {
-    if (!.gen_scalar(key) || !nzchar(key)) { add("invalid_reference",path,"Resource references must be non-empty strings."); return() }
+    if (!.gen_scalar(key) || !nzchar(key)) { add("invalid_reference",path,gen_error_message("invalid_reference")); return() }
     target <- index[[key]]
-    if (is.null(target)) { add("unknown_resource",path,paste("Bundle contains an undeclared resource:",key)); return() }
-    if (kinds[[target]]!=kind) add("resource_kind",path,paste("Expected",kind,"resource."))
+    if (is.null(target)) { add("unknown_resource",path,gen_error_message("unknown_resource",list(resource=key))); return() }
+    if (kinds[[target]]!=kind) add("resource_kind",path,gen_error_message("resource_kind",list(expected=kind)))
     dependencies[[i]] <<- unique(c(dependencies[[i]],target))
   }
   for (i in seq_along(entries)) {
@@ -306,23 +306,23 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       if (is.list(n$config$agent_version_ids)) for (k in seq_along(n$config$agent_version_ids)) ref(i,n$config$agent_version_ids[[k]],"agent",paste0(np,"/agent_version_ids/",k-1L))
       if (is.list(n$config$artifact_ids)) for (k in seq_along(n$config$artifact_ids)) {
         key <- n$config$artifact_ids[[k]]
-        if (.gen_scalar(key) && is.null(assets[[key]])) add("unknown_asset",paste0(np,"/artifact_ids/",k-1L),paste("Bundle contains an undeclared asset:",key))
+        if (.gen_scalar(key) && is.null(assets[[key]])) add("unknown_asset",paste0(np,"/artifact_ids/",k-1L),gen_error_message("unknown_asset",list(asset=key)))
       }
     }
   }
   state <- integer(length(entries)); ordered <- integer(); heights <- integer(length(entries))
   visit <- function(i,depth=0L) {
     if (state[[i]]==2L) return()
-    if (state[[i]]==1L || depth>10L) { add("recursive_resource",paths[[i]],"Bundle contains a dependency cycle or exceeds 8 workflow levels."); return() }
+    if (state[[i]]==1L || depth>10L) { add("recursive_resource",paths[[i]],gen_error_message("recursive_resource")); return() }
     state[[i]] <<- 1L
     for (j in dependencies[[i]]) visit(j,depth+1L)
     child <- dependencies[[i]][kinds[dependencies[[i]]]=="workflow"]
     if (length(child)) heights[[i]] <<- 1L+max(heights[child])
-    if (heights[[i]]>8L) add("workflow_depth",paths[[i]],"Subworkflows are limited to 8 levels.")
+    if (heights[[i]]>8L) add("workflow_depth",paths[[i]],gen_error_message("workflow_depth"))
     state[[i]] <<- 2L; ordered <<- c(ordered,i)
   }
   for (i in seq_along(entries)) visit(i)
-  if (sum(kinds[-1L]=="workflow")>64L) add("workflow_limit","/resources","At most 64 subworkflow definitions are supported.")
+  if (sum(kinds[-1L]=="workflow")>64L) add("workflow_limit","/resources",gen_error_message("workflow_limit"))
   # Envelope, references and published dependencies must remain valid even
   # when the root is an incomplete draft. Root execution diagnostics stay in errors.
   bundle_errors <- errors
@@ -356,7 +356,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   document$root <- entries[[1L]]; document$resources <- unname(entries[-1L])
   resource_order <- keys[ordered[ordered>1L]]
   if (nchar(jsonlite::toJSON(document,auto_unbox=TRUE,null="null",force=TRUE,digits=NA),type="bytes")>3*1024^2) {
-    add("document_limit","","Prepared bundle exceeds 3 MiB.")
+    add("document_limit","",gen_error_message("document_limit"))
     bundle_errors <- c(bundle_errors,errors[length(errors)])
   }
   finish()

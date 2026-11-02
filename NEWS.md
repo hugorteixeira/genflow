@@ -1,3 +1,17 @@
+# genflow 0.0.15
+
+- Added the versioned diagnostic schema and pt-BR catalog, exported through
+  `gen_error_catalog()`, `gen_error_message()`, `gen_diagnostic()` and
+  `gen_error_summary()`. Schema errors carry rule parameters and original
+  document paths, node labels and field titles; nested causes survive adapters.
+- Generator, voting and validation boundaries share structured conditions and
+  results. Provider failures preserve execution outcome independently of their
+  translated message, optional HTTP status and a redacted log reference.
+  Batch summaries retain diagnostics alongside compatible error strings.
+- Unknown exceptions have safe public explanations. Persistence failures retain
+  generated content and successful inference; translating errors does not change
+  retry policy. See `inst/doc/diagnostics.md` for extension and compatibility rules.
+
 # genflow 0.0.13
 
 - Compare JSON objects and schemas by exact values and property names, with

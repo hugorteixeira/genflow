@@ -223,7 +223,7 @@ test_that("Hugging Face loading responses retry and remain structured errors", {
     directory = tempdir()
   )
   expect_identical(loading$status_api, "ERROR")
-  expect_match(loading$status_msg, "^HF_MODEL_LOADING:")
+  expect_identical(loading$error$code,"HF_MODEL_LOADING")
 })
 
 test_that("ellipsis arguments are rejected instead of ignored", {

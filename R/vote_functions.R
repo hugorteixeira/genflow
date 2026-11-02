@@ -3,7 +3,7 @@
   winners <- if (length(counts)) names(counts)[counts == max(counts)] else character()
   status <- if (length(votes) < min_votes) "insufficient_votes" else if (length(winners) > 1L) "tie" else "selected"
   if (identical(status, "tie") && identical(ties, "error")) {
-    stop("Voting ended in a tie.", call. = FALSE)
+    .gen_stop("vote_tie",stage="execution",outcome="failed")
   }
   winner <- if (identical(status, "selected") ||
                 (identical(status, "tie") && identical(ties, "first"))) winners[[1]] else NULL
@@ -67,6 +67,7 @@ gen_vote <- function(
   min_votes = .gen_default("gen_vote", "min_votes"),
   ties = .gen_default("gen_vote", "ties")
 ) {
+  withCallingHandlers({
   .gen_internal_validate("gen_vote")
   trigger <- trimws(trigger)
 
@@ -93,7 +94,7 @@ gen_vote <- function(
 
   trigger_norm <- normalize_text(trigger)
   if (is.na(trigger_norm) || !nzchar(trigger_norm)) {
-    stop("`trigger` could not be normalised to ASCII; please use a different value.", call. = FALSE)
+    .gen_stop("vote_trigger",path="/args/trigger")
   }
 
   pattern <- if (type == "number") {
@@ -297,4 +298,5 @@ gen_vote <- function(
   )
 
   invisible(result)
+  }, error = .gen_boundary_error)
 }

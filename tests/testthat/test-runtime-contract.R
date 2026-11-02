@@ -105,7 +105,8 @@ test_that("empty responses exhaust bounded retries as structured failures", {
   expect_identical(calls, 3L)
   expect_identical(delays, c(1, 2))
   expect_identical(result$status_api, "ERROR")
-  expect_identical(result$error$message, "EMPTY_OR_NULL_RESPONSE")
+  expect_identical(result$error$code, "EMPTY_OR_NULL_RESPONSE")
+  expect_identical(result$error$message, "O serviço retornou uma resposta vazia.")
 })
 
 test_that("successful text that looks like an error remains content", {

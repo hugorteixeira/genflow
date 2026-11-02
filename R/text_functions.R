@@ -99,7 +99,7 @@
   }
   api_key <- Sys.getenv("OPENAI_API_KEY")
   if (is.null(api_key) || api_key == "") {
-    stop("Environment variable OPENAI_API_KEY not set.")
+    .gen_stop("missing_credential", params=list(credential="OPENAI_API_KEY"),stage="preflight")
   }
   header_args <- list(
     Authorization = paste("Bearer", api_key),
@@ -246,7 +246,7 @@
   }
   api_key_openrouter <- Sys.getenv("OPENROUTER_API_KEY")
   if (is.null(api_key_openrouter) || api_key_openrouter == "") {
-    stop("Environment variable OPENROUTER_API_KEY not set.")
+    .gen_stop("missing_credential", params=list(credential="OPENROUTER_API_KEY"),stage="preflight")
   }
   api_url <- "https://openrouter.ai/api/v1/chat/completions"
   your_app_url <- Sys.getenv("YOUR_APP_URL", "Voting_LLMs")
@@ -579,7 +579,7 @@
                                        reasoning_field = NULL,
                                        plugins_field = NULL) {
   if (isTRUE(api_key_required) && !nzchar(api_key)) {
-    stop("Environment variable for ", provider_label, " API key not set.")
+    .gen_stop("missing_credential",params=list(credential=provider_label),stage="preflight")
   }
 
   if (!is.null(reasoning) && is.null(reasoning_field) && isTRUE(warn_ignored_reasoning)) {
@@ -1101,7 +1101,7 @@
                             timeout_secs = 80) {
   api_key <- .gemini_api_key()
   if (!nzchar(api_key)) {
-    stop("Environment variable GOOGLE_API_KEY or GEMINI_API_KEY not set.")
+    .gen_stop("missing_credential",params=list(credential="GOOGLE_API_KEY ou GEMINI_API_KEY"),stage="preflight")
   }
   model <- .gemini_resolve_model(model)
 
@@ -1412,7 +1412,7 @@
   base_url <- .anthropic_base_url()
   api_key <- .anthropic_api_key()
   if (!nzchar(api_key)) {
-    stop("Environment variable ANTHROPIC_API_KEY not set.")
+    .gen_stop("missing_credential", params=list(credential="ANTHROPIC_API_KEY"),stage="preflight")
   }
   model <- .anthropic_resolve_model(model, timeout_secs = timeout_secs)
   api_url <- paste0(base_url, "/v1/messages")
@@ -2117,7 +2117,7 @@
   }
   api_key_hf <- Sys.getenv("HUGGINGFACE_API_TOKEN")
   if (is.null(api_key_hf) || api_key_hf == "") {
-    stop("Environment variable HUGGINGFACE_API_TOKEN not set.")
+    .gen_stop("missing_credential", params=list(credential="HUGGINGFACE_API_TOKEN"),stage="preflight")
   }
   # Using the TGI OpenAI-compatible endpoint format
   api_url <- "https://router.huggingface.co" # Base URL
@@ -2383,6 +2383,7 @@ gen_txt.default <- function(
   max_output_tokens = .gen_default("gen_txt", "max_output_tokens"),
   ...
 ) {
+  withCallingHandlers({
   model_was_default <- missing(model)
   .gen_internal_validate("gen_txt")
   if (isTRUE(persist) && is.null(directory)) directory <- .genflow_default_dir("texts")
@@ -2500,11 +2501,11 @@ gen_txt.default <- function(
     tryCatch(.genflow_provider_result(.do_call(
       service, prompt, model, temp_v, reasoning_v, add_img, tools_flag,
       tools_payload, plugins_payload, min(timeout_api, remaining), base_url
-    )), error = function(e) .genflow_provider_failure(paste0("HTTR_ERRORR: ", conditionMessage(e))))
+    )), error = function(e) .genflow_provider_failure(if (!is.null(e$diagnostic)) e else paste0("HTTR_ERRORR: ", conditionMessage(e))))
   }
   provider_result <- invoke()
   retryable <- function(result) !is.null(result$error) &&
-    (identical(result$error$message, "EMPTY_OR_NULL_RESPONSE") ||
+    (identical(result$error$code, "EMPTY_OR_NULL_RESPONSE") ||
      identical(result$error$code, "HF_MODEL_LOADING"))
   if (isTRUE(null_repeat)) {
     for (delay in retry_delays) {
@@ -2542,6 +2543,7 @@ gen_txt.default <- function(
                 saved_file = saved_file, attempts = attempts)
   result <- .genflow_merge_fields(result, provider_result$metadata)
   .genflow_complete_result(result, inference_status = status, persistence = persistence, error = error)
+  }, error = .gen_boundary_error)
 }
 
 #' @rdname gen_txt
@@ -2550,6 +2552,7 @@ gen_txt.default <- function(
 #'   replace the saved context for one call.
 #' @export
 gen_txt.genflow_agent <- function(context, ...) {
+  withCallingHandlers({
   agent <- context
   overrides <- list(...)
   formals_default <- formals(gen_txt.default)
@@ -2562,4 +2565,5 @@ gen_txt.genflow_agent <- function(context, ...) {
     override_label = "gen_txt()"
   )
   do.call(gen_txt.default, agent_args, quote = TRUE)
+  }, error = .gen_boundary_error)
 }

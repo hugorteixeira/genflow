@@ -911,6 +911,7 @@ gen_batch <- function(qty = 8,
   )
   results_processed$results <- pad_list(results_processed$results, qty)
   results_processed$erros <- pad_list(results_processed$erros, qty)
+  results_processed$diagnostics <- pad_list(results_processed$diagnostics, qty)
   results_processed$logs_list <- pad_list(results_processed$logs_list, qty)
   results_processed$single_durations <- pad_numeric(results_processed$single_durations, qty)
   results_processed$agent_types <- pad_character(results_processed$agent_types, qty, "unknown")
@@ -918,6 +919,7 @@ gen_batch <- function(qty = 8,
     for (idx in reused_indices) {
       results_processed$results[idx] <- cache_entry$results[idx]
       results_processed$erros[idx] <- cache_entry$errors[idx]
+      results_processed$diagnostics[idx] <- pad_list(cache_entry$diagnostics,qty)[idx]
       if (!is.null(cache_entry$agent_types[idx]) && !is.na(cache_entry$agent_types[idx])) {
         results_processed$agent_types[idx] <- cache_entry$agent_types[idx]
       }
@@ -967,6 +969,7 @@ gen_batch <- function(qty = 8,
     valid_results = results_processed$valid_results_count,
     qty_solicited = qty,
     detailed_errors = final_errors,
+    diagnostics = results_processed$diagnostics,
     single_durations = single_durations,
     agent_types = agent_types,
     executed_indices = indices_to_run,
@@ -1004,6 +1007,7 @@ gen_batch <- function(qty = 8,
       qty = qty,
       results = merged_results,
       errors = merged_errors,
+      diagnostics = results_processed$diagnostics,
       agent_types = merged_agent_types,
       durations = merged_durations,
       logs = merged_logs,
