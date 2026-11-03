@@ -157,7 +157,7 @@
   value
 }
 
-.genflow_read_env_assignments <- function(path, vars = NULL, source = NULL) {
+.genflow_read_env_assignments <- function(path, vars = NULL, source = NULL, literal = FALSE) {
   path <- path.expand(as.character(path)[1])
   empty <- data.frame(
     env = character(),
@@ -191,7 +191,7 @@
       next
     }
     value <- trimws(parts[[3]])
-    if (grepl("`|\\$\\(", value, perl = TRUE)) {
+    if (!literal && grepl("`|\\$\\(", value, perl = TRUE)) {
       next
     }
     rows[[length(rows) + 1L]] <- data.frame(

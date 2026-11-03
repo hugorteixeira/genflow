@@ -354,3 +354,25 @@ test_that("public download failures never expose raw worker stderr", {
   expect_true(nzchar(status$error$reference))
   expect_false(grepl("private-token", jsonlite::toJSON(status), fixed = TRUE))
 })
+
+
+test_that("loading credentials updates only registered fields without interpolation or writes", {
+  root <- local_management_scope()
+  path <- getOption("genflow.renviron_path")
+  withr::local_envvar(c(OPENAI_API_KEY = "inherited", GENFLOW_MANAGEMENT_TEST_KEY = "previous", UNRELATED = "keep"))
+  expect_length(gen_load_credentials()$loaded, 0L)
+  set_provider_openai_compat("management-test", base_url = "http://127.0.0.1:9999",
+    api_key_env = "GENFLOW_MANAGEMENT_TEST_KEY", api_key_required = TRUE)
+  writeLines(c("# preserve", "UNRELATED=must-not-load", "OPENAI_API_KEY=old"), path)
+  literal <- "literal-${UNRELATED}-$(must-not-run)-`literal`-credential"
+  gen_save_credentials(list(OPENAI_API_KEY = literal, GENFLOW_MANAGEMENT_TEST_KEY = ""), set_session = FALSE)
+  before <- readLines(path)
+  result <- gen_load_credentials()
+  expect_setequal(result$loaded, c("OPENAI_API_KEY", "GENFLOW_MANAGEMENT_TEST_KEY"))
+  expect_identical(Sys.getenv("OPENAI_API_KEY"), literal)
+  expect_identical(Sys.getenv("GENFLOW_MANAGEMENT_TEST_KEY"), "")
+  expect_identical(Sys.getenv("UNRELATED"), "keep")
+  expect_identical(readLines(path), before)
+  expect_false(grepl(literal, jsonlite::toJSON(result), fixed = TRUE))
+  expect_error(gen_load_credentials(character()), class = "genflow_error")
+})

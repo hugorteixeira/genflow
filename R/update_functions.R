@@ -569,7 +569,7 @@
   if (verbose) message("Processing ", nrow(models_list), " ", provider_name, " models...")
 
   output_df <- purrr::map_df(seq_len(nrow(models_list)), function(i) {
-    model_info <- models_list[i, ]
+    model_info <- models_list[i, , drop = FALSE]
     model_id_safe <- model_info$id %||% model_info$model %||% model_info$name %||% paste0("UNKNOWN_ID_", i)
     model_text <- tolower(model_id_safe)
     model_type <- dplyr::case_when(

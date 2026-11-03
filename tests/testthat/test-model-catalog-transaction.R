@@ -309,3 +309,24 @@ test_that("portable catalog promotion restores the previous file on failure", {
   expect_false(dir.exists(genflow:::.genflow_file_lock_path(final)))
   expect_length(list.files(td, pattern = "rollback"), 0L)
 })
+
+
+test_that("compatible catalogs preserve rows when the response has a single identifier column", {
+  root <- tempfile("minimal-catalog-"); dir.create(root)
+  on.exit(unlink(root, recursive = TRUE), add = TRUE)
+  withr::local_options(list(genflow.providers_path = file.path(root, "providers.json"),
+    genflow.models_dir = file.path(root, "models")))
+  set_provider_openai_compat("minimal-catalog", base_url = "http://127.0.0.1:1", api_key_required = FALSE)
+  payload <- NULL
+  testthat::local_mocked_bindings(GET = function(...) {
+    structure(list(url = "http://127.0.0.1:1/v1/models", status_code = 200L, headers = list(`content-type` = "application/json"),
+      content = charToRaw(jsonlite::toJSON(payload, auto_unbox = TRUE))), class = "response")
+  }, .package = "httr")
+  for (field in c("id", "model", "name")) for (n in 1:2) {
+    ids <- paste0("chat-", seq_len(n))
+    payload <- list(data = lapply(ids, function(id) stats::setNames(list(id), field)))
+    result <- gen_update_models("minimal-catalog", verbose = FALSE, fail_on_error = TRUE)
+    expect_identical(attr(result, "updated_providers"), "minimal-catalog")
+    expect_equal(gen_models("minimal-catalog")$model, ids)
+  }
+})

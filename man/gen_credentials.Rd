@@ -6,6 +6,7 @@
 \alias{gen_save_credentials}
 \alias{gen_import_credentials}
 \alias{gen_delete_credentials}
+\alias{gen_load_credentials}
 \title{Inspect provider credential fields and their current state}
 \usage{
 gen_credentials(providers = NULL, path = NULL)
@@ -22,12 +23,15 @@ gen_import_credentials(
 )
 
 gen_delete_credentials(vars, path = NULL, backup = TRUE, unset_session = TRUE)
+
+gen_load_credentials(path = NULL)
 }
 \arguments{
 \item{providers}{Optional provider identifiers. NULL selects all providers.}
 
 \item{path}{Credential file. Defaults to option \code{genflow.renviron_path}, then
-\verb{~/.Renviron}. Reading a file does not load it into the process environment.}
+\verb{~/.Renviron}. Only \code{gen_load_credentials()} explicitly loads assignments
+from the file into the process environment.}
 
 \item{paths}{Optional named character vector of source files for detection.
 NULL uses the configured credential file, project Renviron/env and user
@@ -65,6 +69,12 @@ atomic replacement. It does not reload other processes or restart services.
 
 Delete returns target/backup paths and the names removed. Unrelated
 assignments and comments in the credential file are preserved.
+
+\code{gen_load_credentials()} applies registered assignments from one
+credential file to the current process and returns only its path and loaded
+variable names. Empty assignments clear inherited values; absent assignments
+preserve the environment. It never scans other sources, evaluates expressions,
+writes files, or changes unregistered process variables.
 }
 \description{
 These functions are the credential-management boundary shared by graphical

@@ -58,6 +58,10 @@ agents, catalogs and portable bundles.
 `set_session = TRUE` and `unset_session = TRUE` affect only the calling R
 process. Saving does not restart services or reload other processes. A server
 integrating this API owns authorization and how settings reach its workers.
+Call `gen_load_credentials(path)` at a worker/request boundary to apply only
+registered assignments from that file. It preserves absent variables, applies
+explicit empty values, and returns names rather than secrets. It uses the same
+simple-assignment parser as detection, without shell or environment interpolation.
 
 ## Catalog and favorites
 

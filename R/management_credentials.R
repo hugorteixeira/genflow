@@ -6,7 +6,8 @@
 #'
 #' @param providers Optional provider identifiers. NULL selects all providers.
 #' @param path Credential file. Defaults to option `genflow.renviron_path`, then
-#'   `~/.Renviron`. Reading a file does not load it into the process environment.
+#'   `~/.Renviron`. Only `gen_load_credentials()` explicitly loads assignments
+#'   from the file into the process environment.
 #' @return `gen_credentials()` returns `schema_version`, `path`, `fields` (field
 #'   definitions plus active/detected/masked state) and `missing` (required
 #'   credential groups missing from the current process for catalog updates).
@@ -114,4 +115,21 @@ gen_delete_credentials <- function(vars, path = NULL, backup = TRUE, unset_sessi
   .genflow_delete_credentials(.gen_credential_vars(vars), path = .gen_management_path(path),
     backup = .gen_management_flag(backup, "backup"),
     unset_session = .gen_management_flag(unset_session, "unset_session"))
+})
+
+
+#' @rdname gen_credentials
+#' @return `gen_load_credentials()` applies registered assignments from one
+#'   credential file to the current process and returns only its path and loaded
+#'   variable names. Empty assignments clear inherited values; absent assignments
+#'   preserve the environment. It never scans other sources, evaluates expressions,
+#'   writes files, or changes unregistered process variables.
+#' @export
+gen_load_credentials <- function(path = NULL) .gen_management({
+  path <- .genflow_credentials_path(.gen_management_path(path))
+  fields <- .genflow_credential_specs()$env
+  found <- .genflow_read_env_assignments(path, vars = fields, literal = TRUE)
+  found <- found[!duplicated(found$env, fromLast = TRUE), , drop = FALSE]
+  if (nrow(found)) do.call(Sys.setenv, stats::setNames(as.list(found$value), found$env))
+  list(path = path, loaded = found$env)
 })

@@ -1,3 +1,8 @@
+# genflow 0.0.19
+
+- `gen_load_credentials()` lets server processes reload registered credential assignments through the public API, without exposing values or changing unrelated environment variables.
+- Compatible provider catalogs accept minimal model responses containing only an identifier column.
+
 # genflow 0.0.18
 
 - Expose ordinary R APIs for credentials, full model catalogs, favorites and
