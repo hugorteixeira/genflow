@@ -101,16 +101,6 @@
   specs
 }
 
-.genflow_credential_providers <- function() {
-  specs <- .genflow_credential_specs()
-  if (!nrow(specs)) {
-    return(setNames(character(), character()))
-  }
-  labels <- tapply(specs$provider_label, specs$provider, function(x) x[[1]])
-  ids <- names(labels)
-  stats::setNames(ids, labels)
-}
-
 .genflow_sanitize_input_id <- function(value) {
   gsub("[^A-Za-z0-9_]", "_", as.character(value)[1], perl = TRUE)
 }
@@ -125,8 +115,8 @@
     return("")
   }
   n <- nchar(value, type = "chars")
-  if (n <= 6) {
-    return(paste0(substr(value, 1, 1), "...", substr(value, n, n)))
+  if (n <= 8) {
+    return("********")
   }
   paste0(substr(value, 1, 4), "...", substr(value, max(1, n - 3), n))
 }
@@ -139,9 +129,9 @@
   path.expand(as.character(configured)[1])
 }
 
-.genflow_env_source_paths <- function() {
+.genflow_env_source_paths <- function(path = NULL) {
   paths <- c(
-    user_renviron = path.expand("~/.Renviron"),
+    user_renviron = .genflow_credentials_path(path),
     project_renviron = file.path(getwd(), ".Renviron"),
     project_env = file.path(getwd(), ".env"),
     bashrc = path.expand("~/.bashrc"),
@@ -219,7 +209,7 @@
   do.call(rbind, rows)
 }
 
-.genflow_detect_credentials <- function(providers = NULL, vars = NULL, include_values = FALSE) {
+.genflow_detect_credentials <- function(providers = NULL, vars = NULL, include_values = FALSE, paths = NULL) {
   specs <- .genflow_credential_specs(providers)
   spec_vars <- unique(specs$env)
   if (!is.null(vars)) {
@@ -255,7 +245,7 @@
     }
   }
 
-  paths <- .genflow_env_source_paths()
+  paths <- paths %||% .genflow_env_source_paths()
   for (source_name in names(paths)) {
     detected <- .genflow_read_env_assignments(paths[[source_name]], vars = spec_vars, source = source_name)
     if (nrow(detected)) {
@@ -292,12 +282,14 @@
   result
 }
 
-.genflow_credential_status <- function(providers = NULL) {
+.genflow_credential_status <- function(providers = NULL, path = NULL) {
   specs <- .genflow_credential_specs(providers)
   if (!nrow(specs)) {
-    return(data.frame())
+    return(cbind(specs, data.frame(active = logical(), detected = logical(),
+      source = character(), masked = character())))
   }
-  detected <- .genflow_detect_credentials(providers = providers, include_values = TRUE)
+  detected <- .genflow_detect_credentials(providers = providers, include_values = TRUE,
+    paths = .genflow_env_source_paths(path))
   rows <- vector("list", nrow(specs))
   for (idx in seq_len(nrow(specs))) {
     spec <- specs[idx, , drop = FALSE]

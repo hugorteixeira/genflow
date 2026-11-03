@@ -2424,7 +2424,7 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
   # Set default directory if not provided
   if (is.null(directory) || !length(directory) ||
       (length(directory) == 1L && is.na(directory))) {
-    directory <- tools::R_user_dir("agent_models", which = "data")
+    directory <- .genflow_resolve_models_dir()
   } else if (!is.character(directory) || length(directory) != 1L ||
              is.na(directory) || !nzchar(trimws(directory))) {
     stop("`directory` must be one non-empty path.", call. = FALSE)
@@ -2545,22 +2545,6 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
   invisible(result)
 }
 
-#' Normalize `provider` column values (internal)
-#'
-#' Ensures a consistent lowercase provider column.
-#'
-#' @param df A data frame with a `service` or `provider` column.
-#' @return The same data frame with a normalized `provider` column.
-#' @keywords internal
-#' @noRd
-.normalize_provider_col <- function(df) {
-  if (!"provider" %in% names(df) && "service" %in% names(df)) {
-    names(df)[names(df) == "service"] <- "provider"
-  }
-  expected <- c("provider", "model", "type", "pricing", "description")
-  for (col in expected) if (!col %in% names(df)) df[[col]] <- NA_character_
-  df[, expected, drop = FALSE]
-}
 #' Normalize type input vector (internal)
 #'
 #' Accepts NULL or character and returns a trimmed, lowercase vector.
@@ -2604,50 +2588,9 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
 #' @keywords internal
 #' @noRd
 .read_provider_csvs <- function(directory, providers = NULL, verbose = TRUE) {
-  if (is.null(directory) || is.na(directory)) {
-    directory <- tools::R_user_dir("agent_models", which = "data")
-  }
-  if (!dir.exists(directory)) {
-    if (verbose) message("Directory does not exist: ", directory)
-    return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
-  }
-  csv_paths <- list.files(directory, pattern = "\\.csv$", full.names = TRUE)
-  if (length(csv_paths) == 0) {
-    if (verbose) message("No CSV files found in ", directory)
-    return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
-  }
-  base_names <- tolower(tools::file_path_sans_ext(basename(csv_paths)))
-  active_files <- !.genflow_is_retired_service(base_names)
-  csv_paths <- csv_paths[active_files]
-  base_names <- base_names[active_files]
-  if (!length(csv_paths)) {
-    if (verbose) message("No active provider CSV files found in ", directory)
-    return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
-  }
-  if (!is.null(providers)) {
-    p_sel <- tolower(trimws(as.character(unlist(providers))))
-    sel <- base_names %in% p_sel
-    if (!any(sel)) {
-      if (verbose) message("No files match requested provider(s): ", paste(unique(p_sel), collapse = ", "))
-      return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
-    }
-    csv_paths <- csv_paths[sel]
-    base_names <- base_names[sel]
-  }
-  dfs <- lapply(csv_paths, function(p) {
-    df <- tryCatch(read.csv(p, stringsAsFactors = FALSE), error = function(e) NULL)
-    if (is.null(df)) return(NULL)
-    df <- .normalize_provider_col(df)
-    if (all(is.na(df$provider)) || !nzchar(df$provider[1])) {
-      df$provider <- tolower(tools::file_path_sans_ext(basename(p)))
-    }
-    df <- df[!.genflow_is_retired_service(df$provider), , drop = FALSE]
-    if (!nrow(df)) return(NULL)
-    df
-  })
-  dfs <- Filter(Negate(is.null), dfs)
-  if (length(dfs) == 0) return(tibble::tibble(provider = character(), model = character(), type = character(), pricing = character(), description = character()))
-  dplyr::bind_rows(dfs)
+  rows <- gen_models(provider = providers, directory = directory)
+  names(rows)[names(rows) == "service"] <- "provider"
+  tibble::as_tibble(rows[, c("provider", "model", "type", "pricing", "description"), drop = FALSE])
 }
 #' Strip leading/trailing double quotes (internal)
 #'

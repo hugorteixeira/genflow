@@ -95,118 +95,8 @@
 }
 
 .model_update_provider_ids <- function() {
-  registry <- .genflow_provider_registry()
-  c(names(Filter(function(spec) !is.null(spec$catalog_function), registry)), names(.genflow_list_custom_provider_configs()))
-}
-
-.default_models_dir <- function() {
-  tools::R_user_dir("agent_models", which = "data")
-}
-
-.favorites_path <- function(directory = NULL) {
-  dir <- directory %||% .default_models_dir()
-  file.path(dir, "favorites.rds")
-}
-
-.empty_favorites <- function() {
-  data.frame(
-    service = character(),
-    model = character(),
-    type = character(),
-    stringsAsFactors = FALSE
-  )
-}
-
-.load_favorites <- function(directory = NULL) {
-  path <- .favorites_path(directory)
-  if (!file.exists(path)) {
-    return(.empty_favorites())
-  }
-  favs <- tryCatch(readRDS(path), error = function(e) NULL)
-  if (!is.data.frame(favs) || !all(c("service", "model") %in% names(favs))) {
-    return(.empty_favorites())
-  }
-  if (!"type" %in% names(favs)) {
-    favs$type <- NA_character_
-  }
-  favs$service <- tolower(trimws(as.character(favs$service %||% "")))
-  favs$model <- trimws(as.character(favs$model %||% ""))
-  favs$type <- as.character(favs$type %||% "")
-  favs$type[is.na(favs$type)] <- ""
-  valid <- !is.na(favs$service) &
-    nzchar(favs$service) &
-    !.genflow_is_retired_service(favs$service) &
-    !is.na(favs$model) &
-    nzchar(favs$model)
-  favs <- favs[valid, , drop = FALSE]
-  if (!nrow(favs)) {
-    return(.empty_favorites())
-  }
-  unique(favs)
-}
-
-.save_favorites <- function(favorites, directory = NULL) {
-  path <- .favorites_path(directory)
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(favorites, path)
-  invisible(favorites)
-}
-
-.normalize_favorites <- function(favorites, catalog) {
-  if (!is.data.frame(favorites) ||
-      !all(c("service", "model") %in% names(favorites))) {
-    return(.empty_favorites())
-  }
-  if (!"type" %in% names(favorites)) {
-    favorites$type <- ""
-  }
-  favorites <- favorites[, c("service", "model", "type"), drop = FALSE]
-  favorites$service <- tolower(trimws(as.character(favorites$service)))
-  favorites$model <- trimws(as.character(favorites$model))
-  favorites$type <- as.character(favorites$type)
-  favorites$type[is.na(favorites$type)] <- ""
-  valid <- !is.na(favorites$service) &
-    nzchar(favorites$service) &
-    !.genflow_is_retired_service(favorites$service) &
-    !is.na(favorites$model) &
-    nzchar(favorites$model)
-  favorites <- favorites[valid, , drop = FALSE]
-  if (!nrow(favorites)) {
-    return(.empty_favorites())
-  }
-  if (!is.data.frame(catalog) ||
-      !nrow(catalog) ||
-      !all(c("service", "model") %in% names(catalog))) {
-    return(unique(favorites))
-  }
-
-  catalog_service <- tolower(trimws(as.character(catalog$service)))
-  catalog_model <- trimws(as.character(catalog$model))
-  catalog_valid <- !is.na(catalog_service) &
-    nzchar(catalog_service) &
-    !is.na(catalog_model) &
-    nzchar(catalog_model)
-  catalog_service <- catalog_service[catalog_valid]
-  catalog_model <- catalog_model[catalog_valid]
-  catalog_types <- if ("type" %in% names(catalog)) {
-    as.character(catalog$type[catalog_valid])
-  } else {
-    rep("", length(catalog_service))
-  }
-  catalog_types[is.na(catalog_types)] <- ""
-  catalog_keys <- paste(catalog_service, catalog_model, sep = "||")
-  fav_keys <- paste(tolower(favorites$service), favorites$model, sep = "||")
-  keep <- fav_keys %in% catalog_keys
-  favorites <- favorites[keep, , drop = FALSE]
-  if (!nrow(favorites)) {
-    return(.empty_favorites())
-  }
-  matched_idx <- match(paste(tolower(favorites$service), favorites$model, sep = "||"), catalog_keys)
-  matched_types <- catalog_types[matched_idx]
-  missing_type <- !nzchar(favorites$type)
-  favorites$type[missing_type] <- matched_types[missing_type]
-  favorites$type[is.na(favorites$type)] <- ""
-  unique(favorites)
+  providers <- list_providers()
+  providers$id[providers$catalog_update]
 }
 
 .resolve_favorite_selection <- function(service, model, type, favorites, catalog) {
@@ -257,101 +147,6 @@
   defaults <- tools::toTitleCase(service)
   labels[is.na(labels)] <- defaults[is.na(labels)]
   unname(labels)
-}
-
-.load_models_catalog <- function(directory = NULL) {
-  dir <- directory %||% .default_models_dir()
-  if (!dir.exists(dir)) {
-    return(data.frame())
-  }
-  files <- list.files(dir, pattern = "\\.csv$", full.names = TRUE)
-  if (!length(files)) {
-    return(data.frame())
-  }
-
-  catalogs <- lapply(files, function(path) {
-    df <- tryCatch(
-      read.csv(path, stringsAsFactors = FALSE, check.names = FALSE),
-      error = function(e) NULL
-    )
-    if (is.null(df) || nrow(df) == 0) {
-      return(NULL)
-    }
-    names(df) <- tolower(names(df))
-    fallback_service <- tolower(tools::file_path_sans_ext(basename(path)))
-    if (!"service" %in% names(df)) {
-      df$service <- fallback_service
-    }
-    df$service <- tolower(trimws(as.character(df$service)))
-    missing_service <- is.na(df$service) | !nzchar(df$service)
-    df$service[missing_service] <- fallback_service
-    df <- df[!.genflow_is_retired_service(df$service), , drop = FALSE]
-    if (!nrow(df)) {
-      return(NULL)
-    }
-    df$service <- vapply(
-      df$service,
-      .genflow_normalize_service_alias,
-      character(1),
-      USE.NAMES = FALSE
-    )
-    # The Python/Transformers bridge was retired. Ignore old user catalogs
-    # without deleting user-owned data.
-    df <- df[!.genflow_is_retired_service(df$service), , drop = FALSE]
-    if (!nrow(df)) {
-      return(NULL)
-    }
-
-    if (!"model" %in% names(df)) {
-      if ("id" %in% names(df)) {
-        df$model <- df$id
-      } else {
-        df$model <- ""
-      }
-    }
-    df$model <- trimws(as.character(df$model))
-    valid_model <- !is.na(df$model) & nzchar(df$model)
-    df <- df[valid_model, , drop = FALSE]
-    if (!nrow(df)) {
-      return(NULL)
-    }
-
-    if (!"type" %in% names(df)) {
-      df$type <- NA_character_
-    }
-    df$type <- as.character(df$type)
-
-    if (!"pricing" %in% names(df)) {
-      df$pricing <- NA_character_
-    } else {
-      df$pricing <- as.character(df$pricing)
-    }
-
-    if (!"description" %in% names(df)) {
-      df$description <- NA_character_
-    } else {
-      df$description <- as.character(df$description)
-    }
-
-    df$source_file <- basename(path)
-    df[, c(
-      "service",
-      "model",
-      "type",
-      "pricing",
-      "description",
-      "source_file"
-    ), drop = FALSE]
-  })
-
-  catalogs <- Filter(Negate(is.null), catalogs)
-  if (!length(catalogs)) {
-    return(data.frame())
-  }
-
-  out <- do.call(rbind, catalogs)
-  rownames(out) <- NULL
-  out
 }
 
 .model_service_choices <- function(catalog, include = character()) {
@@ -1845,212 +1640,8 @@
   })
 }
 
-.local_native_inventory_empty <- function() {
-  data.frame(
-    path = character(),
-    filename = character(),
-    quant = character(),
-    size_bytes = numeric(),
-    size = character(),
-    source_url = character(),
-    managed = logical(),
-    selected = logical(),
-    stringsAsFactors = FALSE
-  )
-}
-
-.local_native_inventory_normalize <- function(inventory) {
-  if (!is.data.frame(inventory) || !nrow(inventory)) {
-    return(.local_native_inventory_empty())
-  }
-
-  rows <- inventory
-  required <- names(.local_native_inventory_empty())
-  defaults <- list(
-    path = "",
-    filename = "",
-    quant = "",
-    size_bytes = NA_real_,
-    size = "",
-    source_url = "",
-    managed = FALSE,
-    selected = FALSE
-  )
-  for (field in setdiff(required, names(rows))) {
-    rows[[field]] <- rep(defaults[[field]], nrow(rows))
-  }
-  rows <- rows[, required, drop = FALSE]
-
-  rows$path <- trimws(as.character(rows$path))
-  rows$filename <- trimws(as.character(rows$filename))
-  missing_filename <- is.na(rows$filename) | !nzchar(rows$filename)
-  rows$filename[missing_filename] <- basename(rows$path[missing_filename])
-  rows$quant <- trimws(as.character(rows$quant))
-  rows$quant[is.na(rows$quant)] <- ""
-  rows$size_bytes <- suppressWarnings(as.numeric(rows$size_bytes))
-  rows$size <- trimws(as.character(rows$size))
-  rows$size[is.na(rows$size)] <- ""
-  missing_size <- !nzchar(rows$size)
-  rows$size[missing_size] <- vapply(
-    rows$size_bytes[missing_size],
-    .local_native_format_bytes,
-    character(1)
-  )
-  rows$source_url <- as.character(rows$source_url)
-  rows$source_url[is.na(rows$source_url)] <- ""
-  rows$managed <- !is.na(rows$managed) & as.logical(rows$managed)
-  rows$selected <- !is.na(rows$selected) & as.logical(rows$selected)
-
-  valid <- !is.na(rows$path) & nzchar(rows$path)
-  rows[valid, , drop = FALSE]
-}
-
-.local_native_format_bytes <- function(bytes) {
-  bytes <- suppressWarnings(as.numeric(bytes)[1])
-  if (is.na(bytes) || !is.finite(bytes) || bytes < 0) return("Unknown")
-  units <- c("B", "KB", "MB", "GB", "TB")
-  unit <- 1L
-  value <- bytes
-  while (value >= 1024 && unit < length(units)) {
-    value <- value / 1024
-    unit <- unit + 1L
-  }
-  digits <- if (unit == 1L) 0L else if (value >= 10) 1L else 2L
-  paste0(format(round(value, digits), trim = TRUE, nsmall = digits), " ", units[[unit]])
-}
-
-.local_native_managed_inventory <- function(inventory = NULL) {
-  rows <- .local_native_inventory_normalize(inventory)
-  rows[rows$managed, , drop = FALSE]
-}
-
-.local_native_hf_repository <- function(source_url, filename) {
-  source_url <- as.character(source_url %||% character())
-  filename <- as.character(filename %||% character())
-  length_out <- max(length(source_url), length(filename))
-  if (!length_out) return(character())
-
-  source_url <- if (length(source_url)) {
-    rep_len(source_url, length_out)
-  } else {
-    rep("", length_out)
-  }
-  filename <- if (length(filename)) {
-    rep_len(filename, length_out)
-  } else {
-    rep("", length_out)
-  }
-
-  vapply(seq_len(length_out), function(index) {
-    source <- trimws(source_url[[index]])
-    expected_filename <- trimws(filename[[index]])
-    if (
-      is.na(source) || !nzchar(source) ||
-      is.na(expected_filename) || !nzchar(expected_filename)
-    ) {
-      return("\u2014")
-    }
-
-    parsed <- tryCatch(
-      .genflow_crispasr_parse_hf_url(source),
-      error = function(e) NULL
-    )
-    if (
-      is.null(parsed) ||
-      !identical(parsed$filename, expected_filename)
-    ) {
-      return("\u2014")
-    }
-    parsed$repository
-  }, character(1), USE.NAMES = FALSE)
-}
-
-.local_native_hf_reference_input <- function(value) {
-  value <- trimws(as.character(value %||% "")[1])
-  if (is.na(value)) return("")
-  value <- sub(
-    "^hf[[:space:]]+download[[:space:]]+",
-    "",
-    value,
-    ignore.case = TRUE
-  )
-  value <- trimws(value)
-  if (nchar(value) >= 2L) {
-    first <- substr(value, 1L, 1L)
-    last <- substr(value, nchar(value), nchar(value))
-    if (first %in% c("\"", "'") && identical(first, last)) {
-      value <- trimws(substr(value, 2L, nchar(value) - 1L))
-    }
-  }
-  value
-}
-
-.local_native_hf_selector <- function(value) {
-  value <- .local_native_hf_reference_input(value)
-  if (is.na(value) || !nzchar(value)) {
-    stop("Enter a Hugging Face model reference first.", call. = FALSE)
-  }
-  if (!.stt_is_crispasr_hf_reference(value)) {
-    stop(
-      "Use an exact `hf://OWNER/REPOSITORY:FILE` reference or a ",
-      "Hugging Face `/blob/main/FILE` URL.",
-      call. = FALSE
-    )
-  }
-  reference <- .stt_parse_crispasr_hf_reference(value)
-  filename <- .genflow_crispasr_validate_filename(reference$file)
-  paste0("hf://", reference$repository, ":", filename)
-}
-
-.local_native_referenced_models <- function(
-  config = NULL,
-  setup_names = NULL,
-  agent_names = NULL,
-  setup_reader = function(name) get_setup(name, assign = FALSE),
-  agent_reader = function(name) get_agent(name, assign = FALSE)
-) {
-  config <- config %||% .genflow_local_config_defaults()
-  referenced <- c(
-    config$stt_native_model %||% "",
-    config$moss_cpp_model %||% ""
-  )
-  model_from_entry <- function(entry) {
-    if (!is.list(entry)) return("")
-    service <- tryCatch(
-      .stt_normalize_service(entry$service %||% ""),
-      error = function(e) ""
-    )
-    if (!identical(service, "local-native")) return("")
-    model <- trimws(as.character(entry$model %||% "")[1])
-    if (is.na(model)) "" else model
-  }
-  read_models <- function(names, reader) {
-    names <- unique(trimws(as.character(names %||% character())))
-    names <- names[!is.na(names) & nzchar(names)]
-    if (!length(names)) return(character())
-    vapply(names, function(name) {
-      entry <- tryCatch(reader(name), error = function(e) NULL)
-      model_from_entry(entry)
-    }, character(1), USE.NAMES = FALSE)
-  }
-
-  if (is.null(setup_names)) {
-    setup_names <- tryCatch(.load_setup_names(), error = function(e) character())
-  }
-  if (is.null(agent_names)) {
-    agent_names <- tryCatch(.load_agent_names(), error = function(e) character())
-  }
-  referenced <- c(
-    referenced,
-    read_models(setup_names, setup_reader),
-    read_models(agent_names, agent_reader)
-  )
-  referenced <- unique(trimws(as.character(referenced)))
-  referenced[
-    !is.na(referenced) &
-      nzchar(referenced) &
-      tolower(referenced) != "auto"
-  ]
+.local_native_managed_inventory <- function(inventory) {
+  inventory[inventory$managed, , drop = FALSE]
 }
 
 .update_local_config_inputs <- function(session, config) {
@@ -2154,7 +1745,7 @@ server <- function(input, output, session) {
   content_preview_cache <- new.env(parent = emptyenv())
   agent_summary_cache <- new.env(parent = emptyenv())
 
-  initial_models_dir <- .default_models_dir()
+  initial_models_dir <- .genflow_resolve_models_dir()
   # Native STT is a local inventory, so keep it current without requiring a
   # network-style manual provider refresh when the app opens.
   try(
@@ -2166,8 +1757,8 @@ server <- function(input, output, session) {
     ),
     silent = TRUE
   )
-  initial_catalog <- .load_models_catalog(initial_models_dir)
-  initial_favorites <- .normalize_favorites(.load_favorites(initial_models_dir), initial_catalog)
+  initial_catalog <- gen_models(directory = initial_models_dir)
+  initial_favorites <- gen_model_favorites(directory = initial_models_dir, catalog = initial_catalog)
 
   models_state <- reactiveValues(
     directory = initial_models_dir,
@@ -2204,13 +1795,11 @@ server <- function(input, output, session) {
   )
   initial_native_inventory <- tryCatch(
     list(
-      models = .local_native_inventory_normalize(
-        .genflow_crispasr_inventory(initial_local_config)
-      ),
+      models = gen_native_models(initial_local_config),
       error = ""
     ),
     error = function(e) list(
-      models = .local_native_inventory_empty(),
+      models = transform(.genflow_crispasr_empty_inventory(), repository = character()),
       error = conditionMessage(e)
     )
   )
@@ -2281,9 +1870,7 @@ server <- function(input, output, session) {
 
   refresh_native_models <- function(config, status = NULL) {
     inventory <- tryCatch(
-      .local_native_inventory_normalize(
-        .genflow_crispasr_inventory(config)
-      ),
+      gen_native_models(config),
       error = function(e) e
     )
     if (inherits(inventory, "error")) {
@@ -2308,7 +1895,7 @@ server <- function(input, output, session) {
   current_models_dir <- function() {
     dir <- models_state$directory %||% ""
     if (!nzchar(dir)) {
-      dir <- .default_models_dir()
+      dir <- .genflow_resolve_models_dir()
     }
     dir
   }
@@ -2400,27 +1987,20 @@ server <- function(input, output, session) {
   }
 
   custom_provider_choices <- function() {
-    providers <- .genflow_list_custom_provider_configs()
-    if (!length(providers)) {
+    providers <- list_providers(include_builtin = FALSE)
+    if (!nrow(providers)) {
       return(setNames(character(), character()))
     }
-    ids <- names(providers)
-    labels <- vapply(providers, function(cfg) {
-      label <- trimws(as.character(cfg$label %||% cfg$id)[1])
-      if (!nzchar(label)) {
-        label <- cfg$id
-      }
-      sprintf("%s (%s)", label, cfg$id)
-    }, character(1))
-    stats::setNames(ids, labels)
+    stats::setNames(providers$id, sprintf("%s (%s)", providers$label, providers$id))
   }
 
   credential_provider_choices <- function() {
-    choices <- .genflow_credential_providers()
-    if (!length(choices)) {
+    fields <- gen_credentials()$fields
+    if (!nrow(fields)) {
       return(setNames(character(), character()))
     }
-    choices
+    labels <- tapply(fields$provider_label, fields$provider, function(x) x[[1]])
+    stats::setNames(names(labels), labels)
   }
 
   refresh_credential_selectors <- function(preferred_provider = NULL) {
@@ -2436,12 +2016,12 @@ server <- function(input, output, session) {
 
   refresh_credentials_status <- function(provider = NULL) {
     provider <- provider %||% isolate(input$credentials_provider) %||% .DEFAULT_MODEL_SERVICE
-    status <- .genflow_credential_status(provider)
+    status <- gen_credentials(provider)$fields
     active_count <- if (nrow(status)) sum(status$active) else 0L
     detected_count <- if (nrow(status)) sum(status$detected & !status$active) else 0L
     credentials_state$status <- paste0(
       "Store: ",
-      .genflow_credentials_path(),
+      gen_credentials()$path,
       "\nActive variables: ",
       active_count,
       "\nDetected but not active: ",
@@ -2450,7 +2030,7 @@ server <- function(input, output, session) {
   }
 
   credential_status_ui <- function(provider) {
-    status <- .genflow_credential_status(provider)
+    status <- gen_credentials(provider)$fields
     if (!nrow(status)) {
       return(div(class = "gf-empty", "No credential variables registered for this provider."))
     }
@@ -2491,7 +2071,7 @@ server <- function(input, output, session) {
 
   show_credentials_modal <- function(provider) {
     provider <- tolower(trimws(as.character(provider %||% "")[1]))
-    specs <- .genflow_credential_specs(provider)
+    specs <- gen_credentials(provider)$fields
     if (!nrow(specs)) {
       showNotification("No credential variables are registered for this provider.", type = "warning")
       return()
@@ -2501,21 +2081,21 @@ server <- function(input, output, session) {
     fields <- lapply(seq_len(nrow(specs)), function(idx) {
       spec <- specs[idx, , drop = FALSE]
       input_id <- paste0("credential_value_", .genflow_sanitize_input_id(spec$env))
-      active_value <- Sys.getenv(spec$env, unset = "")
-      field_value <- active_value
+      active <- isTRUE(spec$active)
+      field_value <- if (active && !isTRUE(spec$sensitive)) spec$masked else ""
       if (!nzchar(field_value) && identical(spec$kind[[1]], "base_url")) {
         field_value <- spec$default_value[[1]]
       }
       label <- paste0(spec$label, " (", spec$env, ")")
-      help <- if (isTRUE(spec$sensitive) && nzchar(active_value)) {
+      help <- if (isTRUE(spec$sensitive) && active) {
         "Leave blank to keep the current value."
-      } else if (nzchar(spec$default_value) && !nzchar(active_value)) {
+      } else if (nzchar(spec$default_value) && !active) {
         "Built-in default. Save only if you want to override it."
       } else {
         NULL
       }
       input <- if (isTRUE(spec$sensitive)) {
-        passwordInput(input_id, label, value = "", placeholder = if (nzchar(active_value)) "Current value is set" else "")
+        passwordInput(input_id, label, value = "", placeholder = if (active) "Current value is set" else "")
       } else {
         textInput(input_id, label, value = field_value, placeholder = spec$default_value)
       }
@@ -2529,7 +2109,7 @@ server <- function(input, output, session) {
       title = paste("Credentials:", provider_label),
       div(class = "gf-form-grid", fields),
       tags$hr(),
-      div(class = "gf-secret-meta", paste("Saved to", .genflow_credentials_path())),
+      div(class = "gf-secret-meta", paste("Saved to", gen_credentials()$path)),
       footer = tagList(
         modalButton("Cancel"),
         actionButton("credentials_save", "Save credentials", class = "btn-primary")
@@ -2541,15 +2121,14 @@ server <- function(input, output, session) {
 
   show_credentials_import_modal <- function(provider) {
     provider <- tolower(trimws(as.character(provider %||% "")[1]))
-    detected <- .genflow_detect_credentials(providers = provider, include_values = TRUE)
-    detected <- detected[nzchar(detected$value), , drop = FALSE]
+    detected <- gen_detect_credentials(providers = provider)
     if (!nrow(detected)) {
       showNotification("No simple credential assignments were detected for this provider.", type = "warning")
       return()
     }
     detected <- detected[!duplicated(detected$env), , drop = FALSE]
     credentials_state$modal_provider <- provider
-    credentials_state$import_values <- stats::setNames(detected$value, detected$env)
+    credentials_state$import_values <- detected
     rows <- lapply(seq_len(nrow(detected)), function(idx) {
       tags$tr(
         tags$td(detected$env[[idx]]),
@@ -2564,7 +2143,7 @@ server <- function(input, output, session) {
         tags$thead(tags$tr(tags$th("Variable"), tags$th("Value"), tags$th("Source"))),
         tags$tbody(rows)
       ),
-      div(class = "gf-secret-meta", paste("Import target:", .genflow_credentials_path())),
+      div(class = "gf-secret-meta", paste("Import target:", gen_credentials()$path)),
       footer = tagList(
         modalButton("Cancel"),
         actionButton("credentials_import_confirm", "Import", class = "btn-primary")
@@ -2576,7 +2155,7 @@ server <- function(input, output, session) {
 
   show_credentials_delete_modal <- function(provider) {
     provider <- tolower(trimws(as.character(provider %||% "")[1]))
-    specs <- .genflow_credential_specs(provider)
+    specs <- gen_credentials(provider)$fields
     if (!nrow(specs)) {
       showNotification("No credential variables are registered for this provider.", type = "warning")
       return()
@@ -2585,7 +2164,7 @@ server <- function(input, output, session) {
     vars <- paste(specs$env, collapse = ", ")
     showModal(modalDialog(
       title = "Delete credentials",
-      paste0("Remove these variables from ", .genflow_credentials_path(), " and unset them in this R session?"),
+      paste0("Remove these variables from ", gen_credentials()$path, " and unset them in this R session?"),
       tags$pre(vars),
       footer = tagList(
         modalButton("Cancel"),
@@ -2596,13 +2175,13 @@ server <- function(input, output, session) {
   }
 
   reload_model_state <- function(dir) {
-    new_catalog <- .load_models_catalog(dir)
-    new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+    new_catalog <- gen_models(directory = dir)
+    new_favorites <- gen_model_favorites(directory = dir, catalog = new_catalog)
     models_state$directory <- dir
     models_state$catalog <- new_catalog
     models_state$favorites <- new_favorites
     models_state$favorites_present <- nrow(new_favorites) > 0
-    .save_favorites(new_favorites, dir)
+    gen_model_favorites(new_favorites, dir)
     updateTextInput(session, "models_directory", value = dir)
     refresh_provider_selectors()
   }
@@ -3543,10 +3122,10 @@ server <- function(input, output, session) {
   )
 
   observeEvent(models_state$catalog, {
-    normalized_favs <- .normalize_favorites(models_state$favorites, models_state$catalog)
+    normalized_favs <- gen_model_favorites(models_state$favorites, catalog = models_state$catalog, save = FALSE)
     if (!identical(normalized_favs, models_state$favorites)) {
       models_state$favorites <- normalized_favs
-      .save_favorites(normalized_favs, models_state$directory)
+      gen_model_favorites(normalized_favs, models_state$directory)
     }
     models_state$favorites_present <- nrow(models_state$favorites) > 0
     refresh_provider_selectors()
@@ -3557,13 +3136,13 @@ server <- function(input, output, session) {
     if (!nzchar(dir) || identical(dir, models_state$directory)) {
       return()
     }
-    new_catalog <- .load_models_catalog(dir)
-    new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+    new_catalog <- gen_models(directory = dir)
+    new_favorites <- gen_model_favorites(directory = dir, catalog = new_catalog)
     models_state$directory <- dir
     models_state$catalog <- new_catalog
     models_state$favorites <- new_favorites
     models_state$favorites_present <- nrow(new_favorites) > 0
-    .save_favorites(new_favorites, dir)
+    gen_model_favorites(new_favorites, dir)
     models_state$status <- paste0("Loaded models from ", dir)
   })
 
@@ -3601,7 +3180,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$credentials_save, {
     provider <- credentials_state$modal_provider %||% input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
-    specs <- .genflow_credential_specs(provider)
+    specs <- gen_credentials(provider)$fields
     values <- character()
     for (idx in seq_len(nrow(specs))) {
       spec <- specs[idx, , drop = FALSE]
@@ -3611,13 +3190,13 @@ server <- function(input, output, session) {
       if (isTRUE(spec$sensitive) && !nzchar(value)) {
         next
       }
-      if (!isTRUE(spec$sensitive) && !nzchar(value) && !nzchar(Sys.getenv(spec$env, unset = ""))) {
+      if (!isTRUE(spec$sensitive) && !nzchar(value) && !isTRUE(spec$active)) {
         next
       }
       if (
         !isTRUE(spec$sensitive) &&
           identical(spec$kind[[1]], "base_url") &&
-          !nzchar(Sys.getenv(spec$env, unset = "")) &&
+          !isTRUE(spec$active) &&
           nzchar(spec$default_value[[1]]) &&
           identical(value, spec$default_value[[1]])
       ) {
@@ -3630,7 +3209,7 @@ server <- function(input, output, session) {
       return()
     }
     result <- tryCatch(
-      .genflow_save_credentials(values),
+      gen_save_credentials(values),
       error = function(e) {
         showNotification(conditionMessage(e), type = "error")
         NULL
@@ -3652,7 +3231,7 @@ server <- function(input, output, session) {
     }
     provider <- credentials_state$modal_provider %||% input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
     result <- tryCatch(
-      .genflow_save_credentials(values),
+      gen_import_credentials(values),
       error = function(e) {
         showNotification(conditionMessage(e), type = "error")
         NULL
@@ -3669,9 +3248,9 @@ server <- function(input, output, session) {
 
   observeEvent(input$credentials_delete_confirm, {
     provider <- credentials_state$modal_provider %||% input$credentials_provider %||% .DEFAULT_MODEL_SERVICE
-    specs <- .genflow_credential_specs(provider)
+    specs <- gen_credentials(provider)$fields
     result <- tryCatch(
-      .genflow_delete_credentials(specs$env),
+      gen_delete_credentials(specs$env),
       error = function(e) {
         showNotification(conditionMessage(e), type = "error")
         NULL
@@ -3714,7 +3293,7 @@ server <- function(input, output, session) {
       return()
     }
     providers <- .model_update_provider_ids()
-    missing <- .genflow_required_credentials_missing(providers)
+    missing <- gen_credentials(providers)$missing
     if (nrow(missing)) {
       show_missing_credentials_modal(missing, dir, providers, mode = "all")
       return()
@@ -3733,7 +3312,7 @@ server <- function(input, output, session) {
       showNotification("Select a provider to update.", type = "warning")
       return()
     }
-    missing <- .genflow_required_credentials_missing(provider)
+    missing <- gen_credentials(provider)$missing
     if (nrow(missing)) {
       show_missing_credentials_modal(missing, dir, provider, mode = "selected")
       return()
@@ -3751,7 +3330,7 @@ server <- function(input, output, session) {
       showNotification("Select a custom provider to edit.", type = "warning")
       return()
     }
-    provider_cfg <- .genflow_get_custom_provider(provider_id)
+    provider_cfg <- tryCatch(get_provider(provider_id), error = function(e) NULL)
     if (is.null(provider_cfg)) {
       showNotification("Selected custom provider was not found.", type = "error")
       refresh_provider_selectors()
@@ -3807,11 +3386,12 @@ server <- function(input, output, session) {
     }
 
     rename_provider <- identical(mode, "edit") && nzchar(edit_id) && !identical(provider_id, edit_id)
-    if (identical(mode, "add") && !is.null(.genflow_get_custom_provider(provider_id))) {
+    existing_ids <- list_providers(include_builtin = FALSE)$id
+    if (identical(mode, "add") && provider_id %in% existing_ids) {
       showNotification(sprintf("Custom provider '%s' already exists.", provider_id), type = "error")
       return()
     }
-    if (isTRUE(rename_provider) && !is.null(.genflow_get_custom_provider(provider_id))) {
+    if (isTRUE(rename_provider) && provider_id %in% existing_ids) {
       showNotification(sprintf("Custom provider '%s' already exists.", provider_id), type = "error")
       return()
     }
@@ -3875,7 +3455,7 @@ server <- function(input, output, session) {
       return()
     }
 
-    provider_cfg <- .genflow_get_custom_provider(provider_id)
+    provider_cfg <- tryCatch(get_provider(provider_id), error = function(e) NULL)
     provider_label <- if (is.null(provider_cfg)) provider_id else (provider_cfg$label %||% provider_id)
     showModal(modalDialog(
       title = "Remove custom provider",
@@ -4074,7 +3654,7 @@ server <- function(input, output, session) {
     )
     if (identical(adapter, "local-native")) {
       preview <- tryCatch(
-        .genflow_validate_local_config(local_config_from_inputs()),
+        gen_local_config(local_config_from_inputs(), save = FALSE),
         error = function(e) local_state$config
       )
       refresh_native_models(preview)
@@ -4096,7 +3676,7 @@ server <- function(input, output, session) {
   })
 
   active_native_models <- function() {
-    referenced <- .local_native_referenced_models(local_state$config)
+    referenced <- character()
     form_model <- function(service, model) {
       normalized_service <- tryCatch(
         .stt_normalize_service(service %||% ""),
@@ -4136,7 +3716,7 @@ server <- function(input, output, session) {
     }
     total_bytes <- sum(models$size_bytes, na.rm = TRUE)
     total_size <- if (is.finite(total_bytes) && total_bytes > 0) {
-      .local_native_format_bytes(total_bytes)
+      .genflow_crispasr_format_size(total_bytes)
     } else {
       "size unknown"
     }
@@ -4161,10 +3741,7 @@ server <- function(input, output, session) {
 
     display <- data.frame(
       Model = models$filename,
-      `Hugging Face` = .local_native_hf_repository(
-        models$source_url,
-        models$filename
-      ),
+      `Hugging Face` = ifelse(nzchar(models$repository), models$repository, "\u2014"),
       Quant = ifelse(nzchar(models$quant), toupper(models$quant), "\u2014"),
       Size = models$size,
       check.names = FALSE,
@@ -4242,7 +3819,7 @@ server <- function(input, output, session) {
       ". It is now available under Models > Native STT."
     )
     preview <- tryCatch(
-      .genflow_validate_local_config(local_config_from_inputs()),
+      gen_local_config(local_config_from_inputs(), save = FALSE),
       error = function(e) local_state$config
     )
     refresh_native_models(
@@ -4261,10 +3838,11 @@ server <- function(input, output, session) {
           filename = filename,
           quant = .genflow_crispasr_model_quant(filename),
           size_bytes = size_bytes,
-          size = .local_native_format_bytes(size_bytes),
+          size = .genflow_crispasr_format_size(size_bytes),
           source_url = as.character(result$source_url %||% "")[1],
           managed = TRUE,
           selected = FALSE,
+          repository = .genflow_native_repository(result$source_url, filename),
           stringsAsFactors = FALSE
         )
       )
@@ -4284,8 +3862,8 @@ server <- function(input, output, session) {
     raw <- trimws(as.character(
       input$local_stt_new_model_reference %||% ""
     )[1])
-    cleaned <- .local_native_hf_reference_input(raw)
-    selector <- .local_native_hf_selector(cleaned)
+    cleaned <- .genflow_native_reference_input(raw)
+    selector <- gen_native_model_reference(cleaned)
     if (isTRUE(normalize_field) && !identical(raw, cleaned)) {
       native_download_holder$normalized_reference <- cleaned
       updateTextInput(
@@ -4348,7 +3926,7 @@ server <- function(input, output, session) {
         message = "Verifying Hugging Face model...",
         value = 0.25,
         {
-          resolved <- .genflow_crispasr_resolve_download(
+          resolved <- gen_native_model_check(
             selector = selector,
             backend = "",
             quant = "",
@@ -4385,7 +3963,7 @@ server <- function(input, output, session) {
         "Available: ",
         artifact$filename,
         " \u00b7 ",
-        .local_native_format_bytes(artifact$size_bytes),
+        .genflow_crispasr_format_size(artifact$size_bytes),
         revision_label
       )
     )
@@ -4419,9 +3997,9 @@ server <- function(input, output, session) {
         total > 0) {
       detail <- paste0(
         if (nzchar(filename)) paste0(filename, ": ") else "",
-        .local_native_format_bytes(received),
+        .genflow_crispasr_format_size(received),
         " / ",
-        .local_native_format_bytes(total)
+        .genflow_crispasr_format_size(total)
       )
     }
     if (!nzchar(detail)) detail <- "Preparing model..."
@@ -4460,7 +4038,7 @@ server <- function(input, output, session) {
   observeEvent(input$local_stt_model_download, {
     existing_job <- native_download_holder$job
     if (!is.null(existing_job) &&
-        .genflow_native_download_job_alive(existing_job)) {
+        isTRUE(gen_native_download_status(existing_job)$running)) {
       showNotification(
         "A Native STT model download is already running.",
         type = "warning"
@@ -4468,7 +4046,7 @@ server <- function(input, output, session) {
       return()
     }
     if (!is.null(existing_job)) {
-      existing_status <- .genflow_native_download_job_read(existing_job)
+      existing_status <- gen_native_download_status(existing_job)
       existing_state <- trimws(as.character(
         existing_status$state %||% ""
       )[1])
@@ -4490,7 +4068,7 @@ server <- function(input, output, session) {
         )
         showNotification(detail, type = "error")
       }
-      try(.genflow_native_download_job_cleanup(existing_job), silent = TRUE)
+      try(gen_native_download_cleanup(existing_job), silent = TRUE)
       native_download_holder$job <- NULL
       updateActionButton(
         session,
@@ -4531,7 +4109,8 @@ server <- function(input, output, session) {
       return()
     }
     job <- tryCatch(
-      .genflow_native_download_job_start(
+      gen_native_model_download(
+        background = TRUE,
         selector = selector,
         backend = "",
         quant = "",
@@ -4559,7 +4138,7 @@ server <- function(input, output, session) {
     }
     native_download_holder$job <- job
     local_state$native_download_status <-
-      .genflow_native_download_job_read(job)
+      gen_native_download_status(job)
     local_state$native_verify_status <- list(
       type = "info",
       message = "Download started. The remote model is being verified again."
@@ -4578,21 +4157,15 @@ server <- function(input, output, session) {
     if (is.null(job)) return()
     invalidateLater(250, session)
 
-    status <- .genflow_native_download_job_read(job)
+    status <- gen_native_download_status(job)
     local_state$native_download_status <- status
-    if (.genflow_native_download_job_alive(job)) return()
+    if (isTRUE(status$running)) return()
 
     state <- trimws(as.character(status$state %||% "")[1])
     if (identical(state, "complete") && is.list(status$result)) {
       select_native_download_result(status$result)
     } else if (!identical(state, "cancelled")) {
       detail <- trimws(as.character(status$message %||% "")[1])
-      if (!nzchar(detail) && file.exists(job$stderr_path)) {
-        detail <- trimws(paste(
-          utils::tail(readLines(job$stderr_path, warn = FALSE), 8L),
-          collapse = "\n"
-        ))
-      }
       if (!nzchar(detail)) detail <- "The background download stopped unexpectedly."
       local_state$native_model_status <- paste("Model download failed:", detail)
       local_state$native_verify_status <- list(
@@ -4602,7 +4175,7 @@ server <- function(input, output, session) {
       showNotification(detail, type = "error")
     }
 
-    try(.genflow_native_download_job_cleanup(job), silent = TRUE)
+    try(gen_native_download_cleanup(job), silent = TRUE)
     native_download_holder$job <- NULL
     updateActionButton(
       session,
@@ -4616,7 +4189,7 @@ server <- function(input, output, session) {
     job <- native_download_holder$job
     if (is.null(job)) return()
     cancelled <- tryCatch(
-      .genflow_native_download_job_cancel(job),
+      gen_native_download_cancel(job),
       error = function(e) e
     )
     if (inherits(cancelled, "error")) {
@@ -4646,7 +4219,7 @@ server <- function(input, output, session) {
         message = "Download cancelled."
       )
     }
-    try(.genflow_native_download_job_cleanup(job), silent = TRUE)
+    try(gen_native_download_cleanup(job), silent = TRUE)
     native_download_holder$job <- NULL
     updateActionButton(
       session,
@@ -4659,8 +4232,8 @@ server <- function(input, output, session) {
   session$onSessionEnded(function() {
     job <- native_download_holder$job
     if (is.null(job)) return(invisible(NULL))
-    try(.genflow_native_download_job_cancel(job), silent = TRUE)
-    try(.genflow_native_download_job_cleanup(job), silent = TRUE)
+    try(gen_native_download_cancel(job), silent = TRUE)
+    try(gen_native_download_cleanup(job), silent = TRUE)
     native_download_holder$job <- NULL
     invisible(NULL)
   })
@@ -4720,9 +4293,10 @@ server <- function(input, output, session) {
       return()
     }
     removed <- tryCatch(
-      .genflow_crispasr_remove_model(
+      gen_native_model_remove(
         path = path[[1]],
-        active_model = active_native_models()
+        protected_models = active_native_models(),
+        config = local_state$config
       ),
       error = function(e) e
     )
@@ -4737,7 +4311,7 @@ server <- function(input, output, session) {
 
     message <- paste("Deleted", basename(path[[1]]), "from the CrispASR cache.")
     preview <- tryCatch(
-      .genflow_validate_local_config(local_config_from_inputs()),
+      gen_local_config(local_config_from_inputs(), save = FALSE),
       error = function(e) local_state$config
     )
     refresh_native_models(
@@ -4752,7 +4326,7 @@ server <- function(input, output, session) {
     adapter <- isolate(input$local_adapter_tabs %||% "ollama")
     adapter_label <- local_adapter_label(adapter)
     preview <- tryCatch(
-      .genflow_validate_local_config(local_config_from_inputs()),
+      gen_local_config(local_config_from_inputs(), save = FALSE),
       error = function(e) {
         local_state$status <- paste("Invalid configuration:", conditionMessage(e))
         showNotification(conditionMessage(e), type = "error")
@@ -5024,10 +4598,10 @@ server <- function(input, output, session) {
       current_favs <- unique(rbind(current_favs, new_entry))
       action <- "added"
     }
-    current_favs <- .normalize_favorites(current_favs, catalog)
+    current_favs <- gen_model_favorites(current_favs, catalog = catalog, save = FALSE)
     models_state$favorites <- current_favs
     models_state$favorites_present <- nrow(current_favs) > 0
-    .save_favorites(current_favs, models_state$directory)
+    gen_model_favorites(current_favs, models_state$directory)
     status_msg <- if (identical(action, "added")) {
       sprintf("Added %s / %s to favorites.", .model_label(svc), model)
     } else {
@@ -6982,12 +6556,12 @@ server <- function(input, output, session) {
           if (include_flags[["agents"]]) refresh_agent_list()
           if (include_flags[["models"]]) {
             dir <- current_models_dir()
-            new_catalog <- .load_models_catalog(dir)
-            new_favorites <- .normalize_favorites(.load_favorites(dir), new_catalog)
+            new_catalog <- gen_models(directory = dir)
+            new_favorites <- gen_model_favorites(directory = dir, catalog = new_catalog)
             models_state$catalog <- new_catalog
             models_state$favorites <- new_favorites
             models_state$favorites_present <- nrow(new_favorites) > 0
-            .save_favorites(new_favorites, dir)
+            gen_model_favorites(new_favorites, dir)
             models_state$status <- paste0("Models reloaded after import at ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
             updateTextInput(session, "models_directory", value = dir)
           }

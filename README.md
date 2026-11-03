@@ -542,6 +542,10 @@ the runtime that executes them.
 
 ## 🔧 Function Reference
 
+Management is also available through the [public R management API](inst/doc/management-api.md),
+shared with the Shiny app. Inspect credentials, read full catalogs, manage
+favorites and verify/download native model files without launching the app.
+
 | Function | Purpose |
 |---|---|
 | `gen_txt()` | Generate text with cloud and local providers |
@@ -556,6 +560,10 @@ the runtime that executes them.
 | `gen_local_config()` | Read or update non-secret local runtime settings |
 | `gen_local_diagnostics()` | Check native executables, devices, and endpoints |
 | `gen_update_models()` / `gen_show_models()` | Refresh and browse model catalogs |
+| `gen_models()` / `gen_model_favorites()` | Read full catalog data and manage favorite selections |
+| `gen_credentials()` / `gen_save_credentials()` | Inspect masked credential state and save registered fields |
+| `gen_detect_credentials()` / `gen_import_credentials()` / `gen_delete_credentials()` | Detect, import or remove credentials |
+| `gen_native_models()` / `gen_native_model_*()` / `gen_native_download_*()` | Manage native model files and download jobs |
 | `gen_interface()` | Launch the interactive management app |
 | `gen_view()` | View structured generation results |
 | `gen_stats()` / `gen_stats_rm()` | Inspect or remove daily usage logs |

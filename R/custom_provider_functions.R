@@ -698,7 +698,9 @@ set_provider_openai_compat <- function(id,
 #' @param include_builtin Logical; include built-in providers.
 #' @param include_custom Logical; include custom providers.
 #'
-#' @return Data frame with provider metadata.
+#' @return Data frame with provider metadata. `catalog_update` indicates whether
+#'   [gen_update_models()] has a catalog adapter for that provider; it does not
+#'   assert endpoint reachability or the presence of credentials.
 #' @examples
 #' list_providers()
 #' @export
@@ -715,6 +717,8 @@ list_providers <- function(include_builtin = TRUE, include_custom = TRUE) {
       api_key_env = NA_character_,
       model_env = NA_character_,
       default_model = NA_character_,
+      catalog_update = vapply(names(labels), function(id)
+        !is.null(.genflow_provider_registry()[[id]]$catalog_function), logical(1)),
       stringsAsFactors = FALSE
     )
   }
@@ -731,6 +735,7 @@ list_providers <- function(include_builtin = TRUE, include_custom = TRUE) {
           api_key_env = cfg$api_key_env %||% "",
           model_env = cfg$model_env %||% "",
           default_model = cfg$default_model %||% "",
+          catalog_update = TRUE,
           stringsAsFactors = FALSE
         )
       }))
@@ -746,6 +751,7 @@ list_providers <- function(include_builtin = TRUE, include_custom = TRUE) {
       api_key_env = character(),
       model_env = character(),
       default_model = character(),
+      catalog_update = logical(),
       stringsAsFactors = FALSE
     ))
   }

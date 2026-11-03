@@ -84,7 +84,7 @@ test_that("model catalogs tolerate heterogeneous columns and invalid rows", {
     )
   }
 
-  catalog <- genflow:::.load_models_catalog(directory)
+  catalog <- gen_models(directory = directory)
   expect_identical(
     names(catalog),
     c("service", "model", "type", "pricing", "description", "source_file")
@@ -485,7 +485,7 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
   )
 
   testthat::local_mocked_bindings(
-    .genflow_crispasr_inventory = function(config = NULL) {
+    .genflow_crispasr_inventory = function(config = NULL, cache_dirs = NULL) {
       inventory_calls <<- inventory_calls + 1L
       rows <- inventory
       if (isTRUE(downloaded)) {
@@ -542,6 +542,8 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
       structure(
         list(
           id = "mock-download",
+          dir = tempfile(),
+          status_path = tempfile(),
           stderr_path = tempfile(),
           process = structure(list(), class = "process")
         ),
@@ -603,7 +605,7 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
       fixed = TRUE
     )
     expect_identical(
-      .local_native_hf_repository(managed$source_url, managed$filename),
+      .genflow_native_repository(managed$source_url, managed$filename),
       "owner/repo"
     )
     expect_false(grepl("<th>Location", output$local_stt_models_table, fixed = TRUE))
@@ -696,7 +698,7 @@ test_that("Native STT Verify never downloads and reports invalid remote models",
   resolve_calls <- 0L
   starts <- 0L
   testthat::local_mocked_bindings(
-    .genflow_crispasr_inventory = function(config = NULL) {
+    .genflow_crispasr_inventory = function(config = NULL, cache_dirs = NULL) {
       genflow:::.genflow_crispasr_empty_inventory()
     },
     .genflow_crispasr_resolve_download = function(...) {
@@ -740,7 +742,7 @@ test_that("Native STT Verify never downloads and reports invalid remote models",
     expect_identical(state$native_verify_status$type, "error")
     expect_match(
       state$native_verify_status$message,
-      "does not exist",
+      as.character(gen_error_message("management_failed")),
       fixed = TRUE
     )
   })
@@ -757,7 +759,7 @@ test_that("Native STT processes a completed job before starting another", {
   result_path <- "/cache/completed-before-next.gguf"
 
   testthat::local_mocked_bindings(
-    .genflow_crispasr_inventory = function(config = NULL) {
+    .genflow_crispasr_inventory = function(config = NULL, cache_dirs = NULL) {
       genflow:::.genflow_crispasr_empty_inventory()
     },
     .genflow_native_download_job_start = function(selector,
@@ -769,6 +771,8 @@ test_that("Native STT processes a completed job before starting another", {
       structure(
         list(
           id = "completed-before-next",
+          dir = tempfile(),
+          status_path = tempfile(),
           stderr_path = tempfile(),
           process = structure(list(), class = "process")
         ),

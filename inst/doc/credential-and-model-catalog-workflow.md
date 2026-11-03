@@ -5,6 +5,10 @@
 This document describes the supported workflow for provider credentials,
 connection overrides, and model catalog refreshes in genflow.
 
+The same operations are available without Shiny through the
+[public management API](management-api.md). The app uses that API for masked
+credential state, saving/importing/deleting credentials, catalogs and favorites.
+
 ## Runtime Contract
 
 Provider runtime code continues to read configuration with `Sys.getenv()`.

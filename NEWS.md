@@ -1,3 +1,16 @@
+# genflow 0.0.18
+
+- Expose ordinary R APIs for credentials, full model catalogs, favorites and
+  native model files/download jobs. The Shiny manager consumes these APIs;
+  existing provider and local-runtime APIs remain the shared source of truth.
+- Imports recheck detected credential sources before writing. Favorite writes
+  use atomic replacement; native removal protects saved references in the
+  library, including unreadable-state failures. Public download status retains
+  completion semantics and returns safe diagnostics instead of raw stderr.
+- Consolidate catalog reading and remove duplicated Shiny storage/formatting
+  helpers. Existing files and storage locations remain compatible. See
+  `inst/doc/management-api.md` for API ownership and session semantics.
+
 # genflow 0.0.16
 
 - `gen_img()` uses contract v2 and accepts optional ordered `add_img` references

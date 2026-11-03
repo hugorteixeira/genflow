@@ -12,7 +12,9 @@ list_providers(include_builtin = TRUE, include_custom = TRUE)
 \item{include_custom}{Logical; include custom providers.}
 }
 \value{
-Data frame with provider metadata.
+Data frame with provider metadata. \code{catalog_update} indicates whether
+\code{\link[=gen_update_models]{gen_update_models()}} has a catalog adapter for that provider; it does not
+assert endpoint reachability or the presence of credentials.
 }
 \description{
 List built-in and custom providers

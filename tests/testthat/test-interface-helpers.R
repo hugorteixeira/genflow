@@ -165,16 +165,13 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
     stringsAsFactors = FALSE
   )
 
-  normalized <- genflow:::.local_native_inventory_normalize(inventory)
-  expect_identical(normalized$size, c("1.00 KB", "2 KB"))
-
-  managed <- genflow:::.local_native_managed_inventory(normalized)
+  managed <- genflow:::.local_native_managed_inventory(inventory)
   expect_identical(managed$path, "/cache/granite-q4_k.gguf")
   expect_identical(managed$filename, "granite-q4_k.gguf")
 
   filename <- "model-q8_0.gguf"
   expect_identical(
-    genflow:::.local_native_hf_repository(
+    genflow:::.genflow_native_repository(
       paste0(
         "https://huggingface.co/owner/repository/resolve/main/",
         filename
@@ -184,7 +181,7 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
     "owner/repository"
   )
   expect_identical(
-    genflow:::.local_native_hf_repository(
+    genflow:::.genflow_native_repository(
       paste0(
         "https://huggingface.co/owner/repository/resolve/",
         strrep("a", 40),
@@ -196,35 +193,35 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
     "owner/repository"
   )
   expect_identical(
-    genflow:::.local_native_hf_repository("", filename),
-    "\u2014"
+    genflow:::.genflow_native_repository("", filename),
+    ""
   )
   expect_identical(
-    genflow:::.local_native_hf_repository(
+    genflow:::.genflow_native_repository(
       paste0("https://example.com/owner/repository/", filename),
       filename
     ),
-    "\u2014"
+    ""
   )
   expect_identical(
-    genflow:::.local_native_hf_repository(
+    genflow:::.genflow_native_repository(
       paste0(
         "https://huggingface.co/owner/repository/resolve/main/",
         filename
       ),
       "different-model-q8_0.gguf"
     ),
-    "\u2014"
+    ""
   )
 
   expect_identical(
-    genflow:::.local_native_hf_selector(
+    genflow:::.genflow_native_hf_selector(
       "hf://owner/repo:model-q8_0.gguf"
     ),
     "hf://owner/repo:model-q8_0.gguf"
   )
   expect_identical(
-    genflow:::.local_native_hf_selector(
+    genflow:::.genflow_native_hf_selector(
       "https://huggingface.co/owner/repo/blob/main/model-q8_0.gguf"
     ),
     "hf://owner/repo:model-q8_0.gguf"
@@ -234,28 +231,28 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
     "hf://handy-computer/whisper-large-v3-gguf/whisper-large-v3-Q8_0.gguf"
   )
   expect_identical(
-    genflow:::.local_native_hf_reference_input(command),
+    genflow:::.genflow_native_reference_input(command),
     "hf://handy-computer/whisper-large-v3-gguf/whisper-large-v3-Q8_0.gguf"
   )
   expect_identical(
-    genflow:::.local_native_hf_selector(command),
+    genflow:::.genflow_native_hf_selector(command),
     paste0(
       "hf://handy-computer/whisper-large-v3-gguf:",
       "whisper-large-v3-Q8_0.gguf"
     )
   )
   expect_identical(
-    genflow:::.local_native_hf_selector(
+    genflow:::.genflow_native_hf_selector(
       "hf download 'hf://owner/repo/model-q8_0.gguf'"
     ),
     "hf://owner/repo:model-q8_0.gguf"
   )
   expect_error(
-    genflow:::.local_native_hf_selector("https://example.com/model.gguf"),
+    genflow:::.genflow_native_hf_selector("https://example.com/model.gguf"),
     "Hugging Face"
   )
   expect_error(
-    genflow:::.local_native_hf_selector(""),
+    genflow:::.genflow_native_hf_selector(""),
     "Enter a Hugging Face model reference",
     fixed = TRUE
   )
@@ -274,7 +271,7 @@ test_that("Native STT deletion discovers models referenced by saved state", {
     native = list(service = "moss-cpp", model = "agent.gguf"),
     remote = list(service = "openai", model = "gpt-5")
   )
-  referenced <- genflow:::.local_native_referenced_models(
+  referenced <- genflow:::.genflow_native_referenced_models(
     config = config,
     setup_names = names(setups),
     agent_names = names(agents),

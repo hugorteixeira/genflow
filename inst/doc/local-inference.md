@@ -118,6 +118,10 @@ layers. Refresh its `/v1/models` response through **Models**.
 
 ## Native STT
 
+Native file management is also exported as an ordinary R API; see
+[Public management API](management-api.md) for inventory, verification,
+downloads, cancellation and guarded removal without a Shiny session.
+
 Native STT uses a registered command-line engine:
 
 - `crispasr`: multiple supported GGUF speech families and Vulkan acceleration;
