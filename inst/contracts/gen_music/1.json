@@ -1,0 +1,196 @@
+{
+  "id": "gen_music",
+  "version": 1,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-content-kind": "text",
+        "title": "Descrição da música",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "add": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "label": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "service": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "elevenlabs",
+        "title": "Serviço",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 100,
+        "x-owner": "runtime"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": "music_v2_5",
+        "title": "Modelo",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 300,
+        "x-default-by": {
+          "field": "service",
+          "replace": [
+            "music_v2_5"
+          ],
+          "values": {
+            "elevenlabs": "music_v2_5",
+            "acestep": "acestep-v15-turbo"
+          }
+        },
+        "x-owner": "runtime"
+      },
+      "duration_seconds": {
+        "type": "number",
+        "title": "Duração solicitada (s)",
+        "default": 30,
+        "minimum": 3,
+        "maximum": 600
+      },
+      "format": {
+        "type": "string",
+        "title": "Formato do áudio",
+        "default": "mp3",
+        "enum": [
+          "mp3",
+          "wav",
+          "opus",
+          "flac",
+          "aac"
+        ]
+      },
+      "instrumental": {
+        "type": "boolean",
+        "title": "Instrumental (sem voz)",
+        "default": true
+      },
+      "lyrics": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "Letra",
+        "default": null,
+        "pattern": "\\S",
+        "maxLength": 10000,
+        "description": "Texto literal ou entrada de texto conectada. Para usar letra, desative Instrumental."
+      },
+      "seed": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "title": "Semente",
+        "default": null,
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "poll_interval": {
+        "type": "number",
+        "title": "Intervalo entre consultas (s)",
+        "default": 2,
+        "exclusiveMinimum": 0,
+        "maximum": 30,
+        "x-ui": {
+          "service": [
+            "acestep"
+          ]
+        }
+      },
+      "base_url": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "URL base do serviço",
+        "default": null,
+        "pattern": "^https?://[^\\s]+$",
+        "maxLength": 2048
+      },
+      "timeout_api": {
+        "type": "number",
+        "title": "Tempo máximo total (s)",
+        "default": 600,
+        "exclusiveMinimum": 0
+      },
+      "persist": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_music",
+  "modality": "music",
+  "inputs": {
+    "prompt": "asset:text|asset:json",
+    "lyrics": "asset:text"
+  },
+  "outputs": {
+    "content": "asset:audio"
+  },
+  "studio": {
+    "id": "audio.music",
+    "inputs": {
+      "text": "text|json",
+      "lyrics": "text"
+    },
+    "output": "audio",
+    "execution": "inline",
+    "available": true,
+    "bindings": {
+      "lyrics": "lyrics"
+    }
+  }
+}

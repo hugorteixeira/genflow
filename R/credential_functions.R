@@ -28,6 +28,10 @@
 
 .genflow_credential_specs <- function(providers = NULL) {
   rows <- list(
+    .genflow_credential_spec_row("elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY", "API key"),
+    .genflow_credential_spec_row("elevenlabs", "ElevenLabs", "ELEVENLABS_BASE_URL", "Base URL", "base_url", FALSE, default_value = "https://api.elevenlabs.io"),
+    .genflow_credential_spec_row("acestep", "ACE-Step (local)", "ACESTEP_API_KEY", "Optional API key"),
+    .genflow_credential_spec_row("acestep", "ACE-Step (local)", "ACESTEP_BASE_URL", "Base URL", "base_url", FALSE, default_value = "http://127.0.0.1:8001"),
     .genflow_credential_spec_row("openai", "OpenAI", "OPENAI_API_KEY", "API key", required_for_models = TRUE),
 
     .genflow_credential_spec_row("openrouter", "OpenRouter", "OPENROUTER_API_KEY", "API key", required_for_models = TRUE),

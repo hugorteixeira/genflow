@@ -711,7 +711,12 @@ gen_batch <- function(qty = 8,
     })
   }
   instructions <- .sanitize_instructions(instructions)
-  if (isTRUE(persist)) .create_directories(directory, directory_img)
+  if (isTRUE(persist)) .create_directories(directory, directory_img) else {
+    # PSOCK workers remove their own tempdir on exit. Shared media must live in
+    # the caller's session until it can consume the returned files.
+    media_options <- options(genflow.temporary_media_dir=tempdir())
+    on.exit(options(media_options),add=TRUE)
+  }
 
   pad_list <- function(lst, len) {
     if (is.null(lst)) lst <- list()
@@ -784,7 +789,7 @@ gen_batch <- function(qty = 8,
           keep_inference <- function(result) {
             identical(result$error$stage,"persistence") ||
               (identical(result$status_api,"ERROR") && (identical(result$inference_status,"SUCCESS") ||
-                (identical(result$content_type,"image") && identical(result$error$outcome,"unknown"))))
+                (result$content_type %in% c("image","audio") && identical(result$error$outcome,"unknown"))))
           }
           pending_indices <- which(vapply(seq_len(qty), function(idx) {
             result <- cache_entry$results[[idx]]

@@ -92,6 +92,6 @@
 
 .genflow_media_directory <- function(directory, kind, persist) {
   .genflow_validate_flag(persist, "persist")
-  if (!persist) return(tempdir())
+  if (!persist) return(getOption("genflow.temporary_media_dir",tempdir()))
   directory %||% .genflow_default_dir(kind)
 }

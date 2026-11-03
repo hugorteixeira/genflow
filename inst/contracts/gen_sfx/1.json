@@ -1,0 +1,165 @@
+{
+  "id": "gen_sfx",
+  "version": 1,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-content-kind": "text",
+        "title": "Descrição do som",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "add": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "label": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "service": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "elevenlabs",
+        "title": "Serviço",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 100,
+        "x-owner": "runtime"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": "eleven_text_to_sound_v3",
+        "title": "Modelo",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 300,
+        "x-default-by": {
+          "field": "service",
+          "replace": [
+            "eleven_text_to_sound_v3"
+          ],
+          "values": {
+            "elevenlabs": "eleven_text_to_sound_v3"
+          }
+        },
+        "x-owner": "runtime"
+      },
+      "duration_seconds": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "title": "Duração solicitada (s)",
+        "default": null,
+        "minimum": 0.5,
+        "maximum": 30
+      },
+      "format": {
+        "type": "string",
+        "title": "Formato do áudio",
+        "default": "mp3",
+        "enum": [
+          "mp3",
+          "wav",
+          "opus"
+        ]
+      },
+      "loop": {
+        "type": "boolean",
+        "title": "Efeito em loop",
+        "default": false
+      },
+      "prompt_influence": {
+        "type": "number",
+        "title": "Aderência à descrição",
+        "default": 0.3,
+        "minimum": 0,
+        "maximum": 1
+      },
+      "base_url": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "title": "URL base do serviço",
+        "default": null,
+        "pattern": "^https?://[^\\s]+$",
+        "maxLength": 2048
+      },
+      "timeout_api": {
+        "type": "number",
+        "title": "Tempo máximo total (s)",
+        "default": 240,
+        "exclusiveMinimum": 0
+      },
+      "persist": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_sfx",
+  "modality": "sfx",
+  "inputs": {
+    "prompt": "asset:text|asset:json"
+  },
+  "outputs": {
+    "content": "asset:audio"
+  },
+  "studio": {
+    "id": "audio.sfx",
+    "inputs": {
+      "text": "text|json"
+    },
+    "output": "audio",
+    "execution": "inline",
+    "available": true
+  }
+}

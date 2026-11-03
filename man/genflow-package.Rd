@@ -6,7 +6,7 @@
 \alias{genflow-package}
 \title{genflow: Unified Cloud and Local Generative AI Workflows}
 \description{
-Provides normalized workflows for text, image, speech-to-text, and text-to-speech generation across cloud APIs and local inference backends. Includes reusable agent configuration, parallel batches, checkpointing, model catalogs, diagnostics, statistics, validated portable bundles, and an interactive management application.
+Provides normalized workflows for text, image, speech-to-text, text-to-speech, music and sound-effect generation across cloud APIs and local inference backends. Includes reusable agent configuration, parallel batches, checkpointing, model catalogs, diagnostics, statistics, validated portable bundles, and an interactive management application.
 }
 \seealso{
 Useful links:

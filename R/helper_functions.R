@@ -620,10 +620,10 @@
     if (!is.list(config)) .gen_stop("invalid_type",path="/agent",params=list(expected_types=list("object"),actual_type=.gen_value_type(config)))
     config <- .genflow_normalize_agent_fields(config)
     type <- tolower(trimws(config$type %||% "Chat"))
-    if (!type %in% c("chat", "vision", "image")) .gen_stop("unsupported_modality",path="/agent/type")
+    if (!type %in% c("chat", "vision", "image", "music", "sfx")) .gen_stop("unsupported_modality",path="/agent/type")
     if (is.null(config$service) || !nzchar(config$service)) .gen_stop("required",path="/agent/service")
-    if (type != "image" && (is.null(config$model) || !nzchar(config$model))) .gen_stop("required",path="/agent/model")
-    field <- if (type == "image") "prompt" else "context"
+    if (type %in% c("chat", "vision") && (is.null(config$model) || !nzchar(config$model))) .gen_stop("required",path="/agent/model")
+    field <- if (type %in% c("image", "music", "sfx")) "prompt" else "context"
     original <- config[[field]] %||% config$context %||% config$instructions
     config[[field]] <- .genflow_batch_combine(original, instructions, append_modes$instructions, text = TRUE)
     if (is.null(config[[field]])) .gen_stop("required",path=paste0("/agent/",field))
@@ -636,7 +636,7 @@
     if (!is.null(add_img_each) || !is.null(add_img)) {
       overrides$add_img <- if (!is.null(add_img_each)) add_img_each[[i]] else add_img
     }
-    target <- if (type == "image") gen_img.default else gen_txt.default
+    target <- switch(type,image=gen_img.default,music=gen_music.default,sfx=gen_sfx.default,gen_txt.default)
     args <- .genflow_prepare_agent_args(config, overrides, formals(target), required = field)
     response <- do.call(target, args, quote = TRUE)
     if (!is.list(response) || is.null(response$status_api)) .gen_stop("worker_result_invalid",stage="execution",outcome="unknown")

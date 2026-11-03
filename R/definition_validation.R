@@ -62,8 +62,12 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   if (!.gen_object(params)) return(finish(contract))
   args <- params
   if (isTRUE(contract$studio$available)) for (key in intersect(names(body),c("service","model"))) args[key] <- body[key]
-  checked <- gen_validate_call(contract$id,args,contract$version,
-    bound=if (isTRUE(contract$studio$available)) names(contract$inputs) else character(),check_capabilities=check_capabilities)
+  # Optional bindable fields may be authored literally or supplied by the graph.
+  bindings <- unlist(contract$studio$bindings,use.names=FALSE)
+  for (key in bindings) if (is.null(args[[key]])) args[key] <- NULL
+  checked <- .gen_prepare_call(contract$id,args,contract$version,
+    bound=if (isTRUE(contract$studio$available)) setdiff(names(contract$inputs),names(args)) else character(),
+    check_capabilities=check_capabilities,bindings_known=FALSE)
   for (e in checked$errors) {
     e$path <- sub("^/args","/parameters",e$path)
     if (e$path %in% c("/parameters/service","/parameters/model")) e$path <- sub("/parameters","",e$path)
@@ -184,6 +188,24 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       if (n$block=="judge") textual <- setdiff(textual,"candidates")
       if (a$body$operation!="audio.transcribe" && !all(vars %in% textual)) add("prompt_binding",paste0(path,"/inputs"),gen_error_message("prompt_binding",list(variables=paste(setdiff(vars,textual),collapse=", "))),n$id)
       if (n$block=="generate") {
+        bindings <- a$contract$studio$bindings
+        if (length(bindings)) {
+          args <- c(list(service=a$body$service,model=a$body$model),a$body$parameters)
+          connected <- intersect(names(bindings),names(n$inputs))
+          bound <- c(setdiff(names(a$contract$inputs),unlist(bindings,use.names=FALSE)),unlist(bindings[connected],use.names=FALSE))
+          for (key in bound) if (is.null(args[[key]])) args[key] <- NULL
+          for (key in connected) {
+            expected <- strsplit(a$contract$inputs[[bindings[[key]]]],"|",fixed=TRUE)[[1L]]
+            if (!is.null(types[[key]]) && !types[[key]] %in% expected)
+              add("incompatible_input",paste0(path,"/inputs/",key),gen_error_message("incompatible_input"),n$id)
+          }
+          checked <- gen_validate_call(a$contract$id,args,a$contract$version,bound,check_capabilities)
+          for (error in checked$errors) {
+            key <- sub("^/args/","",error$path)
+            error$path <- paste0(path,if (key %in% connected) "/inputs/" else "/config/",key)
+            error$node_id <- n$id; errors[[length(errors)+1L]] <- error
+          }
+        }
         if (a$body$operation=="audio.transcribe" && !identical(types$audio,"asset:audio")) add("required_audio",paste0(path,"/inputs/audio"),gen_error_message("required_audio"),n$id)
         if (!is.null(types$audio) && a$body$operation!="audio.transcribe") add("incompatible_input",paste0(path,"/inputs/audio"),gen_error_message("audio_only_transcription"),n$id)
         if (!is.null(types$image)) {

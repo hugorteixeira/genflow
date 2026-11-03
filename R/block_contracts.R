@@ -215,7 +215,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   .gen_prepare_call(block,args,version,bound,check_capabilities,portable=TRUE)
 }
 
-.gen_prepare_call <- function(block, args, version = 1L, bound = character(), check_capabilities = TRUE, portable = TRUE) {
+.gen_prepare_call <- function(block, args, version = 1L, bound = character(), check_capabilities = TRUE, portable = TRUE, bindings_known = TRUE) {
   contract <- tryCatch(.gen_call_contract(block,version),error=function(e)e)
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),args=args,defaulted=list(),pending=list()))
   schema <- contract$arguments
@@ -269,6 +269,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
       if (length(intersect(names(args$replicate_input),protected))) add("replicate_input",gen_error_message("image_override_conflict"),"image_override_conflict")
     }
   }
+  if (block %in% c("gen_sfx","gen_music")) .gen_sound_rules(sub("^gen_","",block),args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (identical(block,"gen_txt")) {
     if (usable("max_output_tokens") && !is.null(args$max_output_tokens) && usable("service") && args$service!="openai") add("max_output_tokens",gen_error_message("only_openai_tokens"))
     if (usable("base_url") && !is.null(args$base_url) && usable("service") && !args$service %in% c("ollama","llamacpp")) add("base_url",gen_error_message("only_local_base_url"))

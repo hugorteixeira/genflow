@@ -40,6 +40,7 @@ structured results, and a Shiny/RStudio management app.
 | 🖼️ | `gen_img()` | Image generation from prompts and optional references |
 | 🎙️ | `gen_stt()` | Cloud or local speech-to-text |
 | 🔊 | `gen_tts()` | Speech synthesis |
+| 🎵 | `gen_music()` / `gen_sfx()` | Music and sound effects |
 
 Runtime contracts, migration notes, and the boundaries for embedding Genflow
 in a separate application are described in
@@ -225,6 +226,62 @@ speech <- gen_tts(
   voice = "alloy"
 )
 ```
+
+### Music and sound effects
+
+```r
+# Set ELEVENLABS_API_KEY in the environment, never in a saved workflow.
+sfx <- gen_sfx("Small bird flapping its wings", duration_seconds = 2)
+music <- gen_music("Gentle piano and flute, a children's story", duration_seconds = 30)
+song <- gen_music("Gentle acoustic folk", instrumental = FALSE,
+                  lyrics = "Hello, my friend\nLet us play again", duration_seconds = 30)
+
+# Existing ACE-Step 1.5 REST server. No model installation/loading is performed.
+local_music <- gen_music("Gentle piano", service = "acestep",
+                         model = "acestep-v15-turbo", format = "wav")
+```
+
+`gen_sfx/1` and `gen_music/1` own defaults and validation, just like the other
+block contracts. They return the common result fields plus `audio` metadata.
+`duration` is elapsed execution time; `audio$duration_seconds` is measured
+media duration, and `audio$requested_duration_seconds` records the request.
+The actual format is detected from bytes; a provider returning a different
+valid format is reported accurately rather than given a misleading extension.
+FFmpeg and ffprobe are required. One output up to 150 MB and 660 seconds is
+validated and decoded before publication.
+
+ElevenLabs supports SFX models `eleven_text_to_sound_v2` and
+`eleven_text_to_sound_v3` (default), and music models `music_v1`, `music_v2`,
+`music_v2_5` (default). Music defaults to instrumental; vocals require explicit
+lyrics and `instrumental = FALSE`. The lyrics adapter sends one section/chunk,
+limited to 120 seconds, 30 lines and 200 characters per line. Instrumental
+music supports 3–600 seconds; SFX supports 0.5–30 seconds or automatic length.
+Music accepts MP3/Opus; SFX also accepts WAV. Account entitlements still apply.
+Seed is supported for explicit lyrics, not the ElevenLabs prompt-only route.
+
+ACE-Step uses `ACESTEP_BASE_URL` (default `http://127.0.0.1:8001`) and optional
+`ACESTEP_API_KEY`. It supports 10–600 seconds and MP3/WAV/Opus/FLAC/AAC. The
+adapter submits one text-to-music task, with automatic lyric/caption rewriting
+and thinking modes disabled. It polls the same task and downloads only from
+the same server's `/v1/audio` endpoint. Local hardware and server installation
+are managed outside Genflow. `ELEVENLABS_BASE_URL` or explicit `base_url` can
+override the corresponding API endpoint; endpoints are part of runtime/cache
+identity, while credentials are not saved in receipts.
+
+A timeout after submission may have an unknown outcome. If the result contains
+`audio_receipt`, `gen_audio_recover(result, persist = FALSE)` queries/downloads
+and publishes the **existing** result; it never submits another generation.
+Without a receipt, Genflow cannot safely recover a missing provider response.
+Batch automatic recovery preserves ambiguous or successful inferences instead
+of resubmitting them. Use agents of type `Music` or `SFX`; these use the same
+functions in sequential or PSOCK batches. `gen_update_models()` supports both
+services: ElevenLabs lists documented adapter models (not account availability),
+while ACE-Step lists models already loaded on its server.
+
+Provider contracts: [ElevenLabs SFX](https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert),
+[ElevenLabs Music](https://elevenlabs.io/docs/api-reference/music/compose),
+[ACE-Step REST API](https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/API.md).
+Volume, fades and timeline composition are separate from generation.
 
 ## 🎙️ ASR for real-world recordings
 
@@ -493,6 +550,7 @@ the runtime that executes them.
 | `gen_stt_capabilities()` | Inspect adapter-owned audio limits |
 | `gen_stt_signature()` | Fingerprint the effective secret-free STT configuration |
 | `gen_tts()` / `gen_tts_voices()` | Synthesize speech and inspect supported voices |
+| `gen_music()` / `gen_sfx()` / `gen_audio_recover()` | Generate music/effects or recover an existing result |
 | `gen_batch()` / `gen_batch_agent()` | Run parallel, checkpointable workloads |
 | `set_*()` / `get_*()` / `list_*()` | Persist setups, content, agents, and providers |
 | `gen_local_config()` | Read or update non-secret local runtime settings |

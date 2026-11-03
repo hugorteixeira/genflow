@@ -1,14 +1,14 @@
 Package: genflow
 Type: Package
 Title: Unified Cloud and Local Generative AI Workflows
-Version: 0.0.16
+Version: 0.0.17
 Authors@R: person(
     given = "Hugo",
     family = "Rzepian Teixeira",
     email = "hugorteixeira@senhormercado.com.br",
     role = c("aut", "cre"))
 Description: Provides normalized workflows for text, image, speech-to-text,
-    and text-to-speech generation across cloud APIs and local inference
+    text-to-speech, music and sound-effect generation across cloud APIs and local inference
     backends. Includes reusable agent configuration, parallel batches,
     checkpointing, model catalogs, diagnostics, statistics, validated portable
     bundles, and an interactive management application.
@@ -20,7 +20,7 @@ License: GPL (>= 3)
 URL: https://github.com/hugorteixeira/genflow
 BugReports: https://github.com/hugorteixeira/genflow/issues
 SystemRequirements: FFmpeg and ffprobe (required for fixed-duration audio
-    splitting, duration validation and image validation; otherwise optional), CrispASR or
+    splitting, sound generation, duration validation and image validation; otherwise optional), CrispASR or
     moss-transcribe.cpp CLI (optional, for native speech-to-text inference)
 Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
 Imports: 

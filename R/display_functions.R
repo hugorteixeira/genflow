@@ -1376,7 +1376,7 @@ gen_view <- function(..., results_generated = NULL, grouped = TRUE,
         }
       }
 
-      non_batch_categories <- c("text", "image", "video")
+      non_batch_categories <- c("text", "image", "video", "audio")
       for (cat in non_batch_categories) {
         item_idx <- which(item_categories_vec == cat & (is.na(item_batch_vec) | !nzchar(item_batch_vec)))
         stats_subset <- collect_stats_subset(item_idx)

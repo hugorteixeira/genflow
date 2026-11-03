@@ -28,7 +28,7 @@
 .genflow_runtime_context <- function(fingerprint = FALSE) {
   keys <- c("genflow.providers_path", "genflow.providers_dir", "genflow.local_config_path",
             "genflow.local_config_dir", "genflow.models_dir", "genflow.output_dir",
-            "genflow.cache_dir", "genflow.log_dir", "genflow.runtime_snapshot")
+            "genflow.cache_dir", "genflow.log_dir", "genflow.runtime_snapshot", "genflow.temporary_media_dir")
   values <- lapply(keys, getOption)
   names(values) <- keys
   values <- values[!vapply(values, is.null, logical(1))]
@@ -38,7 +38,7 @@
     env <- Sys.getenv()
     out$providers <- .genflow_list_custom_provider_configs()
     custom_model_env <- vapply(out$providers, function(cfg) cfg$model_env %||% "", character(1))
-    select <- grepl("^(GENFLOW|OPENAI|OPENROUTER|ANTHROPIC|CLAUDE|GROQ|CEREBRAS|TOGETHER|SAMBANOVA|SAMBA|NEBIUS|DEEPSEEK|PERPLEXITY|FIREWORKS|DEEPINFRA|HYPERBOLIC|GEMINI|GOOGLE|OLLAMA|LLAMA_CPP|LLAMACPP)_(BASE_URL|MODEL|API_VERSION)$", names(env))
+    select <- grepl("^(GENFLOW|OPENAI|OPENROUTER|ANTHROPIC|CLAUDE|GROQ|CEREBRAS|TOGETHER|SAMBANOVA|SAMBA|NEBIUS|DEEPSEEK|PERPLEXITY|FIREWORKS|DEEPINFRA|HYPERBOLIC|GEMINI|GOOGLE|ELEVENLABS|ACESTEP|OLLAMA|LLAMA_CPP|LLAMACPP)_(BASE_URL|MODEL|API_VERSION)$", names(env))
     out$environment <- as.list(env[select | names(env) %in% custom_model_env])
     out$local <- gen_local_config()
     out$schema_version <- 1L

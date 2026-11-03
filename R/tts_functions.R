@@ -280,86 +280,6 @@ gen_tts.genflow_agent <- function(text, ...) {
 
 #' @keywords internal
 #' @noRd
-.tts_scalar_text <- function(value) {
-  if (is.null(value) || !length(value)) {
-    return("")
-  }
-  value <- as.character(value)[1]
-  if (is.na(value)) "" else trimws(value)
-}
-
-#' @keywords internal
-#' @noRd
-.tts_normalize_audio_format <- function(value) {
-  value <- tolower(.tts_scalar_text(value))
-  aliases <- c(
-    mpeg = "mp3",
-    mpga = "mp3",
-    wave = "wav",
-    x_wav = "wav",
-    oga = "ogg",
-    mp4 = "m4a"
-  )
-  if (value %in% names(aliases)) {
-    value <- unname(aliases[[value]])
-  }
-  known <- c("mp3", "opus", "ogg", "aac", "flac", "wav", "pcm", "webm", "m4a")
-  if (nzchar(value) && value %in% known) value else NULL
-}
-
-#' @keywords internal
-#' @noRd
-.tts_content_type_format <- function(content_type) {
-  content_type <- tolower(.tts_scalar_text(content_type))
-  content_type <- sub(";.*$", "", content_type)
-  mapping <- c(
-    "audio/mpeg" = "mp3",
-    "audio/mp3" = "mp3",
-    "audio/x-mpeg" = "mp3",
-    "audio/wav" = "wav",
-    "audio/wave" = "wav",
-    "audio/x-wav" = "wav",
-    "audio/ogg" = "ogg",
-    "application/ogg" = "ogg",
-    "audio/opus" = "opus",
-    "audio/aac" = "aac",
-    "audio/x-aac" = "aac",
-    "audio/flac" = "flac",
-    "audio/x-flac" = "flac",
-    "audio/webm" = "webm",
-    "audio/mp4" = "m4a",
-    "audio/x-m4a" = "m4a",
-    "audio/pcm" = "pcm",
-    "audio/x-pcm" = "pcm",
-    "audio/l16" = "pcm"
-  )
-  if (content_type %in% names(mapping)) unname(mapping[[content_type]]) else NULL
-}
-
-#' @keywords internal
-#' @noRd
-.tts_format_content_type <- function(format) {
-  format <- .tts_normalize_audio_format(format)
-  mapping <- c(
-    mp3 = "audio/mpeg",
-    wav = "audio/wav",
-    ogg = "audio/ogg",
-    opus = "audio/ogg",
-    aac = "audio/aac",
-    flac = "audio/flac",
-    webm = "audio/webm",
-    m4a = "audio/mp4",
-    pcm = "audio/pcm"
-  )
-  if (!is.null(format) && format %in% names(mapping)) {
-    unname(mapping[[format]])
-  } else {
-    "application/octet-stream"
-  }
-}
-
-#' @keywords internal
-#' @noRd
 .tts_response_content_type <- function(response) {
   response_headers <- tryCatch(
     httr::headers(response),
@@ -373,7 +293,7 @@ gen_tts.genflow_agent <- function(text, ...) {
   if (is.na(idx)) {
     return(NULL)
   }
-  value <- tolower(sub(";.*$", "", .tts_scalar_text(response_headers[[idx]])))
+  value <- tolower(sub(";.*$", "", .gen_audio_scalar_text(response_headers[[idx]])))
   if (nzchar(value)) value else NULL
 }
 
@@ -430,78 +350,6 @@ gen_tts.genflow_agent <- function(text, ...) {
 
 #' @keywords internal
 #' @noRd
-.tts_raw_starts_with <- function(bytes, signature) {
-  signature <- as.raw(signature)
-  length(bytes) >= length(signature) &&
-    identical(bytes[seq_along(signature)], signature)
-}
-
-#' @keywords internal
-#' @noRd
-.tts_raw_contains <- function(bytes, signature) {
-  signature <- as.raw(signature)
-  if (!length(signature) || length(bytes) < length(signature)) {
-    return(FALSE)
-  }
-  last_start <- length(bytes) - length(signature) + 1L
-  any(vapply(
-    seq_len(last_start),
-    function(index) {
-      identical(
-        bytes[index:(index + length(signature) - 1L)],
-        signature
-      )
-    },
-    logical(1)
-  ))
-}
-
-#' @keywords internal
-#' @noRd
-.tts_audio_magic_format <- function(path) {
-  bytes <- tryCatch(
-    readBin(path, what = "raw", n = 256L),
-    error = function(e) raw()
-  )
-  if (!length(bytes)) {
-    return(NULL)
-  }
-
-  if (.tts_raw_starts_with(bytes, charToRaw("RIFF")) &&
-      length(bytes) >= 12L &&
-      identical(bytes[9:12], charToRaw("WAVE"))) {
-    return("wav")
-  }
-  if (.tts_raw_starts_with(bytes, charToRaw("fLaC"))) {
-    return("flac")
-  }
-  if (.tts_raw_starts_with(bytes, charToRaw("OggS"))) {
-    if (.tts_raw_contains(bytes, charToRaw("OpusHead"))) "opus" else "ogg"
-  } else if (.tts_raw_starts_with(bytes, charToRaw("ID3"))) {
-    "mp3"
-  } else if (length(bytes) >= 8L &&
-      identical(bytes[5:8], charToRaw("ftyp"))) {
-    "m4a"
-  } else if (.tts_raw_starts_with(bytes, as.raw(c(0x1a, 0x45, 0xdf, 0xa3)))) {
-    "webm"
-  } else if (.tts_raw_contains(bytes, charToRaw("OpusHead"))) {
-    "opus"
-  } else if (length(bytes) >= 2L &&
-      as.integer(bytes[[1]]) == 0xffL &&
-      bitwAnd(as.integer(bytes[[2]]), 0xf6L) == 0xf0L) {
-    "aac"
-  } else if (length(bytes) >= 2L &&
-      as.integer(bytes[[1]]) == 0xffL &&
-      bitwAnd(as.integer(bytes[[2]]), 0xe0L) == 0xe0L &&
-      bitwAnd(as.integer(bytes[[2]]), 0x06L) != 0L) {
-    "mp3"
-  } else {
-    NULL
-  }
-}
-
-#' @keywords internal
-#' @noRd
 .tts_payload_looks_textual <- function(path) {
   bytes <- tryCatch(
     readBin(path, what = "raw", n = 64L),
@@ -531,9 +379,9 @@ gen_tts.genflow_agent <- function(text, ...) {
     stop("Generated audio file is empty.", call. = FALSE)
   }
 
-  content_type_value <- tolower(.tts_scalar_text(content_type))
+  content_type_value <- tolower(.gen_audio_scalar_text(content_type))
   content_type_value <- sub(";.*$", "", content_type_value)
-  declared_format <- .tts_content_type_format(content_type_value)
+  declared_format <- .gen_audio_content_type_format(content_type_value)
   allowed_unknown_types <- c("", "application/octet-stream", "binary/octet-stream")
   if (is.null(declared_format) && !content_type_value %in% allowed_unknown_types) {
     stop(
@@ -544,12 +392,12 @@ gen_tts.genflow_agent <- function(text, ...) {
     )
   }
 
-  magic_format <- .tts_audio_magic_format(path)
+  magic_format <- .gen_audio_magic_format(path)
   if (is.null(magic_format) && .tts_payload_looks_textual(path)) {
     stop("TTS provider returned a textual payload instead of audio bytes.", call. = FALSE)
   }
-  extension_format <- .tts_normalize_audio_format(tools::file_ext(path))
-  fallback_format <- .tts_normalize_audio_format(fallback_format)
+  extension_format <- .gen_audio_normalize_format(tools::file_ext(path))
+  fallback_format <- .gen_audio_normalize_format(fallback_format)
   raw_pcm_format <- c(declared_format, extension_format, fallback_format)
   raw_pcm_format <- raw_pcm_format[raw_pcm_format %in% "pcm"]
   actual_format <- magic_format %||%
@@ -564,7 +412,7 @@ gen_tts.genflow_agent <- function(text, ...) {
   list(
     path = path,
     format = actual_format,
-    content_type = .tts_format_content_type(actual_format),
+    content_type = .gen_audio_format_content_type(actual_format),
     declared_content_type = if (nzchar(content_type_value)) content_type_value else NULL
   )
 }
@@ -638,7 +486,7 @@ gen_tts.genflow_agent <- function(text, ...) {
 #' @keywords internal
 #' @noRd
 .tts_replicate_model_parts <- function(model) {
-  model_id <- .tts_scalar_text(model)
+  model_id <- .gen_audio_scalar_text(model)
   if (!nzchar(model_id)) {
     model_id <- "qwen/qwen3-tts"
   }
@@ -668,7 +516,7 @@ gen_tts.genflow_agent <- function(text, ...) {
     timeout_secs
   )
   version_id <- if (is.list(model_info)) {
-    .tts_scalar_text(model_info$version)
+    .gen_audio_scalar_text(model_info$version)
   } else {
     ""
   }
@@ -733,11 +581,11 @@ gen_tts.genflow_agent <- function(text, ...) {
   }
   prediction_urls <- content$urls
   get_url <- if (is.list(prediction_urls)) {
-    .tts_scalar_text(prediction_urls$get)
+    .gen_audio_scalar_text(prediction_urls$get)
   } else {
     ""
   }
-  prediction_id <- .tts_scalar_text(content$id)
+  prediction_id <- .gen_audio_scalar_text(content$id)
   if (!nzchar(prediction_id)) {
     prediction_id <- "unknown"
   }
@@ -745,12 +593,12 @@ gen_tts.genflow_agent <- function(text, ...) {
     stop("Replicate did not return a polling URL (prediction id: ", prediction_id, ").")
   }
 
-  status <- .tts_scalar_text(content$status)
+  status <- .gen_audio_scalar_text(content$status)
   if (!nzchar(status)) {
     stop("Replicate prediction creation returned no status.", call. = FALSE)
   }
   poll_content <- content
-  prediction_error <- .tts_scalar_text(poll_content$error)
+  prediction_error <- .gen_audio_scalar_text(poll_content$error)
   if (nzchar(prediction_error)) {
     stop(
       "Replicate prediction failed (ID: ",
@@ -777,11 +625,11 @@ gen_tts.genflow_agent <- function(text, ...) {
     if (!is.list(poll_content)) {
       stop("Replicate prediction polling returned malformed JSON.", call. = FALSE)
     }
-    status <- .tts_scalar_text(poll_content$status)
+    status <- .gen_audio_scalar_text(poll_content$status)
     if (!nzchar(status)) {
       stop("Replicate prediction polling returned no status.", call. = FALSE)
     }
-    prediction_error <- .tts_scalar_text(poll_content$error)
+    prediction_error <- .gen_audio_scalar_text(poll_content$error)
     if (nzchar(prediction_error)) {
       stop(
         "Replicate prediction failed (ID: ",
@@ -841,7 +689,7 @@ gen_tts.genflow_agent <- function(text, ...) {
   if (!is.list(latest_version)) {
     stop("Replicate model metadata has no latest version object.", call. = FALSE)
   }
-  version_id <- .tts_scalar_text(latest_version$id)
+  version_id <- .gen_audio_scalar_text(latest_version$id)
   schema <- latest_version$openapi_schema
   props <- .tts_replicate_collect_properties(schema)
   if (!nzchar(version_id)) {
@@ -1003,7 +851,7 @@ gen_tts.genflow_agent <- function(text, ...) {
 #' @keywords internal
 #' @noRd
 .tts_replicate_fetch_audio <- function(ref, format, timeout_secs) {
-  ref <- .tts_scalar_text(ref)
+  ref <- .gen_audio_scalar_text(ref)
   if (!nzchar(ref)) {
     stop("Replicate returned an empty audio output reference.", call. = FALSE)
   }
@@ -1016,8 +864,8 @@ gen_tts.genflow_agent <- function(text, ...) {
     }
     mime <- tolower(sub("^data:([^;]+);base64,.*$", "\\1", ref, ignore.case = TRUE))
     b64 <- sub("^data:[^;]+;base64,", "", ref, ignore.case = TRUE)
-    ext <- .tts_content_type_format(mime) %||%
-      .tts_normalize_audio_format(format) %||%
+    ext <- .gen_audio_content_type_format(mime) %||%
+      .gen_audio_normalize_format(format) %||%
       "bin"
     tmp <- tempfile(fileext = paste0(".", ext))
     keep_tmp <- FALSE
@@ -1054,8 +902,8 @@ gen_tts.genflow_agent <- function(text, ...) {
   }
 
   ref_without_query <- sub("[?#].*$", "", ref)
-  ext <- .tts_normalize_audio_format(tools::file_ext(ref_without_query)) %||%
-    .tts_normalize_audio_format(format) %||%
+  ext <- .gen_audio_normalize_format(tools::file_ext(ref_without_query)) %||%
+    .gen_audio_normalize_format(format) %||%
     "bin"
   tmp <- tempfile(fileext = paste0(".", ext))
   keep_tmp <- FALSE

@@ -8,6 +8,7 @@
   hf = "Hugging Face", `local-native` = "Native STT (local)",
   `local-openai` = "OpenAI-compatible STT (local)", ollama = "Ollama",
   llamacpp = "llama-cpp", gemini = "Gemini", fal = "FAL", replicate = "Replicate",
+  elevenlabs = "ElevenLabs", acestep = "ACE-Step (local)",
   assemblyai = "AssemblyAI", cloudflare = "Cloudflare", voicegain = "Voicegain"
 )
 
@@ -38,7 +39,8 @@
   out <- lapply(names(.GENFLOW_PROVIDER_LABELS), function(id) {
     list(id = id, label = unname(.GENFLOW_PROVIDER_LABELS[[id]]), kind = "builtin",
          modalities = c(text = id %in% text, image = id %in% image, stt = id %in% stt,
-                        tts = id %in% c("openai", "replicate"), video = FALSE),
+                        tts = id %in% c("openai", "replicate"), sfx = id == "elevenlabs",
+                        music = id %in% c("elevenlabs", "acestep"), video = FALSE),
          text_function = if (id %in% text) paste0(".gen_txt_", id) else NULL,
          model_resolver = if (id %in% setdiff(text, c("openai", "openrouter", "hf"))) paste0(".", id, "_resolve_model") else NULL,
          catalog_function = if (id %in% catalog) paste0(".update_models_", gsub("-", "_", id)) else NULL,
@@ -127,7 +129,7 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
   }
   if (id == "openai" && !is.null(reasoning)) features[c("vision", "tools")] <- FALSE
   list(schema_version = 1L, service = id, model = model,
-       modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, video = FALSE),
+       modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, sfx = FALSE, music = FALSE, video = FALSE),
        adapter_features = features, model_support = "unverified",
        image_references = .gen_image_reference_spec(id,model),
        sampling_temperature = if (id == "openai" && !is.null(model)) .genflow_openai_sampling(model, reasoning) else NA)
