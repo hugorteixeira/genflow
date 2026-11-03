@@ -1,7 +1,7 @@
 #' Generate speech audio from text
 #'
 #' High-level text-to-speech (TTS) wrapper that dispatches to provider-specific
-#' implementations (currently OpenAI and Replicate). Returns the saved audio file path.
+#' implementations (OpenAI, Replicate and local CrispASR/VoxCPM2). Returns the saved audio file path.
 #'
 #' @param text Character. The text to synthesize.
 #' @param add Optional character appended to `text`.
@@ -17,11 +17,29 @@
 #'   `format` always describe the detected bytes instead of the request label.
 #' @param speed Numeric speech speed (0.25 to 4.0). Defaults to 1.
 #' @param instructions Optional instructions to style the voice (OpenAI only).
+#' @param reference_audio Optional local audio file used as a voice reference
+#'   by local VoxCPM2. It is decoded before inference; URLs are not downloaded.
+#' @param reference_consent Explicit permission to use the reference voice,
+#'   required by CrispASR when `reference_audio` is supplied.
+#' @param reference_identity Reference identity: unknown, synthetic or real_person.
+#' @param spoken_disclaimer Keep the engine's audible AI disclosure. Disabling
+#'   it requires `marking_responsibility = TRUE`; engine watermarking remains on.
+#' @param marking_responsibility Explicit engine attestation when disabling
+#'   the spoken disclaimer.
+#' @param executable Optional CrispASR executable, overriding local configuration.
+#' @param native_device Local accelerator: auto, cpu, vulkan, cuda or metal.
+#' @param threads Optional native CPU threads (default 4).
+#' @param seed Optional native RNG seed (default 0, non-deterministic).
+#' @param steps Optional native diffusion steps (default 10).
 #' @param preview Logical; attempt to open audio after save if interactive.
 #' @param timeout_api Numeric; request timeout in seconds.
 #' @param persist Logical; save to the output directory. FALSE returns a
 #'   temporary file in `response_value` and sets `saved_file` to NA. The caller
 #'   owns moving or deleting that file before the R session ends.
+#' @param model_options Named object of model-specific options. Validated against
+#'   `parameter_schema`; unsupported transports reject options before inference.
+#' @param parameter_schema Portable snapshot from [gen_resolve_parameter_schema()].
+#'   Nonempty options without a snapshot resolve the current registered schema.
 #' @param ... Reserved for future provider-specific arguments.
 #'
 #' @return Invisibly returns a list with `response_value` (saved file path),
@@ -53,23 +71,35 @@ gen_tts <- function(text, ...) {
 #' @export
 gen_tts.default <- function(
   text,
-  add = .gen_default("gen_tts", "add"),
-  directory = .gen_default("gen_tts", "directory"),
-  label = .gen_default("gen_tts", "label"),
-  service = .gen_default("gen_tts", "service"),
-  model = .gen_default("gen_tts", "model"),
-  voice = .gen_default("gen_tts", "voice"),
-  format = .gen_default("gen_tts", "format"),
-  speed = .gen_default("gen_tts", "speed"),
-  instructions = .gen_default("gen_tts", "instructions"),
-  preview = .gen_default("gen_tts", "preview"),
-  timeout_api = .gen_default("gen_tts", "timeout_api"),
-  persist = .gen_default("gen_tts", "persist"),
+  add = .gen_default("gen_tts", "add", 3L),
+  directory = .gen_default("gen_tts", "directory", 3L),
+  label = .gen_default("gen_tts", "label", 3L),
+  service = .gen_default("gen_tts", "service", 3L),
+  model = .gen_default("gen_tts", "model", 3L),
+  voice = .gen_default("gen_tts", "voice", 3L),
+  format = .gen_default("gen_tts", "format", 3L),
+  speed = .gen_default("gen_tts", "speed", 3L),
+  instructions = .gen_default("gen_tts", "instructions", 3L),
+  preview = .gen_default("gen_tts", "preview", 3L),
+  timeout_api = .gen_default("gen_tts", "timeout_api", 3L),
+  persist = .gen_default("gen_tts", "persist", 3L),
+  reference_audio = .gen_default("gen_tts", "reference_audio", 3L),
+  reference_consent = .gen_default("gen_tts", "reference_consent", 3L),
+  reference_identity = .gen_default("gen_tts", "reference_identity", 3L),
+  spoken_disclaimer = .gen_default("gen_tts", "spoken_disclaimer", 3L),
+  marking_responsibility = .gen_default("gen_tts", "marking_responsibility", 3L),
+  executable = .gen_default("gen_tts", "executable", 3L),
+  native_device = .gen_default("gen_tts", "native_device", 3L),
+  threads = .gen_default("gen_tts", "threads", 3L),
+  seed = .gen_default("gen_tts", "seed", 3L),
+  steps = .gen_default("gen_tts", "steps", 3L),
+  model_options = .gen_default("gen_tts", "model_options", 3L),
+  parameter_schema = .gen_default("gen_tts", "parameter_schema", 3L),
   ...
 ) {
   withCallingHandlers({
   start_time <- Sys.time()
-  .gen_internal_validate("gen_tts")
+  .gen_internal_validate("gen_tts", version = 3L)
   if (!is.null(add) && nzchar(add)) text <- paste(text, add)
   requested_format <- format
 
@@ -155,6 +185,9 @@ gen_tts.default <- function(
 
   audio_tmp <- tryCatch({
     switch(service,
+      "local-native" = .tts_local_native(text, model, reference_audio, format,
+        speed, timeout_api, executable, native_device, threads, seed, steps,
+        reference_consent, reference_identity, spoken_disclaimer, marking_responsibility, model_options = model_options),
       "openai" = .tts_openai(text, model, voice %||% "alloy", format, speed, instructions, timeout_api),
       "replicate" = {
         if (!is.null(replicate_model_info_error)) {
@@ -179,6 +212,7 @@ gen_tts.default <- function(
     NULL
   })
 
+  if (!is.null(attr(audio_tmp,"tts_native",exact=TRUE))) model <- attr(audio_tmp,"tts_native",exact=TRUE)$model
   final_status <- "SUCCESS"
   final_msg <- "OK"
   final_path <- NA_character_
@@ -242,10 +276,15 @@ gen_tts.default <- function(
     mime_type = if (final_status == "SUCCESS") actual_content_type else NA_character_
   )
 
+  if (!is.null(attr(audio_tmp, "tts_native", exact = TRUE))) {
+    result$native <- attr(audio_tmp, "tts_native", exact = TRUE)
+    result$model <- result$native$model
+  }
   persistence <- .genflow_persistence(final_path, requested = persist, error = persistence_error)
   result <- .genflow_complete_result(result, persistence = persistence, error = provider_error)
   if (!is.null(persistence_error)) result$response_value <- audio_tmp
   if (!persist) result$saved_file <- NA_character_
+  if (!is.null(parameter_schema)) result$parameters <- list(model_options = model_options, parameter_schema = parameter_schema)
   return(invisible(result))
   }, error = .gen_boundary_error)
 }
@@ -999,6 +1038,8 @@ gen_tts_voices <- function(service = "replicate", model = NULL, timeout_api = 30
 
   service <- tolower(as.character(service)[1])
   model <- if (!is.null(model)) as.character(model)[1] else NULL
+
+  if (service == "local-native") return(character())
 
   if (service == "openai") {
     return(c("alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"))

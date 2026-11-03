@@ -258,7 +258,10 @@ test_that("Native STT helpers expose managed downloads and exact HF references",
   )
 })
 
-test_that("Native STT deletion discovers models referenced by saved state", {
+test_that("Native speech deletion discovers models referenced by saved state", {
+  root <- withr::local_tempdir()
+  withr::local_options(list(genflow.local_config_path = file.path(root, "local.json")))
+  gen_local_config(stt_native_model = "saved-stt.gguf", tts_native_model = "saved-tts.gguf")
   config <- genflow:::.genflow_local_config_defaults()
   config$stt_native_model <- "configured.gguf"
 
@@ -281,7 +284,7 @@ test_that("Native STT deletion discovers models referenced by saved state", {
 
   expect_setequal(
     referenced,
-    c("configured.gguf", "setup.gguf", "agent.gguf")
+    c("saved-stt.gguf", "saved-tts.gguf", "configured.gguf", "setup.gguf", "agent.gguf")
   )
 })
 

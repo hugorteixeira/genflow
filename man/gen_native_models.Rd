@@ -73,7 +73,9 @@ their own references; the R library does not inspect client databases.}
 }
 \value{
 \code{gen_native_models()} returns a data frame with path, filename,
-quantization, size, source URL, managed/selected flags and \code{repository}.
+quantization, size, source URL, managed/selected flags, \code{repository}, and
+\code{modality} (stt, tts or unknown). Modality describes recognized model
+families, not a guarantee that the installed executable can run them.
 Unknown repository provenance is an empty string, never guessed.
 
 \code{gen_native_model_reference()} validates and normalizes an exact

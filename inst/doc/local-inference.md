@@ -298,3 +298,64 @@ genflow does not restart or unload them.
 A direct native CLI call is process-based: the executable loads the selected
 model for that invocation and exits. Persistent native model residency requires
 a server runtime; use the STT server adapter for that deployment model.
+
+
+## Native speech synthesis: VoxCPM2
+
+`gen_tts()` contract v2 supports `service = "local-native"` using CrispASR's
+`voxcpm2-tts` backend. The normal `audio.speak` operation is reused. Contract v1
+remains unchanged and must be explicitly upgraded to use native TTS or references.
+
+```r
+gen_local_config(
+  tts_native_executable = "/absolute/path/to/crispasr",
+  tts_native_model = "/absolute/path/to/voxcpm2-q8_0.gguf",
+  tts_native_device = "vulkan"
+)
+speech <- gen_tts("Olá, Mimi! Vamos brincar no jardim?",
+  service = "local-native", format = "wav", seed = 2, threads = 8)
+```
+
+Calls can override `executable`, `model` and `native_device`. Environment defaults
+are `GENFLOW_TTS_NATIVE_EXECUTABLE`, `GENFLOW_TTS_NATIVE_MODEL` and
+`GENFLOW_TTS_NATIVE_DEVICE`. When no TTS executable is configured, the saved
+CrispASR STT executable or PATH is reused. Model and device settings are independent
+of STT; reading version 5 settings adds version 6 defaults without rewriting the
+file. `model = "auto"` means the saved TTS model, never a download. An explicit
+managed-cache basename also works. Download models separately using the management
+API. Catalogs distinguish STT, TTS and Unknown; unclassified models are not
+presented as qualified native generators. GGUF architecture is checked again at
+execution, so a renamed VoxCPM2 file still works and a renamed incompatible file
+does not.
+
+For a reference voice, pass a local `reference_audio` file and explicitly set
+`reference_consent = TRUE`. `reference_identity` is `unknown`, `synthetic` or
+`real_person`. These are engine attestations, never inferred from the filename.
+The engine's spoken disclosure stays enabled by default. Disabling it with
+`spoken_disclaimer = FALSE` requires `marking_responsibility = TRUE`; the adapter
+does not disable engine watermarks or content credentials. Uploaded/generated
+Studio audio is bound to the same typed reference input; it is not a string voice ID.
+
+The library decodes references before inference, converts them to a temporary
+mono 16 kHz WAV, and requires the engine to confirm loading the reference.
+Missing/corrupt references and silent zero-shot fallback are errors. Temporary
+files and the CLI process tree are cleaned after failure, timeout or interruption.
+The timeout covers preparation, capability probing, generation and output checks.
+
+Supported local controls: `threads` (default 4), `seed` (default 0), `steps`
+(default 10), and device. Formats requested: WAV, MP3, Opus and AAC; speed must be 1 (or NULL).
+CrispASR may wrap Opus/AAC in MP4 to retain content credentials. Genflow validates
+the actual file and codec, reports `format = "m4a"` and `mime_type = "audio/mp4"`,
+and preserves `requested_format`. It does not disable the engine's remux policy.
+Voice IDs, style instructions and FLAC/raw PCM are rejected rather than ignored.
+The qualified VoxCPM2 adapter ignores `--tts-cfg-scale`; Genflow uses the engine's
+initialization environment instead. CFG defaults to 2; `gen_tts@3` accepts
+`model_options = list(cfg = 1)` with a registered or embedded
+[parameter schema](parameter-schemas.md). Version 2 retains its original contract.
+The child process clears hidden output-length overrides and the parent
+environment is preserved. Text is limited to 4096 characters per call;
+make each utterance a separate block. The output carries actual audio metadata and
+native runtime metadata in addition to the common Genflow result.
+
+Technical validation does not establish perceived speaker similarity or narration
+quality. Seed reproducibility depends on the executable, hardware and configuration.

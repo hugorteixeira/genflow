@@ -15,7 +15,12 @@ gen_local_config(config = NULL, ..., path = NULL, save = TRUE)
 \code{stt_native_engine}, \code{stt_native_crispasr_executable},
 \code{stt_native_moss_transcribe_executable}, \code{stt_native_executable},
 \code{stt_native_model},
-\code{stt_native_backend}, \code{stt_native_quant}, and \code{stt_native_device}.
+\code{stt_native_backend}, \code{stt_native_quant}, \code{stt_native_device},
+\code{tts_native_executable}, \code{tts_native_model}, and \code{tts_native_device}.
+TTS has independent model/device settings. Its executable override may
+select a different CrispASR build; when empty it reuses the configured
+CrispASR executable or PATH. Version 5 configurations gain empty TTS
+settings on read, without changing the STT settings or rewriting the file.
 The two engine-specific executable fields are persisted independently, so
 changing \code{stt_native_engine} never erases either path.
 \code{stt_native_executable} remains an accepted one-way compatibility alias

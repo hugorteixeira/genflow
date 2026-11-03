@@ -17,6 +17,10 @@
 #' @param base_url Optional provider API base URL; otherwise ELEVENLABS_BASE_URL or ACESTEP_BASE_URL. Credentials come only from environment variables.
 #' @param timeout_api Total budget for submission, polling, download and audio validation.
 #' @param persist Publish and record statistics. FALSE returns a temporary audio file.
+#' @param model_options Named object of model-specific options. Validated against
+#'   `parameter_schema`; unsupported transports reject options before inference.
+#' @param parameter_schema Portable snapshot from [gen_resolve_parameter_schema()].
+#'   Nonempty options without a snapshot resolve the current registered schema.
 #' @param ... Named agent overrides or reserved method arguments.
 #' @return A common Genflow result with audio metadata. On recoverable failure,
 #'   `audio_receipt` can be passed with the result to [gen_audio_recover()].
@@ -31,23 +35,25 @@ gen_sfx <- function(prompt, ...) {
 #' @export
 gen_sfx.default <- function(
   prompt,
-  add = .gen_default("gen_sfx", "add"),
-  directory = .gen_default("gen_sfx", "directory"),
-  label = .gen_default("gen_sfx", "label"),
-  service = .gen_default("gen_sfx", "service"),
-  model = .gen_default("gen_sfx", "model"),
-  duration_seconds = .gen_default("gen_sfx", "duration_seconds"),
-  format = .gen_default("gen_sfx", "format"),
-  loop = .gen_default("gen_sfx", "loop"),
-  prompt_influence = .gen_default("gen_sfx", "prompt_influence"),
-  base_url = .gen_default("gen_sfx", "base_url"),
-  timeout_api = .gen_default("gen_sfx", "timeout_api"),
-  persist = .gen_default("gen_sfx", "persist"),
+  add = .gen_default("gen_sfx", "add", 2L),
+  directory = .gen_default("gen_sfx", "directory", 2L),
+  label = .gen_default("gen_sfx", "label", 2L),
+  service = .gen_default("gen_sfx", "service", 2L),
+  model = .gen_default("gen_sfx", "model", 2L),
+  duration_seconds = .gen_default("gen_sfx", "duration_seconds", 2L),
+  format = .gen_default("gen_sfx", "format", 2L),
+  loop = .gen_default("gen_sfx", "loop", 2L),
+  prompt_influence = .gen_default("gen_sfx", "prompt_influence", 2L),
+  base_url = .gen_default("gen_sfx", "base_url", 2L),
+  timeout_api = .gen_default("gen_sfx", "timeout_api", 2L),
+  persist = .gen_default("gen_sfx", "persist", 2L),
+  model_options = .gen_default("gen_sfx", "model_options", 2L),
+  parameter_schema = .gen_default("gen_sfx", "parameter_schema", 2L),
   ...
 ) {
   withCallingHandlers({
-    .gen_internal_validate("gen_sfx")
-    args <- mget(names(gen_block_contracts("gen_sfx",1L)$arguments$properties),envir=environment())
+    .gen_internal_validate("gen_sfx", version = 2L)
+    args <- mget(names(gen_block_contracts("gen_sfx",2L)$arguments$properties),envir=environment())
     invisible(.gen_sound_call("sfx",args))
   },error=.gen_boundary_error)
 }
@@ -84,6 +90,10 @@ gen_sfx.genflow_agent <- function(prompt, ...) {
 #' @param base_url Optional provider API base URL; otherwise ELEVENLABS_BASE_URL or ACESTEP_BASE_URL. Credentials come only from environment variables.
 #' @param timeout_api Total budget for submission, polling, download and audio validation.
 #' @param persist Publish and record statistics. FALSE returns a temporary audio file.
+#' @param model_options Named object of model-specific options. Validated against
+#'   `parameter_schema`; unsupported transports reject options before inference.
+#' @param parameter_schema Portable snapshot from [gen_resolve_parameter_schema()].
+#'   Nonempty options without a snapshot resolve the current registered schema.
 #' @param ... Named agent overrides or reserved method arguments.
 #' @return A common Genflow result with audio metadata. On recoverable failure,
 #'   `audio_receipt` can be passed with the result to [gen_audio_recover()].
@@ -98,25 +108,27 @@ gen_music <- function(prompt, ...) {
 #' @export
 gen_music.default <- function(
   prompt,
-  add = .gen_default("gen_music", "add"),
-  directory = .gen_default("gen_music", "directory"),
-  label = .gen_default("gen_music", "label"),
-  service = .gen_default("gen_music", "service"),
-  model = .gen_default("gen_music", "model"),
-  duration_seconds = .gen_default("gen_music", "duration_seconds"),
-  format = .gen_default("gen_music", "format"),
-  instrumental = .gen_default("gen_music", "instrumental"),
-  lyrics = .gen_default("gen_music", "lyrics"),
-  seed = .gen_default("gen_music", "seed"),
-  poll_interval = .gen_default("gen_music", "poll_interval"),
-  base_url = .gen_default("gen_music", "base_url"),
-  timeout_api = .gen_default("gen_music", "timeout_api"),
-  persist = .gen_default("gen_music", "persist"),
+  add = .gen_default("gen_music", "add", 2L),
+  directory = .gen_default("gen_music", "directory", 2L),
+  label = .gen_default("gen_music", "label", 2L),
+  service = .gen_default("gen_music", "service", 2L),
+  model = .gen_default("gen_music", "model", 2L),
+  duration_seconds = .gen_default("gen_music", "duration_seconds", 2L),
+  format = .gen_default("gen_music", "format", 2L),
+  instrumental = .gen_default("gen_music", "instrumental", 2L),
+  lyrics = .gen_default("gen_music", "lyrics", 2L),
+  seed = .gen_default("gen_music", "seed", 2L),
+  poll_interval = .gen_default("gen_music", "poll_interval", 2L),
+  base_url = .gen_default("gen_music", "base_url", 2L),
+  timeout_api = .gen_default("gen_music", "timeout_api", 2L),
+  persist = .gen_default("gen_music", "persist", 2L),
+  model_options = .gen_default("gen_music", "model_options", 2L),
+  parameter_schema = .gen_default("gen_music", "parameter_schema", 2L),
   ...
 ) {
   withCallingHandlers({
-    .gen_internal_validate("gen_music")
-    args <- mget(names(gen_block_contracts("gen_music",1L)$arguments$properties),envir=environment())
+    .gen_internal_validate("gen_music", version = 2L)
+    args <- mget(names(gen_block_contracts("gen_music",2L)$arguments$properties),envir=environment())
     invisible(.gen_sound_call("music",args))
   },error=.gen_boundary_error)
 }
@@ -136,7 +148,7 @@ gen_music.genflow_agent <- function(prompt, ...) {
   args$prompt <- .genflow_prepare_prompt(args$prompt,args$add)
   args$add <- NULL
   # The complete assembled prompt must meet the same provider limits.
-  checked <- gen_validate_call(paste0("gen_",kind),args)
+  checked <- gen_validate_call(paste0("gen_",kind),args,version=2L)
   if (!checked$valid) .gen_validation_stop(checked$errors,paste0("gen_",kind))
   args <- checked$args; args$kind <- kind
   .gen_sound_tools()

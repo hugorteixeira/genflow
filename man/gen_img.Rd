@@ -10,21 +10,23 @@ gen_img(prompt, ...)
 
 \method{gen_img}{default}(
   prompt,
-  add = .gen_default("gen_img", "add", 2L),
-  directory = .gen_default("gen_img", "directory", 2L),
-  label = .gen_default("gen_img", "label", 2L),
-  service = .gen_default("gen_img", "service", 2L),
-  model = .gen_default("gen_img", "model", 2L),
-  temp = .gen_default("gen_img", "temp", 2L),
-  steps = .gen_default("gen_img", "steps", 2L),
-  h = .gen_default("gen_img", "h", 2L),
-  y = .gen_default("gen_img", "y", 2L),
-  model_version = .gen_default("gen_img", "model_version", 2L),
-  replicate_input = .gen_default("gen_img", "replicate_input", 2L),
-  poll_interval = .gen_default("gen_img", "poll_interval", 2L),
-  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds", 2L),
-  persist = .gen_default("gen_img", "persist", 2L),
-  add_img = .gen_default("gen_img", "add_img", 2L),
+  add = .gen_default("gen_img", "add", 3L),
+  directory = .gen_default("gen_img", "directory", 3L),
+  label = .gen_default("gen_img", "label", 3L),
+  service = .gen_default("gen_img", "service", 3L),
+  model = .gen_default("gen_img", "model", 3L),
+  temp = .gen_default("gen_img", "temp", 3L),
+  steps = .gen_default("gen_img", "steps", 3L),
+  h = .gen_default("gen_img", "h", 3L),
+  y = .gen_default("gen_img", "y", 3L),
+  model_version = .gen_default("gen_img", "model_version", 3L),
+  replicate_input = .gen_default("gen_img", "replicate_input", 3L),
+  poll_interval = .gen_default("gen_img", "poll_interval", 3L),
+  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds", 3L),
+  persist = .gen_default("gen_img", "persist", 3L),
+  add_img = .gen_default("gen_img", "add_img", 3L),
+  model_options = .gen_default("gen_img", "model_options", 3L),
+  parameter_schema = .gen_default("gen_img", "parameter_schema", 3L),
   ...
 )
 
@@ -75,6 +77,12 @@ path in \code{response_value}, and sets \code{saved_file} to NA.}
 
 \item{add_img}{Optional image path, HTTP(S) URL, data URI, or ordered vector/list
 of these references. Support and limits depend on the selected model.}
+
+\item{model_options}{Named object of model-specific options. Validated against
+\code{parameter_schema}; unsupported transports reject options before inference.}
+
+\item{parameter_schema}{Portable snapshot from \code{\link[=gen_resolve_parameter_schema]{gen_resolve_parameter_schema()}}.
+Nonempty options without a snapshot resolve the current registered schema.}
 }
 \value{
 Invisibly returns a list with fields such as \code{response_value} (saved file path

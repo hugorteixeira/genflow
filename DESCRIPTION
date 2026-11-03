@@ -20,8 +20,8 @@ License: GPL (>= 3)
 URL: https://github.com/hugorteixeira/genflow
 BugReports: https://github.com/hugorteixeira/genflow/issues
 SystemRequirements: FFmpeg and ffprobe (required for fixed-duration audio
-    splitting, sound generation, duration validation and image validation; otherwise optional), CrispASR or
-    moss-transcribe.cpp CLI (optional, for native speech-to-text inference)
+    splitting, sound generation, native text-to-speech, duration validation and image validation; otherwise optional), CrispASR or
+    moss-transcribe.cpp CLI (optional, for native speech inference)
 Roxygen: list(markdown = TRUE, roclets = c("collate", "namespace", "rd"))
 Imports: 
     DT,

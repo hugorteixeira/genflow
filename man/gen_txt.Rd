@@ -10,25 +10,27 @@ gen_txt(context, ...)
 
 \method{gen_txt}{default}(
   context,
-  res_context = .gen_default("gen_txt", "res_context"),
-  add = .gen_default("gen_txt", "add"),
-  add_img = .gen_default("gen_txt", "add_img"),
-  directory = .gen_default("gen_txt", "directory"),
-  label = .gen_default("gen_txt", "label"),
-  service = .gen_default("gen_txt", "service"),
-  model = .gen_default("gen_txt", "model"),
-  temp = .gen_default("gen_txt", "temp"),
-  reasoning = .gen_default("gen_txt", "reasoning"),
-  tools = .gen_default("gen_txt", "tools"),
-  plugins = .gen_default("gen_txt", "plugins"),
-  my_tools = .gen_default("gen_txt", "my_tools"),
-  timeout_api = .gen_default("gen_txt", "timeout_api"),
-  base_url = .gen_default("gen_txt", "base_url"),
-  null_repeat = .gen_default("gen_txt", "null_repeat"),
-  persist = .gen_default("gen_txt", "persist"),
-  retry_delays = .gen_default("gen_txt", "retry_delays"),
-  retry_deadline = .gen_default("gen_txt", "retry_deadline"),
-  max_output_tokens = .gen_default("gen_txt", "max_output_tokens"),
+  res_context = .gen_default("gen_txt", "res_context", 2L),
+  add = .gen_default("gen_txt", "add", 2L),
+  add_img = .gen_default("gen_txt", "add_img", 2L),
+  directory = .gen_default("gen_txt", "directory", 2L),
+  label = .gen_default("gen_txt", "label", 2L),
+  service = .gen_default("gen_txt", "service", 2L),
+  model = .gen_default("gen_txt", "model", 2L),
+  temp = .gen_default("gen_txt", "temp", 2L),
+  reasoning = .gen_default("gen_txt", "reasoning", 2L),
+  tools = .gen_default("gen_txt", "tools", 2L),
+  plugins = .gen_default("gen_txt", "plugins", 2L),
+  my_tools = .gen_default("gen_txt", "my_tools", 2L),
+  timeout_api = .gen_default("gen_txt", "timeout_api", 2L),
+  base_url = .gen_default("gen_txt", "base_url", 2L),
+  null_repeat = .gen_default("gen_txt", "null_repeat", 2L),
+  persist = .gen_default("gen_txt", "persist", 2L),
+  retry_delays = .gen_default("gen_txt", "retry_delays", 2L),
+  retry_deadline = .gen_default("gen_txt", "retry_deadline", 2L),
+  max_output_tokens = .gen_default("gen_txt", "max_output_tokens", 2L),
+  model_options = .gen_default("gen_txt", "model_options", 2L),
+  parameter_schema = .gen_default("gen_txt", "parameter_schema", 2L),
   ...
 )
 
@@ -103,6 +105,12 @@ bounded by the remaining time. NULL uses only the attempt count limit.}
 including reasoning tokens. Currently supported by \code{service = "openai"};
 other services reject an explicit cap rather than silently ignoring it.
 NULL retains the provider default. A cap may produce truncated output.}
+
+\item{model_options}{Named object of model-specific options. Validated against
+\code{parameter_schema}; unsupported transports reject options before inference.}
+
+\item{parameter_schema}{Portable snapshot from \code{\link[=gen_resolve_parameter_schema]{gen_resolve_parameter_schema()}}.
+Nonempty options without a snapshot resolve the current registered schema.}
 }
 \value{
 A list with elements: \code{response_value}, \code{label}, \code{label_cat},

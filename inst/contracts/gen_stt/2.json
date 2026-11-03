@@ -1,0 +1,375 @@
+{
+  "id": "gen_stt",
+  "version": 2,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "audio": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-content-kind": "audio",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "service": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "openai",
+        "title": "Serviço",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 100,
+        "x-owner": "runtime"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Modelo",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 300,
+        "x-owner": "runtime"
+      },
+      "language": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Idioma"
+      },
+      "prompt": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "title": "Contexto da transcrição"
+      },
+      "directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "label": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "save_txt": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "convert": {
+        "type": "boolean",
+        "default": true,
+        "title": "Converter áudio"
+      },
+      "diarize": {
+        "type": "boolean",
+        "default": true,
+        "title": "Identificar falantes"
+      },
+      "timestamps": {
+        "type": "boolean",
+        "default": false,
+        "title": "Mostrar tempos"
+      },
+      "timeout_api": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 240,
+        "title": "Tempo máximo da chamada (s)"
+      },
+      "timeout_per_audio_minute": {
+        "type": "number",
+        "minimum": 0,
+        "default": 60,
+        "title": "Tempo adicional por minuto de áudio (s)"
+      },
+      "poll_interval": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 5,
+        "title": "Intervalo de consulta (s)"
+      },
+      "max_poll_seconds": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 600,
+        "title": "Tempo máximo de espera (s)"
+      },
+      "executable": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Executável local"
+      },
+      "native_engine": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "auto",
+          "crispasr",
+          "moss-transcribe",
+          null
+        ],
+        "default": null,
+        "title": "Motor local"
+      },
+      "native_backend": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Arquitetura local"
+      },
+      "native_quant": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Quantização"
+      },
+      "native_kv_quant": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "f16",
+          "q8_0",
+          "q4_0",
+          null
+        ],
+        "default": null,
+        "title": "Quantização KV"
+      },
+      "native_device": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Dispositivo local"
+      },
+      "max_new_tokens": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "minimum": 1,
+        "default": null,
+        "title": "Máximo de tokens"
+      },
+      "base_url": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Endereço do serviço local"
+      },
+      "api_key": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-runtime-only": true,
+        "x-owner": "runtime"
+      },
+      "response_format": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "json",
+        "title": "Formato da resposta"
+      },
+      "chunking": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "never"
+        ],
+        "default": "auto",
+        "title": "Divisão do áudio"
+      },
+      "chunk_bitrate_kbps": {
+        "type": "integer",
+        "minimum": 8,
+        "default": 48,
+        "title": "Bitrate dos trechos (kbps)"
+      },
+      "chunk_segment_seconds": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "exclusiveMinimum": 0,
+        "default": null,
+        "title": "Duração de cada trecho (s)"
+      },
+      "checkpoint_dir": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "resume": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "chunk_retry_forever": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "chunk_max_retries": {
+        "type": "integer",
+        "minimum": 0,
+        "default": 20,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "chunk_retry_wait_seconds": {
+        "type": "number",
+        "minimum": 0,
+        "default": 2,
+        "title": "Espera inicial entre tentativas (s)"
+      },
+      "output": {
+        "type": "string",
+        "enum": [
+          "full",
+          "transcript"
+        ],
+        "default": "full",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "chunk_format": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "wav",
+          "mp3"
+        ],
+        "default": "auto",
+        "title": "Formato dos trechos"
+      },
+      "checkpoint_retention": {
+        "type": "string",
+        "enum": [
+          "all",
+          "results"
+        ],
+        "default": "all",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "model_options": {
+        "type": "object",
+        "default": {},
+        "title": "Opções específicas do modelo",
+        "description": "Valores definidos pelo schema de serviço/modelo selecionado. Não substituem argumentos comuns.",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "parameter_schema": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "default": null,
+        "title": "Schema de serviço/modelo",
+        "description": "Snapshot portátil e versionado retornado por gen_resolve_parameter_schema().",
+        "x-ui": {
+          "hidden": true
+        }
+      }
+    },
+    "required": [
+      "audio"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_stt",
+  "modality": "stt",
+  "inputs": {
+    "audio": "asset:audio"
+  },
+  "outputs": {
+    "content": "asset:text"
+  },
+  "studio": {
+    "id": "audio.transcribe",
+    "inputs": {
+      "audio": "audio"
+    },
+    "output": "text",
+    "execution": "inline",
+    "available": true
+  }
+}

@@ -18,7 +18,7 @@ test_that("local inference config round-trips and normalizes values", {
 
   expect_true(file.exists(path))
   expect_equal(config$ollama_base_url, "http://127.0.0.1:11434")
-  expect_equal(config$version, 5L)
+  expect_equal(config$version, 6L)
   expect_equal(config$stt_native_engine, "crispasr")
   expect_equal(config$stt_native_device, "vulkan")
   expect_equal(config$stt_native_model, "/models/parakeet-q4_k.gguf")
@@ -73,7 +73,7 @@ test_that("version 3 config migration ignores removed Python and HF settings", {
 
   migrated <- gen_local_config(path = path)
 
-  expect_identical(migrated$version, 5L)
+  expect_identical(migrated$version, 6L)
   expect_identical(migrated$ollama_base_url, "http://127.0.0.1:22434")
   expect_identical(migrated$stt_native_engine, "crispasr")
   expect_identical(migrated$stt_native_model, "auto")
@@ -123,7 +123,7 @@ test_that("legacy MOSS config migrates once and canonical values can be cleared"
   )
 
   migrated <- gen_local_config(path = path)
-  expect_identical(migrated$version, 5L)
+  expect_identical(migrated$version, 6L)
   expect_identical(migrated$stt_native_engine, "moss-transcribe")
   expect_identical(
     migrated$stt_native_executable,
@@ -241,7 +241,7 @@ test_that("version 4 native executable migrates to its saved engine", {
   )
 
   migrated <- gen_local_config(path = path)
-  expect_identical(migrated$version, 5L)
+  expect_identical(migrated$version, 6L)
   expect_identical(
     migrated$stt_native_crispasr_executable,
     "/legacy/build/bin/crispasr"

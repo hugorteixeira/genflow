@@ -73,6 +73,11 @@ and nested causes. `gen_error_catalog()` exposes the schema and message catalog;
 `gen_error_summary()` formats a diagnostic for people. Execution decisions use
 explicit outcome and retry fields, independently of translated explanations.
 
+Service/model [parameter schemas](inst/doc/parameter-schemas.md) add immutable
+revisions, validated `model_options` and portable snapshots to the same contracts.
+They reuse the existing model catalog directory and the public management API;
+workflows can carry their selected schema without installing it globally.
+
 ## 🚀 Getting Started
 
 ### Installation

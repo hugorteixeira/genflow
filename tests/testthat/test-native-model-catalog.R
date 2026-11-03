@@ -38,7 +38,7 @@ test_that("native model updater catalogs only managed cache basenames", {
 
   expect_identical(output$service, "local-native")
   expect_identical(output$model, "granite-speech-q8_0.gguf")
-  expect_identical(output$type, "Audio")
+  expect_identical(output$type, "STT")
   expect_identical(output$pricing, "")
   expect_match(output$description, "engine=crispasr", fixed = TRUE)
   expect_match(output$description, "quant=q8_0", fixed = TRUE)

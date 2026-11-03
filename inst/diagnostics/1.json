@@ -117,6 +117,21 @@
     "additionalProperties": false
   },
   "messages": {
+    "tts_native_v2": {"message": "A geração local de voz exige a versão 2 do bloco.", "hint": "Atualize explicitamente a versão do bloco; os workflows antigos permanecem na versão 1.", "category": "validation"},
+    "tts_native_parameter": {"message": "Este parâmetro não é suportado pelo adaptador de voz escolhido.", "hint": "Remova o parâmetro ou escolha um serviço compatível.", "category": "validation"},
+    "tts_reference_consent": {"message": "Confirme a autorização para usar o áudio de referência.", "hint": "Preencha Tenho autorização para usar esta voz antes de executar.", "category": "validation"},
+    "tts_marking_required": {"message": "O motor exige assumir a identificação do áudio gerado para desativar o aviso falado.", "hint": "Ative Assumo a identificação do áudio como gerado por IA ou mantenha o aviso falado.", "category": "validation"},
+    "tts_reference_invalid": {"message": "O áudio de referência não existe, está vazio ou não pôde ser decodificado.", "hint": "Use um arquivo local de áudio válido. A geração não foi iniciada.", "category": "validation"},
+    "tts_reference_ignored": {"message": "O motor não confirmou o uso do áudio de referência.", "hint": "O resultado foi rejeitado para não substituir silenciosamente a voz escolhida.", "category": "provider"},
+    "tts_model_invalid": {"message": "O modelo local de voz não é um GGUF VoxCPM2 válido e disponível.", "hint": "Escolha um arquivo já baixado ou configure tts_native_model. Nenhum download é feito durante a geração.", "category": "validation"},
+    "native_model_modality": {"message": "Este modelo de geração de voz não pode ser usado para transcrever áudio.", "hint": "Escolha um modelo STT.", "category": "validation"},
+    "tts_engine_missing": {"message": "O executável CrispASR não foi encontrado ou não pode ser executado.", "hint": "Configure tts_native_executable ou informe executable.", "category": "validation"},
+    "tts_engine_unsupported": {"message": "Este executável não declara suporte ao backend voxcpm2-tts.", "hint": "Configure uma versão do CrispASR com suporte a VoxCPM2.", "category": "validation"},
+    "tts_device_invalid": {"message": "O dispositivo TTS deve ser auto, cpu, vulkan, cuda ou metal.", "category": "validation"},
+    "tts_native_failed": {"message": "O motor local não conseguiu concluir a geração de voz.", "hint": "Confira o diagnóstico do motor antes de tentar novamente.", "category": "provider"},
+    "tts_native_timeout": {"message": "O tempo máximo da geração local de voz foi atingido.", "hint": "O processo foi encerrado. Aumente o prazo ou reduza o texto.", "category": "provider"},
+    "tts_native_audio_invalid": {"message": "O motor local não produziu um áudio válido no formato solicitado.", "hint": "Nenhuma nova geração foi iniciada automaticamente.", "category": "provider"},
+
     "image_reference_size": {"message": "Uma referência excede o limite de tamanho aceito por este modelo.", "hint": "Reduza o arquivo antes de tentar a geração.", "category": "validation", "stage": "preflight"},
     "image_decoder_missing": {"message": "Instale FFmpeg e ffprobe para validar as imagens antes de gerar.", "category": "validation", "stage": "preflight"},
     "image_references_unsupported": {"message": "Este modelo não possui suporte mapeado a referências de imagem.", "hint": "Escolha um modelo com referências habilitadas ou remova essa entrada.", "category": "validation"},
@@ -301,6 +316,16 @@
     "unsupported_provider": {"message": "O serviço escolhido não oferece esta operação no adaptador instalado.", "category": "validation"},
     "validation_failed": {"message": "Há erros nos argumentos. Corrija os campos indicados antes de executar.", "category": "validation"},
     "workflow_depth": {"message": "Os subworkflows excedem o limite de 8 níveis.", "category": "workflow"},
-    "workflow_limit": {"message": "O documento excede o limite de 64 definições de subworkflow.", "category": "workflow"}
+    "workflow_limit": {"message": "O documento excede o limite de 64 definições de subworkflow.", "category": "workflow"},
+    "parameter_schema_invalid": {"message": "O schema de parâmetros não tem uma estrutura válida.", "hint": "Use schemas de objetos fechados, com tipos, limites e padrões válidos.", "category": "validation"},
+    "parameter_schema_reserved": {"message": "Este campo é controlado pelo contrato do bloco ou pela configuração do serviço.", "hint": "Use o argumento comum correspondente. Opções do modelo não podem substituir entradas, credenciais ou comandos.", "category": "validation"},
+    "parameter_registry_corrupt": {"message": "Não foi possível ler o cadastro versionado de schemas.", "hint": "O arquivo está inválido ou contém revisões inconsistentes. Restaure uma cópia íntegra antes de salvar.", "category": "validation"},
+    "parameter_schema_conflict": {"message": "O schema foi atualizado desde a última leitura.", "hint": "Recarregue a revisão atual antes de salvar suas alterações.", "category": "validation"},
+    "parameter_schema_revision": {"message": "A revisão solicitada do schema não existe.", "hint": "Confira o serviço, modelo, função e número da revisão.", "category": "validation"},
+    "parameter_schema_integrity": {"message": "O conteúdo do schema não corresponde ao seu identificador de integridade.", "hint": "Resolva novamente o schema após editar seu cadastro; não altere uma revisão já incorporada ao workflow.", "category": "validation"},
+    "parameter_schema_mismatch": {"message": "O schema selecionado pertence a outro serviço, modelo ou função.", "hint": "Selecione o schema correspondente a este bloco.", "category": "validation"},
+    "parameter_schema_required": {"message": "Estas opções precisam de um schema de serviço/modelo.", "hint": "Cadastre as opções e selecione o snapshot retornado por gen_resolve_parameter_schema().", "category": "validation"},
+    "model_options_conflict": {"message": "As opções específicas entram em conflito com argumentos já definidos.", "hint": "Informe cada opção em um único lugar. Não combine model_options com replicate_input.", "category": "validation"},
+    "model_options_unsupported": {"message": "A Genflow ainda não encaminha esta opção para o serviço selecionado.", "hint": "Cadastrar um schema valida os dados, mas o motor também precisa ter suporte ao envio da opção.", "category": "validation"}
   }
 }

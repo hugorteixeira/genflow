@@ -11,6 +11,7 @@ applications can call the installed package through the same boundary.
 | Provider definitions | `list_providers()`, `get_provider()`, `set_provider_openai_compat()`, `rm_provider()`, `test_provider()` | Existing provider registry and endpoint checks |
 | Credentials | `gen_credentials()`, `gen_detect_credentials()`, `gen_save_credentials()`, `gen_import_credentials()`, `gen_delete_credentials()` | Field metadata, masked state and private Renviron persistence |
 | Catalog | `gen_models()`, `gen_update_models()`, `gen_show_models()` | Full machine-readable data, explicit refresh and console presentation |
+| Parameter schemas | `gen_parameter_schemas()`, `gen_save_parameter_schema()`, `gen_resolve_parameter_schema()`, `gen_validate_parameters()` | Versioned service/model definitions and portable validation; see [parameter schemas](parameter-schemas.md) |
 | Favorites | `gen_model_favorites()` | Read, normalize or replace model selections |
 | Local runtime | `gen_local_config()`, `gen_local_diagnostics()` | Existing configuration validation, persistence and diagnostics |
 | Native files | `gen_native_models()`, `gen_native_model_reference()`, `gen_native_model_check()`, `gen_native_model_download()`, `gen_native_model_remove()` | Inventory, exact references, verification, verified publication and guarded removal |
@@ -125,7 +126,7 @@ causes an automatic repeat of a successful download.
 
 The public boundary lives in `R/management.R`, with domain operations in
 `R/management_credentials.R`, `R/management_models.R` and
-`R/management_native.R`. Existing credential storage, provider registry,
+`R/management_native.R`; `R/parameter_schemas.R` owns versioned parameter schemas. Existing credential storage, provider registry,
 runtime configuration, cache downloader and worker implementations remain
 their respective owners. `R/agent_interface.R` handles forms and presentation.
 
@@ -135,3 +136,8 @@ message and hint. Known validation failures retain their code; unclassified
 failures have a safe message and a redacted log reference. Existing exported
 provider/configuration functions keep their compatible behavior and can also
 be normalized at the application boundary with `gen_diagnostic()`.
+
+
+Native model inventory now includes `modality` (`stt`, `tts`, `unknown`). Catalog
+reads normalize older native `Audio` rows without modifying their CSV files.
+Saved `tts_native_model` is protected by the same removal gate as STT models.

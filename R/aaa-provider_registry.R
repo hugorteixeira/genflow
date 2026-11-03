@@ -5,7 +5,7 @@
   groq = "Groq", cerebras = "Cerebras", together = "Together", sambanova = "SambaNova",
   nebius = "Nebius", deepseek = "DeepSeek", perplexity = "Perplexity",
   fireworks = "Fireworks", deepinfra = "DeepInfra", hyperbolic = "Hyperbolic",
-  hf = "Hugging Face", `local-native` = "Native STT (local)",
+  hf = "Hugging Face", `local-native` = "Native speech (local)",
   `local-openai` = "OpenAI-compatible STT (local)", ollama = "Ollama",
   llamacpp = "llama-cpp", gemini = "Gemini", fal = "FAL", replicate = "Replicate",
   elevenlabs = "ElevenLabs", acestep = "ACE-Step (local)",
@@ -39,7 +39,7 @@
   out <- lapply(names(.GENFLOW_PROVIDER_LABELS), function(id) {
     list(id = id, label = unname(.GENFLOW_PROVIDER_LABELS[[id]]), kind = "builtin",
          modalities = c(text = id %in% text, image = id %in% image, stt = id %in% stt,
-                        tts = id %in% c("openai", "replicate"), sfx = id == "elevenlabs",
+                        tts = id %in% c("openai", "replicate", "local-native"), sfx = id == "elevenlabs",
                         music = id %in% c("elevenlabs", "acestep"), video = FALSE),
          text_function = if (id %in% text) paste0(".gen_txt_", id) else NULL,
          model_resolver = if (id %in% setdiff(text, c("openai", "openrouter", "hf"))) paste0(".", id, "_resolve_model") else NULL,
@@ -81,11 +81,11 @@
 }
 
 .genflow_compat_text <- function(id, prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
   spec <- .genflow_compat_spec(id)
   .gen_txt_openai_compatible(spec$label, prompt, .genflow_compat_model(id, model, timeout_secs),
     temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs,
-    base_url = .genflow_compat_base_url(id), api_key = .genflow_compat_key(id), chat_path = spec$chat_path)
+    base_url = .genflow_compat_base_url(id), api_key = .genflow_compat_key(id), chat_path = spec$chat_path, model_options = model_options)
 }
 
 .genflow_compat_catalog <- function(id, directory, verbose = TRUE) {
@@ -131,6 +131,8 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
   list(schema_version = 1L, service = id, model = model,
        modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, sfx = FALSE, music = FALSE, video = FALSE),
        adapter_features = features, model_support = "unverified",
+       model_options = stats::setNames(lapply(.gen_parameter_blocks, function(block)
+         .gen_model_options_transport(block, id)), .gen_parameter_blocks),
        image_references = .gen_image_reference_spec(id,model),
        sampling_temperature = if (id == "openai" && !is.null(model)) .genflow_openai_sampling(model, reasoning) else NA)
 }

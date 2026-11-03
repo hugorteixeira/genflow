@@ -1,0 +1,219 @@
+{
+  "id": "gen_img",
+  "version": 3,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-content-kind": "text",
+        "title": "Descrição da imagem",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "add": {
+        "type": [
+          "string",
+          "array",
+          "object",
+          "null"
+        ],
+        "x-r-types": [
+          "data.frame",
+          "matrix"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "label": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "service": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "hf",
+        "title": "Serviço",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 100,
+        "x-owner": "runtime"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Modelo",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-default-by": {
+          "field": "service",
+          "values": {
+            "hf": "black-forest-labs/FLUX.1-schnell",
+            "fal": "fal-ai/flux/schnell",
+            "replicate": "black-forest-labs/flux-schnell",
+            "openai": "gpt-image-2"
+          }
+        },
+        "maxLength": 300,
+        "x-owner": "runtime"
+      },
+      "temp": {
+        "type": "number",
+        "minimum": 0,
+        "default": 5,
+        "title": "Orientação (guidance)"
+      },
+      "steps": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 18,
+        "title": "Passos"
+      },
+      "h": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 1072,
+        "title": "Altura (px)"
+      },
+      "y": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 1920,
+        "title": "Largura (px)"
+      },
+      "model_version": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Versão do modelo"
+      },
+      "replicate_input": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": true,
+        "default": null,
+        "title": "Parâmetros específicos do Replicate"
+      },
+      "poll_interval": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 3,
+        "title": "Intervalo de consulta (s)"
+      },
+      "max_poll_seconds": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 600,
+        "title": "Tempo máximo de espera (s)"
+      },
+      "persist": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "add_img": {
+        "type": [
+          "string",
+          "array",
+          "null"
+        ],
+        "pattern": "\\S",
+        "items": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "default": null,
+        "title": "Referências de imagem",
+        "x-content-kind": "image",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "model_options": {
+        "type": "object",
+        "default": {},
+        "title": "Opções específicas do modelo",
+        "description": "Valores definidos pelo schema de serviço/modelo selecionado. Não substituem argumentos comuns.",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "parameter_schema": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "default": null,
+        "title": "Schema de serviço/modelo",
+        "description": "Snapshot portátil e versionado retornado por gen_resolve_parameter_schema().",
+        "x-ui": {
+          "hidden": true
+        }
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_img",
+  "modality": "image",
+  "inputs": {
+    "prompt": "asset:text|asset:json",
+    "add_img": "asset:image|list:image"
+  },
+  "outputs": {
+    "content": "asset:image"
+  },
+  "studio": {
+    "id": "image.generate",
+    "inputs": {
+      "text": "text|json",
+      "image": "asset:image|list:image"
+    },
+    "output": "image",
+    "execution": "inline",
+    "available": true
+  }
+}

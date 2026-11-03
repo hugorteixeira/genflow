@@ -358,6 +358,7 @@
 
   models_dir <- file.path(bundle_root, "models")
   if (dir.exists(models_dir)) {
+    .gen_parameter_records(models_dir, snapshot = FALSE)
     model_files <- list.files(models_dir, recursive = TRUE, full.names = TRUE)
     for (path in model_files) {
       extension <- tolower(tools::file_ext(path))

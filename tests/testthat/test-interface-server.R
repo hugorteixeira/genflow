@@ -664,7 +664,7 @@ test_that("Native STT manager verifies, downloads, and deletes cached models", {
     expect_match(state$native_model_status, "Downloaded:", fixed = TRUE)
     expect_match(
       state$native_model_status,
-      "available under Models > Native STT",
+      "available under Models > Native speech",
       fixed = TRUE
     )
     expect_true("/cache/granite-q8_0.gguf" %in% state$native_models$path)

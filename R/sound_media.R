@@ -20,19 +20,19 @@
   format <- .gen_audio_magic_format(path)
   if (is.null(format)) .gen_stop("sound_invalid",stage="output_validation",outcome="succeeded")
   probe <- tryCatch(processx::run("ffprobe",c("-v","error","-show_entries",
-    "format=duration:stream=codec_type,sample_rate,channels","-of","json",path),
-    timeout=min(30,budget())*1000,error_on_status=FALSE),error=function(e) NULL)
+    "format=duration:stream=codec_type,codec_name,sample_rate,channels","-of","json",path),
+    timeout=min(30,budget()),error_on_status=FALSE),error=function(e) NULL)
   data <- if (!is.null(probe) && probe$status==0L) tryCatch(jsonlite::fromJSON(probe$stdout,simplifyVector=FALSE),error=function(e) NULL) else NULL
   streams <- data$streams; duration <- suppressWarnings(as.numeric(data$format$duration))
   if (length(streams)!=1L || !identical(streams[[1L]]$codec_type,"audio") ||
       length(duration)!=1L || !is.finite(duration) || duration<=0 || duration>660)
     .gen_stop("sound_invalid",stage="output_validation",outcome="succeeded")
   decoded <- tryCatch(processx::run("ffmpeg",c("-v","error","-xerror","-threads","1","-i",path,
-    "-map","0:a:0","-f","null","-"),timeout=min(30,budget())*1000,error_on_status=FALSE),error=function(e) NULL)
+    "-map","0:a:0","-f","null","-"),timeout=min(30,budget()),error_on_status=FALSE),error=function(e) NULL)
   if (is.null(decoded) || decoded$status!=0L || nzchar(decoded$stderr))
     .gen_stop("sound_invalid",stage="output_validation",outcome="succeeded")
   list(format=format,mime=.gen_audio_format_content_type(format),duration_seconds=duration,
-    sample_rate=as.integer(streams[[1L]]$sample_rate),channels=streams[[1L]]$channels,
+    sample_rate=as.integer(streams[[1L]]$sample_rate),channels=streams[[1L]]$channels,codec=streams[[1L]]$codec_name,
     bytes=unname(info$size))
 }
 

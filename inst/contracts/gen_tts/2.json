@@ -1,0 +1,321 @@
+{
+  "id": "gen_tts",
+  "version": 2,
+  "kind": "function",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "pattern": "\\S",
+        "x-content-kind": "text",
+        "title": "Texto da fala",
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "add": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "directory": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "label": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "service": {
+        "type": "string",
+        "pattern": "\\S",
+        "default": "openai",
+        "title": "Serviço",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 100,
+        "x-owner": "runtime"
+      },
+      "model": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": "gpt-4o-mini-tts",
+        "title": "Modelo",
+        "x-ui": {
+          "hidden": true
+        },
+        "maxLength": 300,
+        "x-default-by": {
+          "field": "service",
+          "replace": [
+            "gpt-4o-mini-tts"
+          ],
+          "values": {
+            "openai": "gpt-4o-mini-tts",
+            "replicate": "qwen/qwen3-tts",
+            "local-native": "auto"
+          }
+        },
+        "x-owner": "runtime",
+        "description": "No serviço local-native, auto usa apenas o modelo TTS já configurado. Não baixa modelos."
+      },
+      "voice": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "\\S",
+        "default": null,
+        "title": "Voz"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "mp3",
+          "opus",
+          "aac",
+          "flac",
+          "wav",
+          "pcm"
+        ],
+        "default": "mp3",
+        "title": "Formato do áudio"
+      },
+      "speed": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "minimum": 0.25,
+        "maximum": 4,
+        "default": 1,
+        "title": "Velocidade"
+      },
+      "instructions": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "title": "Instruções para a voz"
+      },
+      "preview": {
+        "type": "boolean",
+        "default": false,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "timeout_api": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "default": 240,
+        "title": "Tempo máximo da chamada (s)"
+      },
+      "persist": {
+        "type": "boolean",
+        "default": true,
+        "x-ui": {
+          "hidden": true
+        },
+        "x-owner": "runtime"
+      },
+      "reference_audio": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "title": "Referência de voz",
+        "x-ui": {
+          "hidden": true
+        },
+        "pattern": "\\S",
+        "x-content-kind": "audio",
+        "x-owner": "runtime"
+      },
+      "reference_consent": {
+        "type": "boolean",
+        "default": false,
+        "title": "Tenho autorização para usar esta voz",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        }
+      },
+      "reference_identity": {
+        "type": "string",
+        "default": "unknown",
+        "title": "Origem da voz",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "enum": [
+          "unknown",
+          "synthetic",
+          "real_person"
+        ]
+      },
+      "spoken_disclaimer": {
+        "type": "boolean",
+        "default": true,
+        "title": "Incluir aviso falado do motor",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        }
+      },
+      "marking_responsibility": {
+        "type": "boolean",
+        "default": false,
+        "title": "Assumo a identificação do áudio como gerado por IA",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "description": "Exigido pelo motor para desativar o aviso falado. A marcação de áudio e os metadados do motor continuam ativos."
+      },
+      "executable": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "title": "Executável CrispASR",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "pattern": "\\S"
+      },
+      "native_device": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "title": "Dispositivo local",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "enum": [
+          null,
+          "auto",
+          "cpu",
+          "vulkan",
+          "cuda",
+          "metal"
+        ]
+      },
+      "threads": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "default": null,
+        "title": "Threads de CPU",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "minimum": 1,
+        "maximum": 256
+      },
+      "seed": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "default": null,
+        "title": "Semente",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "minimum": 0,
+        "maximum": 2147483647,
+        "description": "Zero usa amostragem não determinística. O resultado também depende da versão do motor e do hardware."
+      },
+      "steps": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "default": null,
+        "title": "Passos de difusão",
+        "x-ui": {
+          "service": [
+            "local-native"
+          ]
+        },
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Padrão local: 10 passos."
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "function": "gen_tts",
+  "modality": "tts",
+  "inputs": {
+    "text": "asset:text|asset:json",
+    "reference_audio": "asset:audio"
+  },
+  "outputs": {
+    "content": "asset:audio"
+  },
+  "studio": {
+    "id": "audio.speak",
+    "inputs": {
+      "text": "text|json",
+      "reference_audio": "audio"
+    },
+    "output": "audio",
+    "execution": "inline",
+    "available": true,
+    "bindings": {
+      "reference_audio": "reference_audio"
+    }
+  }
+}

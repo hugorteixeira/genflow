@@ -10,18 +10,30 @@ gen_tts(text, ...)
 
 \method{gen_tts}{default}(
   text,
-  add = .gen_default("gen_tts", "add"),
-  directory = .gen_default("gen_tts", "directory"),
-  label = .gen_default("gen_tts", "label"),
-  service = .gen_default("gen_tts", "service"),
-  model = .gen_default("gen_tts", "model"),
-  voice = .gen_default("gen_tts", "voice"),
-  format = .gen_default("gen_tts", "format"),
-  speed = .gen_default("gen_tts", "speed"),
-  instructions = .gen_default("gen_tts", "instructions"),
-  preview = .gen_default("gen_tts", "preview"),
-  timeout_api = .gen_default("gen_tts", "timeout_api"),
-  persist = .gen_default("gen_tts", "persist"),
+  add = .gen_default("gen_tts", "add", 3L),
+  directory = .gen_default("gen_tts", "directory", 3L),
+  label = .gen_default("gen_tts", "label", 3L),
+  service = .gen_default("gen_tts", "service", 3L),
+  model = .gen_default("gen_tts", "model", 3L),
+  voice = .gen_default("gen_tts", "voice", 3L),
+  format = .gen_default("gen_tts", "format", 3L),
+  speed = .gen_default("gen_tts", "speed", 3L),
+  instructions = .gen_default("gen_tts", "instructions", 3L),
+  preview = .gen_default("gen_tts", "preview", 3L),
+  timeout_api = .gen_default("gen_tts", "timeout_api", 3L),
+  persist = .gen_default("gen_tts", "persist", 3L),
+  reference_audio = .gen_default("gen_tts", "reference_audio", 3L),
+  reference_consent = .gen_default("gen_tts", "reference_consent", 3L),
+  reference_identity = .gen_default("gen_tts", "reference_identity", 3L),
+  spoken_disclaimer = .gen_default("gen_tts", "spoken_disclaimer", 3L),
+  marking_responsibility = .gen_default("gen_tts", "marking_responsibility", 3L),
+  executable = .gen_default("gen_tts", "executable", 3L),
+  native_device = .gen_default("gen_tts", "native_device", 3L),
+  threads = .gen_default("gen_tts", "threads", 3L),
+  seed = .gen_default("gen_tts", "seed", 3L),
+  steps = .gen_default("gen_tts", "steps", 3L),
+  model_options = .gen_default("gen_tts", "model_options", 3L),
+  parameter_schema = .gen_default("gen_tts", "parameter_schema", 3L),
   ...
 )
 
@@ -61,6 +73,36 @@ may return another audio container; the saved filename and returned
 \item{persist}{Logical; save to the output directory. FALSE returns a
 temporary file in \code{response_value} and sets \code{saved_file} to NA. The caller
 owns moving or deleting that file before the R session ends.}
+
+\item{reference_audio}{Optional local audio file used as a voice reference
+by local VoxCPM2. It is decoded before inference; URLs are not downloaded.}
+
+\item{reference_consent}{Explicit permission to use the reference voice,
+required by CrispASR when \code{reference_audio} is supplied.}
+
+\item{reference_identity}{Reference identity: unknown, synthetic or real_person.}
+
+\item{spoken_disclaimer}{Keep the engine's audible AI disclosure. Disabling
+it requires \code{marking_responsibility = TRUE}; engine watermarking remains on.}
+
+\item{marking_responsibility}{Explicit engine attestation when disabling
+the spoken disclaimer.}
+
+\item{executable}{Optional CrispASR executable, overriding local configuration.}
+
+\item{native_device}{Local accelerator: auto, cpu, vulkan, cuda or metal.}
+
+\item{threads}{Optional native CPU threads (default 4).}
+
+\item{seed}{Optional native RNG seed (default 0, non-deterministic).}
+
+\item{steps}{Optional native diffusion steps (default 10).}
+
+\item{model_options}{Named object of model-specific options. Validated against
+\code{parameter_schema}; unsupported transports reject options before inference.}
+
+\item{parameter_schema}{Portable snapshot from \code{\link[=gen_resolve_parameter_schema]{gen_resolve_parameter_schema()}}.
+Nonempty options without a snapshot resolve the current registered schema.}
 }
 \value{
 Invisibly returns a list with \code{response_value} (saved file path),
@@ -71,7 +113,7 @@ preserved.
 }
 \description{
 High-level text-to-speech (TTS) wrapper that dispatches to provider-specific
-implementations (currently OpenAI and Replicate). Returns the saved audio file path.
+implementations (OpenAI, Replicate and local CrispASR/VoxCPM2). Returns the saved audio file path.
 }
 \details{
 Replicate model metadata is fetched at most once per \code{gen_tts()}

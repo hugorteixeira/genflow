@@ -220,8 +220,11 @@ gen_model_favorites <- function(models = NULL, directory = NULL, catalog = NULL,
       return(NULL)
     }
 
-    if (!"type" %in% names(df)) {
-      df$type <- NA_character_
+    # Normalize older generic Audio rows without rewriting user catalogs.
+    if (!"type" %in% names(df)) df$type <- NA_character_
+    for (i in which(df$service == "local-native")) {
+      native_path <- tryCatch(.genflow_crispasr_managed_model(df$model[[i]]), error=function(e) "")
+      df$type[[i]] <- .gen_native_model_type(if (nzchar(native_path)) native_path else df$model[[i]])
     }
     df$type <- as.character(df$type)
 

@@ -87,7 +87,8 @@
                             my_tools = NULL,
                             plugins = NULL,
                             timeout_secs = 80,
-                            max_output_tokens = NULL) {
+                            max_output_tokens = NULL,
+                              model_options = list()) {
   use_responses <- !is.null(reasoning)
   api_url <- if (use_responses) {
     "https://api.openai.com/v1/responses"
@@ -176,6 +177,8 @@
     body[[if (use_responses) "max_output_tokens" else "max_completion_tokens"]] <- max_output_tokens
   }
 
+  body <- .gen_model_payload(body, model_options)
+
   response <- tryCatch(
     {
       httr::POST(
@@ -239,7 +242,8 @@
                                 tools = FALSE,
                                 my_tools = NULL,
                                 plugins = NULL,
-                                timeout_secs = 80) {
+                                timeout_secs = 80,
+                              model_options = list()) {
   # ... (initial code: default model, API key, URL, headers, initial_message, body) ...
   if (is.null(model)) {
     model <- "mistralai/mistral-7b-instruct"
@@ -288,6 +292,8 @@
 
 
   # --- API call with httr::timeout() and tryCatch ---
+  body <- .gen_model_payload(body, model_options)
+
   response <- tryCatch(
     {
       httr::POST(
@@ -349,8 +355,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_groq <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("groq", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("groq", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -373,8 +379,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_cerebras <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("cerebras", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("cerebras", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -397,8 +403,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_together <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("together", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("together", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -421,8 +427,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_sambanova <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("sambanova", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("sambanova", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -577,7 +583,8 @@
                                        warn_ignored_reasoning = TRUE,
                                        warn_ignored_plugins = TRUE,
                                        reasoning_field = NULL,
-                                       plugins_field = NULL) {
+                                       plugins_field = NULL,
+                                       model_options = list()) {
   if (isTRUE(api_key_required) && !nzchar(api_key)) {
     .gen_stop("missing_credential",params=list(credential=provider_label),stage="preflight")
   }
@@ -643,6 +650,8 @@
     header_args[[auth_header]] <- auth_value
   }
   headers <- do.call(httr::add_headers, header_args)
+
+  body <- .gen_model_payload(body, model_options)
 
   response <- tryCatch(
     {
@@ -740,7 +749,8 @@
                                             tools = FALSE,
                                             my_tools = NULL,
                                             plugins = NULL,
-                                            timeout_secs = 80) {
+                                            timeout_secs = 80,
+                                            model_options = list()) {
   provider_id <- as.character(provider_cfg$id %||% "")[1]
   provider_label <- as.character(provider_cfg$label %||% provider_id %||% "Custom")[1]
 
@@ -819,7 +829,8 @@
         warn_ignored_reasoning = !supports_reasoning,
         warn_ignored_plugins = !supports_plugins,
         reasoning_field = reasoning_field,
-        plugins_field = plugins_field
+        plugins_field = plugins_field,
+        model_options = model_options
       )
 
       if (.genflow_try_next_route(response)) {
@@ -848,8 +859,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_nebius <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("nebius", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("nebius", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -867,8 +878,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_deepseek <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("deepseek", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("deepseek", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -886,8 +897,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_perplexity <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("perplexity", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("perplexity", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -905,8 +916,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_fireworks <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("fireworks", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("fireworks", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -924,8 +935,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_deepinfra <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("deepinfra", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("deepinfra", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 #' @keywords internal
@@ -943,8 +954,8 @@
 #' @keywords internal
 #' @noRd
 .gen_txt_hyperbolic <- function(prompt, model, temp_v, reasoning, add_img,
-                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80) {
-  .genflow_compat_text("hyperbolic", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs)
+                                 tools = FALSE, my_tools = NULL, plugins = NULL, timeout_secs = 80, model_options = list()) {
+  .genflow_compat_text("hyperbolic", prompt, model, temp_v, reasoning, add_img, tools, my_tools, plugins, timeout_secs, model_options)
 }
 
 .GEMINI_TEXT_DEFAULT_MODEL <- "gemini-3.6-flash"
@@ -1969,7 +1980,8 @@
                               plugins = NULL,
                               timeout_secs = 80,
                               base_url = NULL,
-                              config = NULL) {
+                              config = NULL,
+                              model_options = list()) {
   base_url_candidates <- .llamacpp_base_url_candidates(
     base_url = base_url,
     config = config
@@ -2025,6 +2037,8 @@
     header_args[["Authorization"]] <- paste("Bearer", api_key)
   }
   headers <- do.call(httr::add_headers, header_args)
+  body <- .gen_model_payload(body, model_options)
+
   last_error <- "API_ERRORR: Could not connect to a compatible llama-cpp chat endpoint."
 
   for (base_url in base_url_candidates) {
@@ -2333,6 +2347,10 @@
 #'   including reasoning tokens. Currently supported by `service = "openai"`;
 #'   other services reject an explicit cap rather than silently ignoring it.
 #'   NULL retains the provider default. A cap may produce truncated output.
+#' @param model_options Named object of model-specific options. Validated against
+#'   `parameter_schema`; unsupported transports reject options before inference.
+#' @param parameter_schema Portable snapshot from [gen_resolve_parameter_schema()].
+#'   Nonempty options without a snapshot resolve the current registered schema.
 #' @param ... Reserved for future provider-specific arguments. Supplying values
 #'   currently raises an error instead of silently ignoring them.
 #' @return A list with elements: `response_value`, `label`, `label_cat`,
@@ -2362,30 +2380,32 @@ gen_txt <- function(context, ...) {
 #' @export
 gen_txt.default <- function(
   context,
-  res_context = .gen_default("gen_txt", "res_context"),
-  add = .gen_default("gen_txt", "add"),
-  add_img = .gen_default("gen_txt", "add_img"),
-  directory = .gen_default("gen_txt", "directory"),
-  label = .gen_default("gen_txt", "label"),
-  service = .gen_default("gen_txt", "service"),
-  model = .gen_default("gen_txt", "model"),
-  temp = .gen_default("gen_txt", "temp"),
-  reasoning = .gen_default("gen_txt", "reasoning"),
-  tools = .gen_default("gen_txt", "tools"),
-  plugins = .gen_default("gen_txt", "plugins"),
-  my_tools = .gen_default("gen_txt", "my_tools"),
-  timeout_api = .gen_default("gen_txt", "timeout_api"),
-  base_url = .gen_default("gen_txt", "base_url"),
-  null_repeat = .gen_default("gen_txt", "null_repeat"),
-  persist = .gen_default("gen_txt", "persist"),
-  retry_delays = .gen_default("gen_txt", "retry_delays"),
-  retry_deadline = .gen_default("gen_txt", "retry_deadline"),
-  max_output_tokens = .gen_default("gen_txt", "max_output_tokens"),
+  res_context = .gen_default("gen_txt", "res_context", 2L),
+  add = .gen_default("gen_txt", "add", 2L),
+  add_img = .gen_default("gen_txt", "add_img", 2L),
+  directory = .gen_default("gen_txt", "directory", 2L),
+  label = .gen_default("gen_txt", "label", 2L),
+  service = .gen_default("gen_txt", "service", 2L),
+  model = .gen_default("gen_txt", "model", 2L),
+  temp = .gen_default("gen_txt", "temp", 2L),
+  reasoning = .gen_default("gen_txt", "reasoning", 2L),
+  tools = .gen_default("gen_txt", "tools", 2L),
+  plugins = .gen_default("gen_txt", "plugins", 2L),
+  my_tools = .gen_default("gen_txt", "my_tools", 2L),
+  timeout_api = .gen_default("gen_txt", "timeout_api", 2L),
+  base_url = .gen_default("gen_txt", "base_url", 2L),
+  null_repeat = .gen_default("gen_txt", "null_repeat", 2L),
+  persist = .gen_default("gen_txt", "persist", 2L),
+  retry_delays = .gen_default("gen_txt", "retry_delays", 2L),
+  retry_deadline = .gen_default("gen_txt", "retry_deadline", 2L),
+  max_output_tokens = .gen_default("gen_txt", "max_output_tokens", 2L),
+  model_options = .gen_default("gen_txt", "model_options", 2L),
+  parameter_schema = .gen_default("gen_txt", "parameter_schema", 2L),
   ...
 ) {
   withCallingHandlers({
   model_was_default <- missing(model)
-  .gen_internal_validate("gen_txt")
+  .gen_internal_validate("gen_txt", version = 2L)
   if (isTRUE(persist) && is.null(directory)) directory <- .genflow_default_dir("texts")
   service_lower <- service
   if (!is.null(max_output_tokens)) max_output_tokens <- as.integer(max_output_tokens)
@@ -2477,7 +2497,8 @@ gen_txt.default <- function(
         tools = tools,
         my_tools = my_tools,
         plugins = plugins,
-        timeout_secs = timeout_api
+        timeout_secs = timeout_api,
+        model_options = model_options
       ))
     }
     spec <- .genflow_provider_registry()[[service]]
@@ -2487,6 +2508,7 @@ gen_txt.default <- function(
                  plugins = plugins, timeout_secs = timeout_api)
     if (service %in% c("ollama", "llamacpp")) args["base_url"] <- list(base_url)
     if (!is.null(max_output_tokens)) args$max_output_tokens <- max_output_tokens
+    if (length(model_options)) args$model_options <- model_options
     do.call(get(spec$text_function, envir = asNamespace("genflow")), args)
 
   }
@@ -2542,6 +2564,7 @@ gen_txt.default <- function(
                 tokens_sent = tokens_sent, tokens_received = tokens_received,
                 saved_file = saved_file, attempts = attempts)
   result <- .genflow_merge_fields(result, provider_result$metadata)
+  if (!is.null(parameter_schema)) result$parameters <- list(model_options = model_options, parameter_schema = parameter_schema)
   .genflow_complete_result(result, inference_status = status, persistence = persistence, error = error)
   }, error = .gen_boundary_error)
 }

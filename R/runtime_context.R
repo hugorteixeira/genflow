@@ -41,6 +41,7 @@
     select <- grepl("^(GENFLOW|OPENAI|OPENROUTER|ANTHROPIC|CLAUDE|GROQ|CEREBRAS|TOGETHER|SAMBANOVA|SAMBA|NEBIUS|DEEPSEEK|PERPLEXITY|FIREWORKS|DEEPINFRA|HYPERBOLIC|GEMINI|GOOGLE|ELEVENLABS|ACESTEP|OLLAMA|LLAMA_CPP|LLAMACPP)_(BASE_URL|MODEL|API_VERSION)$", names(env))
     out$environment <- as.list(env[select | names(env) %in% custom_model_env])
     out$local <- gen_local_config()
+    out$parameter_schemas <- .gen_parameter_records()
     out$schema_version <- 1L
   }
   out
@@ -49,6 +50,7 @@
 .genflow_snapshot_config <- function() {
   getOption("genflow.runtime_snapshot") %||% list(
     providers = .genflow_list_custom_provider_configs(),
-    local = .genflow_read_local_config()
+    local = .genflow_read_local_config(),
+    parameter_schemas = .gen_parameter_records()
   )
 }

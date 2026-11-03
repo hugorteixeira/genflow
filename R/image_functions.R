@@ -31,6 +31,10 @@
 #'   path in `response_value`, and sets `saved_file` to NA.
 #' @param add_img Optional image path, HTTP(S) URL, data URI, or ordered vector/list
 #'   of these references. Support and limits depend on the selected model.
+#' @param model_options Named object of model-specific options. Validated against
+#'   `parameter_schema`; unsupported transports reject options before inference.
+#' @param parameter_schema Portable snapshot from [gen_resolve_parameter_schema()].
+#'   Nonempty options without a snapshot resolve the current registered schema.
 #' @param ... Reserved for S3 methods.
 #'
 #' @return Invisibly returns a list with fields such as `response_value` (saved file path
@@ -53,25 +57,28 @@ gen_img <- function(prompt, ...) {
 #' @export
 gen_img.default <- function(
   prompt,
-  add = .gen_default("gen_img", "add", 2L),
-  directory = .gen_default("gen_img", "directory", 2L),
-  label = .gen_default("gen_img", "label", 2L),
-  service = .gen_default("gen_img", "service", 2L),
-  model = .gen_default("gen_img", "model", 2L),
-  temp = .gen_default("gen_img", "temp", 2L),
-  steps = .gen_default("gen_img", "steps", 2L),
-  h = .gen_default("gen_img", "h", 2L),
-  y = .gen_default("gen_img", "y", 2L),
-  model_version = .gen_default("gen_img", "model_version", 2L),
-  replicate_input = .gen_default("gen_img", "replicate_input", 2L),
-  poll_interval = .gen_default("gen_img", "poll_interval", 2L),
-  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds", 2L),
-  persist = .gen_default("gen_img", "persist", 2L),
-  add_img = .gen_default("gen_img", "add_img", 2L),
+  add = .gen_default("gen_img", "add", 3L),
+  directory = .gen_default("gen_img", "directory", 3L),
+  label = .gen_default("gen_img", "label", 3L),
+  service = .gen_default("gen_img", "service", 3L),
+  model = .gen_default("gen_img", "model", 3L),
+  temp = .gen_default("gen_img", "temp", 3L),
+  steps = .gen_default("gen_img", "steps", 3L),
+  h = .gen_default("gen_img", "h", 3L),
+  y = .gen_default("gen_img", "y", 3L),
+  model_version = .gen_default("gen_img", "model_version", 3L),
+  replicate_input = .gen_default("gen_img", "replicate_input", 3L),
+  poll_interval = .gen_default("gen_img", "poll_interval", 3L),
+  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds", 3L),
+  persist = .gen_default("gen_img", "persist", 3L),
+  add_img = .gen_default("gen_img", "add_img", 3L),
+  model_options = .gen_default("gen_img", "model_options", 3L),
+  parameter_schema = .gen_default("gen_img", "parameter_schema", 3L),
   ...
 ) {
   withCallingHandlers({
-    .gen_internal_validate("gen_img", version=2L)
+    .gen_internal_validate("gen_img", version = 3L)
+    if (length(model_options)) replicate_input <- model_options
     .gen_image_tools()
     budget <- .gen_image_budget(max_poll_seconds)
     references <- .gen_image_references(add_img,service,model,budget)
@@ -89,6 +96,7 @@ gen_img.default <- function(
     if (persist && Sys.getenv("genflow_SKIP_PERSIST_LOG","0") != "1") try(.persist_stats_row(list(
       label=label_processed,model=model,temp=temp,duration=result$duration,
       tks_envia=NA_real_,tks_recebe=NA_real_,status_api=result$status_api)),silent=TRUE)
+    if (!is.null(parameter_schema)) result$parameters <- list(model_options = model_options, parameter_schema = parameter_schema)
     invisible(result)
   }, error=.gen_boundary_error)
 }

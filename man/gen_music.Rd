@@ -10,20 +10,22 @@ gen_music(prompt, ...)
 
 \method{gen_music}{default}(
   prompt,
-  add = .gen_default("gen_music", "add"),
-  directory = .gen_default("gen_music", "directory"),
-  label = .gen_default("gen_music", "label"),
-  service = .gen_default("gen_music", "service"),
-  model = .gen_default("gen_music", "model"),
-  duration_seconds = .gen_default("gen_music", "duration_seconds"),
-  format = .gen_default("gen_music", "format"),
-  instrumental = .gen_default("gen_music", "instrumental"),
-  lyrics = .gen_default("gen_music", "lyrics"),
-  seed = .gen_default("gen_music", "seed"),
-  poll_interval = .gen_default("gen_music", "poll_interval"),
-  base_url = .gen_default("gen_music", "base_url"),
-  timeout_api = .gen_default("gen_music", "timeout_api"),
-  persist = .gen_default("gen_music", "persist"),
+  add = .gen_default("gen_music", "add", 2L),
+  directory = .gen_default("gen_music", "directory", 2L),
+  label = .gen_default("gen_music", "label", 2L),
+  service = .gen_default("gen_music", "service", 2L),
+  model = .gen_default("gen_music", "model", 2L),
+  duration_seconds = .gen_default("gen_music", "duration_seconds", 2L),
+  format = .gen_default("gen_music", "format", 2L),
+  instrumental = .gen_default("gen_music", "instrumental", 2L),
+  lyrics = .gen_default("gen_music", "lyrics", 2L),
+  seed = .gen_default("gen_music", "seed", 2L),
+  poll_interval = .gen_default("gen_music", "poll_interval", 2L),
+  base_url = .gen_default("gen_music", "base_url", 2L),
+  timeout_api = .gen_default("gen_music", "timeout_api", 2L),
+  persist = .gen_default("gen_music", "persist", 2L),
+  model_options = .gen_default("gen_music", "model_options", 2L),
+  parameter_schema = .gen_default("gen_music", "parameter_schema", 2L),
   ...
 )
 
@@ -61,6 +63,12 @@ gen_music(prompt, ...)
 \item{timeout_api}{Total budget for submission, polling, download and audio validation.}
 
 \item{persist}{Publish and record statistics. FALSE returns a temporary audio file.}
+
+\item{model_options}{Named object of model-specific options. Validated against
+\code{parameter_schema}; unsupported transports reject options before inference.}
+
+\item{parameter_schema}{Portable snapshot from \code{\link[=gen_resolve_parameter_schema]{gen_resolve_parameter_schema()}}.
+Nonempty options without a snapshot resolve the current registered schema.}
 }
 \value{
 A common Genflow result with audio metadata. On recoverable failure,

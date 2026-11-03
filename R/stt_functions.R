@@ -136,6 +136,10 @@
 #'   both are empty.
 #' @param response_format Response format requested from a local
 #'   OpenAI-compatible server, typically `"json"` or `"verbose_json"`.
+#' @param model_options Named object of model-specific options. Validated against
+#'   `parameter_schema`; unsupported transports reject options before inference.
+#' @param parameter_schema Portable snapshot from [gen_resolve_parameter_schema()].
+#'   Nonempty options without a snapshot resolve the current registered schema.
 #' @param ... Must be empty. Unknown or removed STT arguments fail explicitly.
 #'
 #' @return Invisibly returns a plain list with `response_value` (plain
@@ -196,46 +200,48 @@ gen_stt_capabilities <- function(service) {
 #' @export
 gen_stt.default <- function(
   audio,
-  service = .gen_default("gen_stt", "service"),
-  model = .gen_default("gen_stt", "model"),
-  language = .gen_default("gen_stt", "language"),
-  prompt = .gen_default("gen_stt", "prompt"),
-  directory = .gen_default("gen_stt", "directory"),
-  label = .gen_default("gen_stt", "label"),
-  save_txt = .gen_default("gen_stt", "save_txt"),
-  convert = .gen_default("gen_stt", "convert"),
-  diarize = .gen_default("gen_stt", "diarize"),
-  timestamps = .gen_default("gen_stt", "timestamps"),
-  timeout_api = .gen_default("gen_stt", "timeout_api"),
-  timeout_per_audio_minute = .gen_default("gen_stt", "timeout_per_audio_minute"),
-  poll_interval = .gen_default("gen_stt", "poll_interval"),
-  max_poll_seconds = .gen_default("gen_stt", "max_poll_seconds"),
-  executable = .gen_default("gen_stt", "executable"),
-  native_engine = .gen_default("gen_stt", "native_engine"),
-  native_backend = .gen_default("gen_stt", "native_backend"),
-  native_quant = .gen_default("gen_stt", "native_quant"),
-  native_kv_quant = .gen_default("gen_stt", "native_kv_quant"),
-  native_device = .gen_default("gen_stt", "native_device"),
-  max_new_tokens = .gen_default("gen_stt", "max_new_tokens"),
-  base_url = .gen_default("gen_stt", "base_url"),
-  api_key = .gen_default("gen_stt", "api_key"),
-  response_format = .gen_default("gen_stt", "response_format"),
-  chunking = .gen_default("gen_stt", "chunking"),
-  chunk_bitrate_kbps = .gen_default("gen_stt", "chunk_bitrate_kbps"),
-  chunk_segment_seconds = .gen_default("gen_stt", "chunk_segment_seconds"),
-  checkpoint_dir = .gen_default("gen_stt", "checkpoint_dir"),
-  resume = .gen_default("gen_stt", "resume"),
-  chunk_retry_forever = .gen_default("gen_stt", "chunk_retry_forever"),
-  chunk_max_retries = .gen_default("gen_stt", "chunk_max_retries"),
-  chunk_retry_wait_seconds = .gen_default("gen_stt", "chunk_retry_wait_seconds"),
-  output = .gen_default("gen_stt", "output"),
-  chunk_format = .gen_default("gen_stt", "chunk_format"),
-  checkpoint_retention = .gen_default("gen_stt", "checkpoint_retention"),
+  service = .gen_default("gen_stt", "service", 2L),
+  model = .gen_default("gen_stt", "model", 2L),
+  language = .gen_default("gen_stt", "language", 2L),
+  prompt = .gen_default("gen_stt", "prompt", 2L),
+  directory = .gen_default("gen_stt", "directory", 2L),
+  label = .gen_default("gen_stt", "label", 2L),
+  save_txt = .gen_default("gen_stt", "save_txt", 2L),
+  convert = .gen_default("gen_stt", "convert", 2L),
+  diarize = .gen_default("gen_stt", "diarize", 2L),
+  timestamps = .gen_default("gen_stt", "timestamps", 2L),
+  timeout_api = .gen_default("gen_stt", "timeout_api", 2L),
+  timeout_per_audio_minute = .gen_default("gen_stt", "timeout_per_audio_minute", 2L),
+  poll_interval = .gen_default("gen_stt", "poll_interval", 2L),
+  max_poll_seconds = .gen_default("gen_stt", "max_poll_seconds", 2L),
+  executable = .gen_default("gen_stt", "executable", 2L),
+  native_engine = .gen_default("gen_stt", "native_engine", 2L),
+  native_backend = .gen_default("gen_stt", "native_backend", 2L),
+  native_quant = .gen_default("gen_stt", "native_quant", 2L),
+  native_kv_quant = .gen_default("gen_stt", "native_kv_quant", 2L),
+  native_device = .gen_default("gen_stt", "native_device", 2L),
+  max_new_tokens = .gen_default("gen_stt", "max_new_tokens", 2L),
+  base_url = .gen_default("gen_stt", "base_url", 2L),
+  api_key = .gen_default("gen_stt", "api_key", 2L),
+  response_format = .gen_default("gen_stt", "response_format", 2L),
+  chunking = .gen_default("gen_stt", "chunking", 2L),
+  chunk_bitrate_kbps = .gen_default("gen_stt", "chunk_bitrate_kbps", 2L),
+  chunk_segment_seconds = .gen_default("gen_stt", "chunk_segment_seconds", 2L),
+  checkpoint_dir = .gen_default("gen_stt", "checkpoint_dir", 2L),
+  resume = .gen_default("gen_stt", "resume", 2L),
+  chunk_retry_forever = .gen_default("gen_stt", "chunk_retry_forever", 2L),
+  chunk_max_retries = .gen_default("gen_stt", "chunk_max_retries", 2L),
+  chunk_retry_wait_seconds = .gen_default("gen_stt", "chunk_retry_wait_seconds", 2L),
+  output = .gen_default("gen_stt", "output", 2L),
+  chunk_format = .gen_default("gen_stt", "chunk_format", 2L),
+  checkpoint_retention = .gen_default("gen_stt", "checkpoint_retention", 2L),
+  model_options = .gen_default("gen_stt", "model_options", 2L),
+  parameter_schema = .gen_default("gen_stt", "parameter_schema", 2L),
   ...
 ) {
   withCallingHandlers({
   start_time <- Sys.time()
-  .gen_internal_validate("gen_stt")
+  .gen_internal_validate("gen_stt", version = 2L)
   chunk_options <- .stt_chunk_validate_options(
     chunking = chunking,
     chunk_bitrate_kbps = chunk_bitrate_kbps,
@@ -2742,6 +2748,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
   } else {
     ""
   }
+  if (identical(.gen_native_model_type(model_value), "TTS"))
+    .gen_stop("native_model_modality", path="/args/model", stage="preflight")
   inferred_backend <- .stt_crispasr_backend_from_model(
     model_value,
     source = source_hint

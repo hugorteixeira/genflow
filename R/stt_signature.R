@@ -24,6 +24,8 @@
 #' @param stt_args A fully named list of additional [gen_stt()] arguments.
 #'   Names must be unique. Do not repeat `audio`, `service`, `model`, or
 #'   `language`; those values are owned by the explicit arguments above.
+#'   A supplied parameter schema uses the same defaults and validation as
+#'   generation; schema descriptions/revisions alone do not expire the cache.
 #'
 #' @return A lowercase hexadecimal character scalar. The fingerprint contains
 #'   no credential values and is suitable for equality comparison and cache
@@ -50,6 +52,17 @@ gen_stt_signature <- function(service = "openai",
                               model = NULL,
                               language = NULL,
                               stt_args = list()) {
+  stt_args <- .stt_signature_validate_args(stt_args)
+  if (!is.null(stt_args$parameter_schema) || length(stt_args$model_options)) {
+    args <- stt_args; args$service <- service
+    if (!missing(model)) args["model"] <- list(model)
+    if (!missing(language)) args["language"] <- list(language)
+    prepared <- .gen_prepare_call("gen_stt", args, version = 2L, bound = "audio", portable = FALSE)
+    if (!prepared$valid) .gen_validation_stop(prepared$errors, "gen_stt")
+    service <- prepared$args$service; model <- prepared$args$model; language <- prepared$args$language
+    # Cache effective values, not schema descriptions or catalog revision IDs.
+    stt_args <- prepared$args[setdiff(names(prepared$args), c("audio", "service", "model", "language", "parameter_schema", "model_options"))]
+  }
   .stt_signature_build(
     service = service,
     model = model,

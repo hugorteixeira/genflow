@@ -10,18 +10,20 @@ gen_sfx(prompt, ...)
 
 \method{gen_sfx}{default}(
   prompt,
-  add = .gen_default("gen_sfx", "add"),
-  directory = .gen_default("gen_sfx", "directory"),
-  label = .gen_default("gen_sfx", "label"),
-  service = .gen_default("gen_sfx", "service"),
-  model = .gen_default("gen_sfx", "model"),
-  duration_seconds = .gen_default("gen_sfx", "duration_seconds"),
-  format = .gen_default("gen_sfx", "format"),
-  loop = .gen_default("gen_sfx", "loop"),
-  prompt_influence = .gen_default("gen_sfx", "prompt_influence"),
-  base_url = .gen_default("gen_sfx", "base_url"),
-  timeout_api = .gen_default("gen_sfx", "timeout_api"),
-  persist = .gen_default("gen_sfx", "persist"),
+  add = .gen_default("gen_sfx", "add", 2L),
+  directory = .gen_default("gen_sfx", "directory", 2L),
+  label = .gen_default("gen_sfx", "label", 2L),
+  service = .gen_default("gen_sfx", "service", 2L),
+  model = .gen_default("gen_sfx", "model", 2L),
+  duration_seconds = .gen_default("gen_sfx", "duration_seconds", 2L),
+  format = .gen_default("gen_sfx", "format", 2L),
+  loop = .gen_default("gen_sfx", "loop", 2L),
+  prompt_influence = .gen_default("gen_sfx", "prompt_influence", 2L),
+  base_url = .gen_default("gen_sfx", "base_url", 2L),
+  timeout_api = .gen_default("gen_sfx", "timeout_api", 2L),
+  persist = .gen_default("gen_sfx", "persist", 2L),
+  model_options = .gen_default("gen_sfx", "model_options", 2L),
+  parameter_schema = .gen_default("gen_sfx", "parameter_schema", 2L),
   ...
 )
 
@@ -55,6 +57,12 @@ gen_sfx(prompt, ...)
 \item{timeout_api}{Total budget for submission, polling, download and audio validation.}
 
 \item{persist}{Publish and record statistics. FALSE returns a temporary audio file.}
+
+\item{model_options}{Named object of model-specific options. Validated against
+\code{parameter_schema}; unsupported transports reject options before inference.}
+
+\item{parameter_schema}{Portable snapshot from \code{\link[=gen_resolve_parameter_schema]{gen_resolve_parameter_schema()}}.
+Nonempty options without a snapshot resolve the current registered schema.}
 }
 \value{
 A common Genflow result with audio metadata. On recoverable failure,

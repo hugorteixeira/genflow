@@ -277,3 +277,28 @@ limits are exposed by `gen_capabilities()` and validated without provider calls.
 The current runtime also corrects invalid media acceptance and rejects provider
 options that override canonical prompt/reference/count fields; it does not
 reproduce those legacy bugs when an old configuration is executed again.
+
+
+### Native voice contract v2
+
+`gen_tts@2` adds optional `reference_audio: asset:audio` and native controls while
+retaining the cloud defaults. `audio.speak@2` binds the same Studio port to that
+argument. Existing v1 contracts and saved agents remain pinned; upgrading is explicit.
+`gen_validate_call("gen_tts", args, version = 2)` checks provider combinations,
+reference consent and disclosure options without launching a process. Execution
+additionally verifies files, GGUF architecture, engine capabilities and decoded output.
+
+
+### Service/model parameter profiles
+
+`gen_txt@2`, `gen_img@3`, `gen_tts@3`, `gen_stt@2`, `gen_sfx@2` and `gen_music@2`
+add `model_options` and `parameter_schema`. Common types, runtime-owned fields
+and hard adapter restrictions remain in the immutable block contracts. A selected
+service/model profile adds narrower rules and omitted defaults; options must have
+an implemented transport and never silently disappear. `gen_txt@2` moves the
+allowed reasoning names from a global enum to model-specific profiles.
+
+The public [parameter schema API](parameter-schemas.md) stores revisions beside
+the existing catalogs. Prepared agent definitions and workflows carry their
+effective schema, revisions and content hash; validation on import does not need
+the original catalog. Old contracts and workflows retain their versions.

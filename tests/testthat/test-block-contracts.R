@@ -1,6 +1,6 @@
 test_that("installed contracts own every public argument and default", {
   for (name in c("gen_txt","gen_img","gen_stt","gen_tts","gen_sfx","gen_music","gen_vote")) {
-    version <- if (name == "gen_img") 2L else 1L
+    version <- if (name %in% c("gen_img","gen_tts")) 3L else if (name=="gen_vote") 1L else 2L
     contract <- gen_block_contracts(name,version)
     fun <- get(if (name=="gen_vote") name else paste0(name,".default"),asNamespace("genflow"))
     expect_setequal(setdiff(names(formals(fun)),"..."),names(contract$arguments$properties))
@@ -166,5 +166,5 @@ test_that("call and port validation require exactly one identified contract", {
     expect_identical(call$errors[[1]]$code,"unknown_contract")
     expect_identical(ports$errors[[1]]$code,"unknown_contract")
   }
-  expect_length(gen_block_contracts(),27L)
+  expect_length(gen_block_contracts(),34L)
 })

@@ -996,13 +996,13 @@
             )
           ),
           tabPanel(
-            "Native STT",
+            "Native speech",
             value = "local-native",
             div(
               class = "gf-local-pane",
               div(
                 class = "gf-local-adapter-header",
-                h3("Native speech-to-text"),
+                h3("Native speech: STT and TTS"),
                 span('service = "local-native"', class = "gf-service-badge")
               ),
               tags$p(
@@ -1055,8 +1055,14 @@
                   )
                 )
               ),
+              div(class = "gf-local-form-grid",
+                textInput("local_tts_native_executable", "CrispASR executable for TTS (optional override)", value = ""),
+                textInput("local_tts_native_model", "Default TTS model (already downloaded)", value = ""),
+                selectInput("local_tts_native_device", "TTS device", choices = c("auto","cpu","vulkan","cuda","metal"), selected = "auto", selectize = FALSE)
+              ),
               tags$p(
                 class = "gf-local-note",
+                "TTS reuses the CrispASR executable above unless overridden. TTS model and device are independent. ",
                 "Executable paths are saved independently; changing Engine ",
                 "does not erase either path. Engine and device apply to Native ",
                 "STT execution. Models are ",
@@ -1690,6 +1696,9 @@
     "local_stt_native_moss_transcribe_executable",
     value = config$stt_native_moss_transcribe_executable
   )
+  updateTextInput(session,"local_tts_native_executable",value=config$tts_native_executable)
+  updateTextInput(session,"local_tts_native_model",value=config$tts_native_model)
+  updateSelectInput(session,"local_tts_native_device",selected=config$tts_native_device)
 
   invisible(config)
 }
@@ -1849,6 +1858,9 @@ server <- function(input, output, session) {
       stt_server_base_url = input_or_current("local_stt_server_base_url", "stt_server_base_url"),
       stt_server_model = current$stt_server_model %||% "",
       stt_native_engine = native_engine,
+      tts_native_executable = input_or_current("local_tts_native_executable", "tts_native_executable"),
+      tts_native_model = input_or_current("local_tts_native_model", "tts_native_model"),
+      tts_native_device = input_or_current("local_tts_native_device", "tts_native_device"),
       stt_native_executable = current$stt_native_executable %||% "",
       stt_native_crispasr_executable = input_or_current(
         "local_stt_native_crispasr_executable",
@@ -3625,7 +3637,7 @@ server <- function(input, output, session) {
       as.character(adapter %||% "ollama")[1],
       ollama = "Ollama",
       llamacpp = "llama.cpp",
-      `local-native` = "Native STT",
+      `local-native` = "Native speech",
       `local-openai` = "STT server",
       "local adapter"
     )
@@ -3816,7 +3828,7 @@ server <- function(input, output, session) {
     message <- paste0(
       if (cached) "Already downloaded: " else "Downloaded: ",
       filename,
-      ". It is now available under Models > Native STT."
+      ". It is now available under Models > Native speech."
     )
     preview <- tryCatch(
       gen_local_config(local_config_from_inputs(), save = FALSE),
@@ -4040,7 +4052,7 @@ server <- function(input, output, session) {
     if (!is.null(existing_job) &&
         isTRUE(gen_native_download_status(existing_job)$running)) {
       showNotification(
-        "A Native STT model download is already running.",
+        "A Native speech model download is already running.",
         type = "warning"
       )
       return()
@@ -4213,7 +4225,7 @@ server <- function(input, output, session) {
       )
       showNotification(detail, type = "error")
     } else {
-      local_state$native_model_status <- "Native STT model download cancelled."
+      local_state$native_model_status <- "Native speech model download cancelled."
       local_state$native_verify_status <- list(
         type = "info",
         message = "Download cancelled."

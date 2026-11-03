@@ -246,6 +246,9 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
       if (!is.null(value)) args[key] <- list(value)
     }
   }
+  parameters <- .gen_prepare_parameter_args(args, contract, supplied, bound, check_capabilities)
+  args <- parameters$args
+  errors <- c(errors, parameters$errors)
   concrete_schema <- schema
   concrete_schema$required <- as.list(setdiff(unlist(schema$required),bound))
   errors <- c(errors,.gen_schema_errors(args,concrete_schema,"/args",portable,schema_path="/arguments"))
@@ -269,6 +272,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
       if (length(intersect(names(args$replicate_input),protected))) add("replicate_input",gen_error_message("image_override_conflict"),"image_override_conflict")
     }
   }
+  if (identical(block,"gen_tts")) .gen_tts_rules(args,usable,add,version,check_capabilities,if (bindings_known) bound else character())
   if (block %in% c("gen_sfx","gen_music")) .gen_sound_rules(sub("^gen_","",block),args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (identical(block,"gen_txt")) {
     if (usable("max_output_tokens") && !is.null(args$max_output_tokens) && usable("service") && args$service!="openai") add("max_output_tokens",gen_error_message("only_openai_tokens"))
@@ -297,6 +301,9 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   contract <- gen_block_contracts(block,version)
   args <- list()
   for (key in names(contract$arguments$properties)) {
+    # Preserve omission until model/profile defaults have been resolved.
+    omitted <- tryCatch(eval(call("missing", as.name(key)), envir = frame), error = function(e) FALSE)
+    if (omitted && "default" %in% names(contract$arguments$properties[[key]])) next
     value <- tryCatch(list(get(key,envir=frame,inherits=FALSE)),error=function(e) {
       if (!"default" %in% names(contract$arguments$properties[[key]]) &&
           grepl("is missing",conditionMessage(e),fixed=TRUE)) return(NULL)

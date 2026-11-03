@@ -2118,7 +2118,7 @@
     output_df <- data.frame(
       service = rep("local-native", length(filenames)),
       model = filenames,
-      type = rep("Audio", length(filenames)),
+      type = vapply(seq_along(filenames), function(i) .gen_native_model_type(inventory$path[[i]]), character(1)),
       pricing = rep("", length(filenames)),
       description = description,
       stringsAsFactors = FALSE

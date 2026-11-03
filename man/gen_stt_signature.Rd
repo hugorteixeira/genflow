@@ -21,7 +21,9 @@ provider or saved-local default used by \code{\link[=gen_stt]{gen_stt()}}.}
 
 \item{stt_args}{A fully named list of additional \code{\link[=gen_stt]{gen_stt()}} arguments.
 Names must be unique. Do not repeat \code{audio}, \code{service}, \code{model}, or
-\code{language}; those values are owned by the explicit arguments above.}
+\code{language}; those values are owned by the explicit arguments above.
+A supplied parameter schema uses the same defaults and validation as
+generation; schema descriptions/revisions alone do not expire the cache.}
 }
 \value{
 A lowercase hexadecimal character scalar. The fingerprint contains

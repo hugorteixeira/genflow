@@ -9,7 +9,9 @@
 #'   files directly in the canonical CrispASR cache are manageable.
 #' @param managed_only Return only manageable files.
 #' @return `gen_native_models()` returns a data frame with path, filename,
-#'   quantization, size, source URL, managed/selected flags and `repository`.
+#'   quantization, size, source URL, managed/selected flags, `repository`, and
+#'   `modality` (stt, tts or unknown). Modality describes recognized model
+#'   families, not a guarantee that the installed executable can run them.
 #'   Unknown repository provenance is an empty string, never guessed.
 #' @export
 gen_native_models <- function(config = NULL, cache_dirs = NULL, managed_only = FALSE) .gen_management({
@@ -19,6 +21,12 @@ gen_native_models <- function(config = NULL, cache_dirs = NULL, managed_only = F
   .gen_management_flag(managed_only, "managed_only")
   rows <- .genflow_crispasr_inventory(config, cache_dirs)
   rows$repository <- .genflow_native_repository(rows$source_url, rows$filename)
+  rows$modality <- tolower(vapply(seq_len(nrow(rows)), function(i)
+    .gen_native_model_type(rows$path[[i]]), character(1)))
+  tts_model <- config$tts_native_model %||% ""
+  if (nzchar(tts_model)) rows$selected <- rows$selected |
+    rows$path == normalizePath(path.expand(tts_model),mustWork=FALSE) |
+    (identical(tts_model,basename(tts_model)) & rows$filename == tts_model)
   if (managed_only) rows <- rows[rows$managed, , drop = FALSE]
   rownames(rows) <- NULL
   rows
@@ -261,8 +269,10 @@ gen_native_model_remove <- function(path, protected_models = character(), config
   config <- config %||% saved_config
   referenced <- c(
     saved_config$stt_native_model %||% "",
+    saved_config$tts_native_model %||% "",
     saved_config$moss_cpp_model %||% "",
     config$stt_native_model %||% "",
+    config$tts_native_model %||% "",
     config$moss_cpp_model %||% ""
   )
   model_from_entry <- function(entry) {

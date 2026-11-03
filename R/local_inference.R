@@ -15,6 +15,9 @@
   "stt_native_backend",
   "stt_native_quant",
   "stt_native_device",
+  "tts_native_executable",
+  "tts_native_model",
+  "tts_native_device",
   "moss_cpp_executable",
   "moss_cpp_model",
   "moss_cpp_device"
@@ -22,7 +25,7 @@
 
 .genflow_local_config_defaults <- function() {
   list(
-    version = 5L,
+    version = 6L,
     ollama_base_url = "http://127.0.0.1:11434",
     ollama_model = "",
     llamacpp_base_url = "http://127.0.0.1:8080",
@@ -37,6 +40,9 @@
     stt_native_backend = "",
     stt_native_quant = "",
     stt_native_device = "auto",
+    tts_native_executable = "",
+    tts_native_model = "",
+    tts_native_device = "auto",
     moss_cpp_executable = "",
     moss_cpp_model = "",
     moss_cpp_device = "auto"
@@ -225,6 +231,10 @@
     validated$stt_native_quant
   )
 
+  validated$tts_native_device <- tolower(validated$tts_native_device)
+  if (!validated$tts_native_device %in% c("auto","cpu","vulkan","cuda","metal"))
+    .gen_stop("tts_device_invalid", path="/tts_native_device", stage="management")
+
   validated$moss_cpp_device <- tolower(validated$moss_cpp_device)
   if (!validated$moss_cpp_device %in% c(
     "auto",
@@ -268,6 +278,8 @@
     "stt_native_crispasr_executable",
     "stt_native_moss_transcribe_executable",
     "stt_native_model",
+    "tts_native_model",
+    "tts_native_executable",
     "moss_cpp_executable",
     "moss_cpp_model"
   )) {
@@ -290,7 +302,7 @@
   validated$moss_cpp_executable <- ""
   validated$moss_cpp_model <- ""
   validated$moss_cpp_device <- "auto"
-  validated$version <- 5L
+  validated$version <- 6L
   validated
 }
 
@@ -382,7 +394,12 @@
 #'   `stt_native_engine`, `stt_native_crispasr_executable`,
 #'   `stt_native_moss_transcribe_executable`, `stt_native_executable`,
 #'   `stt_native_model`,
-#'   `stt_native_backend`, `stt_native_quant`, and `stt_native_device`.
+#'   `stt_native_backend`, `stt_native_quant`, `stt_native_device`,
+#'   `tts_native_executable`, `tts_native_model`, and `tts_native_device`.
+#'   TTS has independent model/device settings. Its executable override may
+#'   select a different CrispASR build; when empty it reuses the configured
+#'   CrispASR executable or PATH. Version 5 configurations gain empty TTS
+#'   settings on read, without changing the STT settings or rewriting the file.
 #'   The two engine-specific executable fields are persisted independently, so
 #'   changing `stt_native_engine` never erases either path.
 #'   `stt_native_executable` remains an accepted one-way compatibility alias
@@ -529,7 +546,10 @@ gen_local_config <- function(config = NULL, ..., path = NULL, save = TRUE) {
     stt_native_model = c("GENFLOW_STT_NATIVE_MODEL"),
     stt_native_backend = c("GENFLOW_STT_NATIVE_BACKEND"),
     stt_native_quant = c("GENFLOW_STT_NATIVE_QUANT"),
-    stt_native_device = c("GENFLOW_STT_NATIVE_DEVICE")
+    stt_native_device = c("GENFLOW_STT_NATIVE_DEVICE"),
+    tts_native_executable = c("GENFLOW_TTS_NATIVE_EXECUTABLE"),
+    tts_native_model = c("GENFLOW_TTS_NATIVE_MODEL"),
+    tts_native_device = c("GENFLOW_TTS_NATIVE_DEVICE")
   )
   for (field in names(mapping)) {
     env_value <- .genflow_first_env(mapping[[field]])
@@ -1128,9 +1148,10 @@ gen_local_diagnostics <- function(config = NULL,
       timeout,
       check_remote = isTRUE(check_endpoints)
     ))
+    rows[[length(rows) + 1L]] <- .genflow_native_tts_diagnostics(config,timeout)
     rows[[length(rows) + 1L]] <- .genflow_vulkan_diagnostic(
       timeout,
-      required = identical(config$stt_native_device, "vulkan")
+      required = identical(config$stt_native_device, "vulkan") || identical(config$tts_native_device, "vulkan")
     )
   }
 
