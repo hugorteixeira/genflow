@@ -439,10 +439,10 @@ gen_stats_rm <- function(date = NULL) {
   }
   if (paths) {
     valid <- vapply(x, function(item) {
-      is.null(item) || (is.character(item) && length(item) == 1L && !is.na(item) && nzchar(item))
+      is.null(item) || (is.character(item) && (length(item) == 1L || arg == "add_img_each") && length(item) > 0L && !anyNA(item) && all(nzchar(item)))
     }, logical(1))
     if (!all(valid)) {
-      stop("Every non-NULL `", arg, "` item must be one non-empty file path.", call. = FALSE)
+      stop("Every non-NULL `", arg, "` item must contain non-empty file paths.", call. = FALSE)
     }
   }
   x
@@ -473,9 +473,9 @@ gen_stats_rm <- function(date = NULL) {
 #' @param add Optional additional context mixed into the prompt per worker. When
 #'   omitted, the agent's stored `add` value (if any) is used.
 #' @param one_item_each Optional list of per-worker items to include in prompts.
-#' @param add_img Optional image input for vision-capable providers.
+#' @param add_img Optional image references for vision or image generation.
 #' @param add_img_each Optional list or character vector containing one image
-#'   path per task. It is mutually exclusive with `add_img`. Names, when
+#'   path or an ordered character vector of image references per task. It is mutually exclusive with `add_img`. Names, when
 #'   supplied, must be complete and unique, are preserved on the returned task
 #'   results, and cannot use the reserved name `combined_stats`.
 #' @param append Character vector or named list (values: `"before"`, `"after"`,
@@ -498,7 +498,7 @@ gen_stats_rm <- function(date = NULL) {
 #'   generation statistics should be saved.
 #' @param verbose Logical; whether to print batch progress and summaries.
 #' @param checkpoint_each Optional list or character vector with one `.rds`
-#'   path per task. Each worker atomically writes its structured result there
+#'   path or an ordered character vector of image references per task. Each worker atomically writes its structured result there
 #'   as soon as it finishes, allowing a caller-owned cache to recover after an
 #'   interrupted batch.
 #' @param directory Character path to save chat/text artifacts.
@@ -781,16 +781,19 @@ gen_batch <- function(qty = 8,
           .batch_cache_clear(cache_key)
           cache_entry <- NULL
         } else {
+          keep_inference <- function(result) {
+            identical(result$error$stage,"persistence") ||
+              (identical(result$status_api,"ERROR") && (identical(result$inference_status,"SUCCESS") ||
+                (identical(result$content_type,"image") && identical(result$error$outcome,"unknown"))))
+          }
           pending_indices <- which(vapply(seq_len(qty), function(idx) {
             result <- cache_entry$results[[idx]]
             failed <- is.null(result) || !is.null(cache_entry$errors[[idx]])
             # A successful paid inference with failed local publication must
             # not be submitted again by automatic error recovery.
-            failed && !identical(result$error$stage, "persistence")
+            failed && !keep_inference(result)
           }, logical(1)))
-          if (length(pending_indices) > 0 || any(vapply(cache_entry$results, function(result) {
-            identical(result$error$stage, "persistence")
-          }, logical(1)))) {
+          if (length(pending_indices) > 0 || any(vapply(cache_entry$results,keep_inference,logical(1)))) {
             indices_to_run <- pending_indices
             reused_indices <- setdiff(seq_len(qty), pending_indices)
             if (verbose && length(reused_indices) > 0) {

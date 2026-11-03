@@ -67,7 +67,13 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
     only(character()); type <- args$value_type %||% "asset"
     ports <- stats::setNames(list(paste0(type,":",config_kind)),type)
   } else if (block=="generate") {
-    for (key in names(inputs)) need(key,if (key=="image") "asset:image" else if (key=="audio") "asset:audio" else "asset:text|asset:json")
+    media <- list()
+    for (entry in gen_block_contracts()) for (key in setdiff(names(entry$studio$inputs),"text")) {
+      declared <- strsplit(entry$studio$inputs[[key]],"|",fixed=TRUE)[[1]]
+      declared <- ifelse(grepl(":",declared,fixed=TRUE),declared,paste0("asset:",declared))
+      media[[key]] <- unique(c(media[[key]],declared))
+    }
+    for (key in names(inputs)) need(key,if (key %in% names(media)) paste(media[[key]],collapse="|") else "asset:text|asset:json")
     ports <- list(candidates=paste0("candidates:",config_kind))
     count <- if (identical(args$source,"provided")) length(args$artifact_ids) else args$count
     if (!is.null(count) && count==1) ports$asset <- paste0("asset:",config_kind)

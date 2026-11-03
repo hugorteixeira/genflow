@@ -258,6 +258,17 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
     if (inherits(cap,"error")) add("service",conditionMessage(cap),"unsupported_provider") else
       if (!isTRUE(cap$modalities[[contract$modality]])) add("service",gen_error_message("unsupported_provider"),"unsupported_provider")
   }
+  if (identical(block,"gen_img") && version >= 2L) {
+    if (isTRUE(check_capabilities) && usable("add_img") && length(args$add_img) && usable("service") && usable("model")) {
+      spec <- .gen_image_reference_spec(args$service,args$model)
+      if (!isTRUE(spec$supported)) add("add_img",gen_error_message("image_references_unsupported"),"image_references_unsupported") else
+        if (length(args$add_img) > spec$max_images) add("add_img",gen_error_message("image_reference_limit",list(limit=spec$max_images)),"image_reference_limit")
+    }
+    if (usable("replicate_input") && length(args$replicate_input)) {
+      protected <- c("prompt","num_outputs","num_images","n","image","images","image_urls","input_image","input_images")
+      if (length(intersect(names(args$replicate_input),protected))) add("replicate_input",gen_error_message("image_override_conflict"),"image_override_conflict")
+    }
+  }
   if (identical(block,"gen_txt")) {
     if (usable("max_output_tokens") && !is.null(args$max_output_tokens) && usable("service") && args$service!="openai") add("max_output_tokens",gen_error_message("only_openai_tokens"))
     if (usable("base_url") && !is.null(args$base_url) && usable("service") && !args$service %in% c("ollama","llamacpp")) add("base_url",gen_error_message("only_local_base_url"))
@@ -281,8 +292,8 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
 
 # Called at the start of each public execution boundary. Default expressions
 # read the same catalog as offline validation; missing values remain errors.
-.gen_internal_validate <- function(block, frame = parent.frame()) {
-  contract <- gen_block_contracts(block)
+.gen_internal_validate <- function(block, frame = parent.frame(), version = 1L) {
+  contract <- gen_block_contracts(block,version)
   args <- list()
   for (key in names(contract$arguments$properties)) {
     value <- tryCatch(list(get(key,envir=frame,inherits=FALSE)),error=function(e) {
@@ -296,7 +307,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
     dots <- eval(quote(list(...)),envir=frame)
     if (length(dots)) args <- c(args,dots)
   }
-  prepared <- .gen_prepare_call(block,args,portable=FALSE)
+  prepared <- .gen_prepare_call(block,args,version=version,portable=FALSE)
   if (!prepared$valid) .gen_validation_stop(prepared$errors,block)
   list2env(prepared$args,envir=frame)
   invisible(prepared)

@@ -36,10 +36,10 @@ test_that("agent overrides replace fields and direct and batch requests agree", 
 test_that("batch forwards the complete image request", {
   seen <- NULL
   output <- tempfile(fileext = ".png")
-  writeBin(as.raw(1:8), output)
+  writeBin(.image_fixture(), output)
   withr::defer(unlink(output))
   testthat::local_mocked_bindings(.gen_img_replicate = function(prompt, model, temp, steps, h, y,
-      directory, label_sanitized, model_version, replicate_input, poll_interval, max_poll_seconds) {
+      directory, label_sanitized, model_version, replicate_input, poll_interval, max_poll_seconds, ...) {
     seen <<- list(model_version, replicate_input, poll_interval, max_poll_seconds)
     output
   }, .package = "genflow")

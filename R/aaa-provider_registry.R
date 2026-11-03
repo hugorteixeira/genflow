@@ -129,5 +129,16 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
   list(schema_version = 1L, service = id, model = model,
        modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, video = FALSE),
        adapter_features = features, model_support = "unverified",
+       image_references = .gen_image_reference_spec(id,model),
        sampling_temperature = if (id == "openai" && !is.null(model)) .genflow_openai_sampling(model, reasoning) else NA)
+}
+
+# Explicit model/task mappings. An unlisted model is not guessed from its name.
+.gen_image_reference_spec <- function(service, model=NULL) {
+  model <- tolower(model %||% "")
+  openai <- service == "openai" && grepl("^gpt-image-(1[.]5|1-mini|2|2[.]5-(sunburst|flare))(-[0-9]{4}-[0-9]{2}-[0-9]{2})?$",model)
+  fal <- service == "fal" && sub("^fal-ai/","",model) == "flux-2/edit"
+  list(supported=openai || fal, max_images=if (openai) 16L else if (fal) 4L else 0L,
+    max_data_uri=if (openai) 20971520 else 4 * ceiling(.gen_image_limit/3) + 100,
+    qualification=if (openai || fal) "documented" else "unmapped")
 }

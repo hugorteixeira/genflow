@@ -1,3 +1,17 @@
+# genflow 0.0.16
+
+- `gen_img()` uses contract v2 and accepts optional ordered `add_img` references
+  in direct, agent and batch calls. OpenAI GPT Image edits and FAL FLUX.2 edit
+  have documented mappings and limits; unsupported models fail before inference.
+  Contract v1 remains readable. Provider overrides cannot replace canonical
+  prompts, references or output counts in the current runtime.
+- All image adapters share bounded URL/base64/data URI/byte/ZIP handling and
+  FFmpeg decoding. PNG, JPEG and WebP retain their real format and dimensions.
+  Invalid media and multiple outputs are errors, with recoverable receipts.
+- `gen_img_recover()` retries only download, validation and publication. Completed
+  inference survives output/storage failures; automatic batch recovery never
+  submits those image calls again. FFmpeg and ffprobe are required for images.
+
 # genflow 0.0.15
 
 - Added the versioned diagnostic schema and pt-BR catalog, exported through

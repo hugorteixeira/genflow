@@ -39,7 +39,7 @@ omitted, the agent's stored \code{add} value (if any) is used.}
 
 \item{one_item_each}{Optional list of per-worker items to include in prompts.}
 
-\item{add_img}{Optional image input for vision-capable providers.}
+\item{add_img}{Optional image references for vision or image generation.}
 
 \item{append}{Character vector or named list (values: \code{"before"}, \code{"after"},
 \code{"replace"}) controlling how supplied \code{instructions} and \code{add} merge with
@@ -70,7 +70,7 @@ independent R worker processes and is safe for HTTP clients such as
 to be fork-safe. A batch with one worker always runs serially.}
 
 \item{add_img_each}{Optional list or character vector containing one image
-path per task. It is mutually exclusive with \code{add_img}. Names, when
+path or an ordered character vector of image references per task. It is mutually exclusive with \code{add_img}. Names, when
 supplied, must be complete and unique, are preserved on the returned task
 results, and cannot use the reserved name \code{combined_stats}.}
 
@@ -80,7 +80,7 @@ generation statistics should be saved.}
 \item{verbose}{Logical; whether to print batch progress and summaries.}
 
 \item{checkpoint_each}{Optional list or character vector with one \code{.rds}
-path per task. Each worker atomically writes its structured result there
+path or an ordered character vector of image references per task. Each worker atomically writes its structured result there
 as soon as it finishes, allowing a caller-owned cache to recover after an
 interrupted batch.}
 

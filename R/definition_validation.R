@@ -187,8 +187,14 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
         if (a$body$operation=="audio.transcribe" && !identical(types$audio,"asset:audio")) add("required_audio",paste0(path,"/inputs/audio"),gen_error_message("required_audio"),n$id)
         if (!is.null(types$audio) && a$body$operation!="audio.transcribe") add("incompatible_input",paste0(path,"/inputs/audio"),gen_error_message("audio_only_transcription"),n$id)
         if (!is.null(types$image)) {
-          accepts <- "image" %in% names(a$contract$studio$inputs)
-          if (accepts && check_capabilities && a$body$operation=="text.generate") accepts <- isTRUE(gen_capabilities(a$body$service,a$body$model)$adapter_features$vision)
+          declared <- strsplit(a$contract$studio$inputs$image %||% "","|",fixed=TRUE)[[1]]
+          declared <- ifelse(grepl(":",declared,fixed=TRUE),declared,paste0("asset:",declared))
+          accepts <- types$image %in% declared
+          if (accepts && check_capabilities) {
+            cap <- tryCatch(gen_capabilities(a$body$service,a$body$model),error=function(e) NULL)
+            if (a$body$operation=="text.generate") accepts <- isTRUE(cap$adapter_features$vision)
+            if (a$body$operation=="image.generate") accepts <- isTRUE(cap$image_references$supported)
+          }
           if (!accepts) add("incompatible_input",paste0(path,"/inputs/image"),gen_error_message("image_not_supported"),n$id)
         }
       }

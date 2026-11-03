@@ -37,7 +37,7 @@ structured results, and a Shiny/RStudio management app.
 | Create | Function | Typical use |
 |:--:|---|---|
 | ✍️ | `gen_txt()` | Text, reasoning, vision, and tool-aware prompts |
-| 🖼️ | `gen_img()` | Image generation from text prompts |
+| 🖼️ | `gen_img()` | Image generation from prompts and optional references |
 | 🎙️ | `gen_stt()` | Cloud or local speech-to-text |
 | 🔊 | `gen_tts()` | Speech synthesis |
 
@@ -176,6 +176,32 @@ image_result <- gen_img(
 
 gen_view(image_result)
 ```
+
+References may be paths, HTTP(S) URLs or image data URIs. Pass one string or an
+ordered vector/list, including `previous_image$response_value`. Reference support
+is model-specific; inspect `gen_capabilities(service, model)$image_references`.
+OpenAI GPT Image edits (up to 16 references) and `fal-ai/flux-2/edit` (up to four)
+are mapped. Other models reject references rather than silently dropping them.
+
+```r
+scene <- gen_img("Reference 1 is the rabbit; reference 2 is the cat, in a garden",
+                 add_img = c("rabbit.png", "cat.png"),
+                 service = "openai", model = "gpt-image-2")
+```
+
+Image calls require FFmpeg and ffprobe. A successful result is one decoded PNG,
+JPEG or WebP, even when delivered as a URL, base64, bytes or a ZIP with one image.
+`result$image` contains actual format, MIME and dimensions; `dimensoes` now reports
+the real image dimensions. Sources are bounded to 50 MiB and 64 million pixels.
+A ZIP is streamed without extracting provider-controlled paths. Multiple outputs
+are rejected explicitly; use separate calls to generate alternatives.
+
+If generation succeeded but download/validation/publication failed, the result
+retains `inference_status = "SUCCESS"`, `status_api = "ERROR"` and an
+`image_receipt`. `gen_img_recover(result, persist = FALSE)` reprocesses that receipt
+without another inference. Receipts can contain expiring URLs or image bytes;
+store them with your job, not in public diagnostics. Batch automatic recovery
+retains these failures for explicit media recovery. Invalid media stays invalid.
 
 ### Cloud speech-to-text
 
@@ -462,7 +488,7 @@ the runtime that executes them.
 | Function | Purpose |
 |---|---|
 | `gen_txt()` | Generate text with cloud and local providers |
-| `gen_img()` | Generate images from prompts |
+| `gen_img()` | Generate images from prompts and optional references |
 | `gen_stt()` | Transcribe audio with cloud, native, or local-server adapters |
 | `gen_stt_capabilities()` | Inspect adapter-owned audio limits |
 | `gen_stt_signature()` | Fingerprint the effective secret-free STT configuration |

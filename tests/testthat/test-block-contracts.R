@@ -1,12 +1,13 @@
 test_that("installed contracts own every public argument and default", {
   for (name in c("gen_txt","gen_img","gen_stt","gen_tts","gen_vote")) {
-    contract <- gen_block_contracts(name)
+    version <- if (name == "gen_img") 2L else 1L
+    contract <- gen_block_contracts(name,version)
     fun <- get(if (name=="gen_vote") name else paste0(name,".default"),asNamespace("genflow"))
     expect_setequal(setdiff(names(formals(fun)),"..."),names(contract$arguments$properties))
     for (key in names(contract$arguments$properties)) {
       property <- contract$arguments$properties[[key]]
       if ("default" %in% names(property)) {
-        expected <- genflow:::.gen_default(name,key)
+        expected <- genflow:::.gen_default(name,key,version)
         expect_equal(eval(formals(fun)[[key]],environment(fun)),expected,info=paste(name,key))
         expect_true(gen_validate_schema(property$default,property)$valid,info=paste(name,key))
       }
@@ -165,5 +166,5 @@ test_that("call and port validation require exactly one identified contract", {
     expect_identical(call$errors[[1]]$code,"unknown_contract")
     expect_identical(ports$errors[[1]]$code,"unknown_contract")
   }
-  expect_length(gen_block_contracts(),24L)
+  expect_length(gen_block_contracts(),25L)
 })

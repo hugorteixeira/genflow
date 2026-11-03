@@ -36,7 +36,7 @@ test_that("gen_img dispatches OpenAI and selects its provider default", {
         height = h
       )
       path <- file.path(directory, "openai-dispatch.png")
-      writeBin(as.raw(c(1, 2, 3)), path)
+      writeBin(.image_fixture(), path)
       path
     },
     .package = "genflow"
@@ -81,7 +81,7 @@ test_that("OpenAI adapter sends a model-valid size and saves URL output", {
         text = '{"data":[{"url":"https://images.example/result.png"}]}'
       ))
     }
-    list(status = 200L, raw = as.raw(c(137, 80, 78, 71)))
+    list(status = 200L, raw = .image_fixture())
   }
 
   path <- genflow:::.gen_img_openai(
@@ -172,7 +172,7 @@ test_that("FAL queue flow uses the current model path and initial status", {
       ),
       "DOWNLOAD" = list(
         status = 200L,
-        raw = as.raw(c(137, 80, 78, 71))
+        raw = .image_fixture()
       )
     )
   }
@@ -259,7 +259,7 @@ test_that("Replicate accepts an already-succeeded initial prediction", {
       ))
     }
     if (identical(method, "DOWNLOAD")) {
-      return(list(status = 200L, raw = as.raw(c(1, 2, 3, 4))))
+      return(list(status = 200L, raw = .image_fixture()))
     }
     stop("Polling must not run for an already-succeeded prediction.")
   }
@@ -289,7 +289,7 @@ test_that("Replicate accepts an already-succeeded initial prediction", {
   expect_false("guidance_scale" %in% names(calls[[1]]$body$input))
   expect_false("aspect_ratio" %in% names(calls[[1]]$body$input))
   expect_identical(vapply(calls, `[[`, character(1), "method"), c("POST", "DOWNLOAD"))
-  expect_identical(calls[[2]]$token, "test-replicate-token")
+  expect_null(calls[[2]]$token)
 })
 
 test_that("Replicate sends an explicit model version to the universal endpoint", {
@@ -316,7 +316,7 @@ test_that("Replicate sends an explicit model version to the universal endpoint",
         text = ""
       ))
     }
-    list(status = 200L, raw = as.raw(c(5, 6, 7)))
+    list(status = 200L, raw = .image_fixture())
   }
 
   path <- genflow:::.gen_img_replicate(
@@ -384,7 +384,7 @@ test_that("Replicate polling carries the final prediction object forward", {
         ),
         text = ""
       ),
-      "DOWNLOAD" = list(status = 200L, raw = as.raw(c(8, 9, 10)))
+      "DOWNLOAD" = list(status = 200L, raw = .image_fixture())
     )
   }
 

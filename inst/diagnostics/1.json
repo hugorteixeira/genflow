@@ -117,6 +117,17 @@
     "additionalProperties": false
   },
   "messages": {
+    "image_reference_size": {"message": "Uma referência excede o limite de tamanho aceito por este modelo.", "hint": "Reduza o arquivo antes de tentar a geração.", "category": "validation", "stage": "preflight"},
+    "image_decoder_missing": {"message": "Instale FFmpeg e ffprobe para validar as imagens antes de gerar.", "category": "validation", "stage": "preflight"},
+    "image_references_unsupported": {"message": "Este modelo não possui suporte mapeado a referências de imagem.", "hint": "Escolha um modelo com referências habilitadas ou remova essa entrada.", "category": "validation"},
+    "image_reference_limit": {"message": "Este modelo aceita no máximo {limit} referências de imagem.", "fallback": "A quantidade de referências excede o limite deste modelo.", "category": "validation"},
+    "image_source_invalid": {"message": "A imagem está vazia, excede 50 MiB ou sua origem não é válida.", "hint": "Use um arquivo de imagem, URL HTTP(S) ou data URI válida.", "category": "validation"},
+    "image_invalid": {"message": "O conteúdo recebido não é uma imagem PNG, JPEG ou WebP estática válida.", "hint": "Confira o arquivo recebido. Nenhuma nova geração foi solicitada.", "category": "provider", "stage": "output_validation"},
+    "image_archive_invalid": {"message": "O ZIP de imagem está inválido, contém caminhos proibidos ou excede os limites de tamanho.", "category": "provider", "stage": "output_validation"},
+    "image_output_count": {"message": "Era esperada exatamente uma imagem, mas a resposta contém outra quantidade de arquivos.", "hint": "Use chamadas separadas para gerar alternativas.", "category": "provider", "stage": "output_validation"},
+    "image_download_failed": {"message": "Não foi possível baixar a imagem.", "hint": "Confira o endereço. Para saídas já geradas, retome pelo recibo existente.", "category": "transport", "stage": "download", "retryable": true},
+    "image_receipt_invalid": {"message": "O resultado não contém um recibo de imagem recuperável válido.", "category": "validation"},
+    "image_override_conflict": {"message": "Os parâmetros específicos não podem substituir o prompt, as referências ou a quantidade de imagens.", "category": "validation"},
     "unsupported_input_file": {"message": "Este formato de arquivo não é aceito como texto de entrada. Use .txt ou .csv.", "category": "validation"},
     "unsupported_modality": {"message": "Este tipo de agente não é suportado pelo executor de lotes.", "category": "validation"},
     "vote_trigger": {"message": "O marcador de voto não contém caracteres reconhecíveis.", "hint": "Use um marcador como opção ou alternativa.", "category": "validation"},

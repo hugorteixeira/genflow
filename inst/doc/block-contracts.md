@@ -266,3 +266,14 @@ Catalog entries are keyed by `(id, version)`. Consumers should choose a default
 version only when creating a new piece and always resolve a saved piece by its
 pinned version. `examples/definition-parity.json` provides shared cases for
 validity, preparation, ports and schemas without provider calls.
+
+## Image references (gen_img v2)
+
+`gen_img()` executes v2; `gen_validate_call("gen_img", args, version = 2)` checks
+that same contract. Missing versions in saved documents still mean v1. The v1
+contract is preserved; new image blocks should select v2 explicitly. Its optional
+`add_img` port accepts `asset:image|list:image`. Model mappings and reference
+limits are exposed by `gen_capabilities()` and validated without provider calls.
+The current runtime also corrects invalid media acceptance and rejects provider
+options that override canonical prompt/reference/count fields; it does not
+reproduce those legacy bugs when an old configuration is executed again.

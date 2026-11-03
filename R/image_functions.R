@@ -24,11 +24,13 @@
 #'   Unknown Replicate models receive only `prompt` by default; use this
 #'   argument for model-specific schema fields.
 #' @param poll_interval Polling interval in seconds for asynchronous providers.
-#' @param max_poll_seconds Maximum time in seconds to poll an asynchronous
-#'   provider before returning an error.
+#' @param max_poll_seconds Total budget in seconds for reference preparation,
+#'   provider requests, polling and image processing.
 #' @param persist Logical; save to the output directory and record statistics.
 #'   FALSE leaves the image in the R session's temporary directory, returns its
 #'   path in `response_value`, and sets `saved_file` to NA.
+#' @param add_img Optional image path, HTTP(S) URL, data URI, or ordered vector/list
+#'   of these references. Support and limits depend on the selected model.
 #' @param ... Reserved for S3 methods.
 #'
 #' @return Invisibly returns a list with fields such as `response_value` (saved file path
@@ -51,172 +53,76 @@ gen_img <- function(prompt, ...) {
 #' @export
 gen_img.default <- function(
   prompt,
-  add = .gen_default("gen_img", "add"),
-  directory = .gen_default("gen_img", "directory"),
-  label = .gen_default("gen_img", "label"),
-  service = .gen_default("gen_img", "service"),
-  model = .gen_default("gen_img", "model"),
-  temp = .gen_default("gen_img", "temp"),
-  steps = .gen_default("gen_img", "steps"),
-  h = .gen_default("gen_img", "h"),
-  y = .gen_default("gen_img", "y"),
-  model_version = .gen_default("gen_img", "model_version"),
-  replicate_input = .gen_default("gen_img", "replicate_input"),
-  poll_interval = .gen_default("gen_img", "poll_interval"),
-  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds"),
-  persist = .gen_default("gen_img", "persist"),
+  add = .gen_default("gen_img", "add", 2L),
+  directory = .gen_default("gen_img", "directory", 2L),
+  label = .gen_default("gen_img", "label", 2L),
+  service = .gen_default("gen_img", "service", 2L),
+  model = .gen_default("gen_img", "model", 2L),
+  temp = .gen_default("gen_img", "temp", 2L),
+  steps = .gen_default("gen_img", "steps", 2L),
+  h = .gen_default("gen_img", "h", 2L),
+  y = .gen_default("gen_img", "y", 2L),
+  model_version = .gen_default("gen_img", "model_version", 2L),
+  replicate_input = .gen_default("gen_img", "replicate_input", 2L),
+  poll_interval = .gen_default("gen_img", "poll_interval", 2L),
+  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds", 2L),
+  persist = .gen_default("gen_img", "persist", 2L),
+  add_img = .gen_default("gen_img", "add_img", 2L),
   ...
 ) {
   withCallingHandlers({
+    .gen_internal_validate("gen_img", version=2L)
+    .gen_image_tools()
+    budget <- .gen_image_budget(max_poll_seconds)
+    references <- .gen_image_references(add_img,service,model,budget)
+    directory <- .genflow_media_directory(directory,"imgs",persist)
+    final_prompt <- .genflow_prepare_prompt(prompt,add)
+    label_processed <- substr(label %||% paste(head(strsplit(final_prompt,"[[:space:]]+")[[1]],5),collapse="_"),1,36)
+    common <- list(prompt=final_prompt,model=model,temp=temp,steps=steps,h=h,y=y,
+      directory=directory,label_sanitized=.sanitize_filename(label_processed),budget=budget)
+    if (service %in% c("openai","fal")) common$references <- references
+    if (service %in% c("fal","replicate")) common <- c(common,list(poll_interval=poll_interval,max_poll_seconds=max_poll_seconds))
+    if (service == "replicate") common <- c(common,list(model_version=model_version,replicate_input=replicate_input))
+    result <- .gen_img_result(function() do.call(get(paste0(".gen_img_",service),envir=environment(gen_img.default)),common),
+      list(label=label,label_cat=label_processed,service=service,model=model,temp=temp,steps=steps,
+        prompt_usado=final_prompt,content_type="image"),persist)
+    if (persist && Sys.getenv("genflow_SKIP_PERSIST_LOG","0") != "1") try(.persist_stats_row(list(
+      label=label_processed,model=model,temp=temp,duration=result$duration,
+      tks_envia=NA_real_,tks_recebe=NA_real_,status_api=result$status_api)),silent=TRUE)
+    invisible(result)
+  }, error=.gen_boundary_error)
+}
 
-  start_time <- Sys.time()
-  .gen_internal_validate("gen_img")
-
-  directory <- .genflow_media_directory(directory, "imgs", persist)
-  if (!dir.exists(directory)) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
-
-  final_prompt <- .genflow_prepare_prompt(prompt, add)
-
-  label_processed <- label %||% paste(strsplit(final_prompt, "[[:space:]]+")[[1]][1:min(5, length(strsplit(final_prompt, "[[:space:]]+")[[1]]))], collapse = "_")
-  label_processed <- substr(label_processed, 1, 36)
-  label_sanitized <- .sanitize_filename(label_processed)
-
-  # --- Call Service Function ---
-  cat("Generating image via", service, "/", model, "...\n" )
-  file_path <- NULL
-  error_occurred <- FALSE
-  api_call_error_msg <- "" # Store specific error
-  persistence_error <- NULL
-  provider_error <- NULL
-
-  tryCatch({
-    file_path <- switch(service,
-      "hf" = .gen_img_hf(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-      "fal" = .gen_img_fal(
-        final_prompt,
-        model,
-        temp,
-        steps,
-        h,
-        y,
-        directory,
-        label_sanitized,
-        poll_interval = poll_interval,
-        max_poll_seconds = max_poll_seconds
-      ),
-      "openai" = .gen_img_openai(final_prompt, model, temp, steps, h, y, directory, label_sanitized),
-      "replicate" = .gen_img_replicate(
-        final_prompt,
-        model,
-        temp,
-        steps,
-        h,
-        y,
-        directory,
-        label_sanitized,
-        model_version = model_version,
-        replicate_input = replicate_input,
-        poll_interval = poll_interval,
-        max_poll_seconds = max_poll_seconds
-      ),
-      stop(paste0("Image service not supported: ", service))
-    )
-  }, error = function(e) {
-    error_occurred <<- TRUE
-    if (inherits(e, "genflow_persistence_error")) persistence_error <<- e else provider_error <<- .genflow_provider_failure(e)$error
-    api_call_error_msg <<- conditionMessage(e) # Capture the specific error
-    # Error message printed later
-  })
-
-  # --- Post-Processing & Status Determination ---
-  end_time <- Sys.time()
-  duration_response <- as.numeric(difftime(end_time, start_time, units = "secs"))
-
-  final_status <- "SUCCESS"
-  final_msg_status <- "OK"
-  final_result_value <- NULL # Will hold file path if successful
-
-  if(error_occurred || is.null(file_path) || !file.exists(file_path)) {
-    final_status <- "ERROR"
-    # Use the specific error message if available, otherwise a generic one
-    final_msg_status <- if (nchar(api_call_error_msg) > 0) {
-      api_call_error_msg
-    } else if (is.null(file_path)) {
-      "Failed: file_path is NULL."
-    } else if (!file.exists(file_path)) {
-      "Failed: file not found."
-    } else {
-      "Failed: unknown error."
-    }
-    # Log the failure
-    message("\n-----------------------------------")
-    message("ERROR generating image with '", service, "' / '", model,"':")
-    message(final_msg_status)
-    message(sprintf("Time until the error: %.2f s", duration_response))
-    message("-----------------------------------\n")
-  } else {
-    # Success Case
-    final_result_value <- file_path # Store the path
-    message_line <- sprintf(
-      "\nImage '%s' (%s / %s / temp:%.1f) generated in %.2f s.\nSaved at: %s\n",
-      label_processed, service, model, temp, duration_response, file_path
-    )
-    cat(message_line)
-    # Optional: Display image if magick is available and session is interactive
-    # tryCatch({ if(interactive() && requireNamespace("magick", quietly = TRUE)) print(magick::image_read(file_path)) }, error = function(e) { warning("...") })
+.gen_img_result <- function(run, result, persist) {
+  started <- Sys.time(); failure <- NULL
+  path <- tryCatch(run(),error=function(e) { failure <<- e; NULL })
+  meta <- attr(path,"image_metadata")
+  # Validate even a third-party adapter returning an unannotated file.
+  if (is.null(failure) && is.null(meta)) {
+    meta <- tryCatch(.gen_image_inspect(.gen_image_read_file(path))$metadata,
+      error=function(e) { failure <<- e; NULL })
   }
-
-
-  # --- Construct the Return List ---
-  resultado_com_atributos <- list(
-    response_value   = final_result_value, # File path if success, NULL if error
-    label            = label, # Original label passed in
-    label_cat        = label_processed, # Processed label used
-    service          = service,
-    model           = model,
-    temp             = temp, # Guidance scale
-    steps            = steps,
-    duration            = duration_response,
-    status_api       = final_status,
-    status_msg  = final_msg_status, # "OK" or error message
-    prompt_usado     = final_prompt,
-    saved_file    = if(final_status == "SUCCESS") file_path else NA_character_,
-    dimensoes        = if(final_status == "SUCCESS") paste0(y, "x", h) else NA_character_, # WxH
-    content_type     = "image"
-    # Add other relevant attributes like 'steps' if needed
-  )
-
-  # Persist stats to daily logs unless suppressed in batch workers
-  should_persist <- tryCatch({ Sys.getenv("genflow_SKIP_PERSIST_LOG", unset = "0") != "1" }, error = function(e) TRUE)
-  if (isTRUE(persist) && isTRUE(should_persist)) {
-    try({
-      .persist_stats_row(list(
-        label      = label_processed %||% label %||% NA_character_,
-        model      = model %||% NA_character_,
-        temp       = temp %||% NA_real_,
-        duration   = duration_response %||% NA_real_,
-        tks_envia  = NA_real_,
-        tks_recebe = NA_real_,
-        status_api = final_status %||% "UNKNOWN"
-      ))
-    }, silent = TRUE)
-  }
-
-  persistence <- .genflow_persistence(file_path, requested = persist, error = persistence_error)
-  if (!persist) resultado_com_atributos$saved_file <- NA_character_
-  resultado_com_atributos <- .genflow_complete_result(resultado_com_atributos,
-    inference_status = if (!is.null(persistence_error)) "SUCCESS" else final_status,
-    persistence = persistence, error = provider_error)
-  if (!is.null(persistence_error$recovery_file)) resultado_com_atributos$response_value <- persistence_error$recovery_file
-  return(invisible(resultado_com_atributos))
-  }, error = .gen_boundary_error)
+  result$status_api <- if (is.null(failure)) "SUCCESS" else "ERROR"
+  result$status_msg <- if (is.null(failure)) "OK" else gen_error_summary(gen_diagnostic(failure))
+  result$response_value <- if (is.null(failure)) as.character(path) else failure$recovery_file
+  result$saved_file <- if (is.null(failure) && persist) as.character(path) else NA_character_
+  result$duration <- as.numeric(difftime(Sys.time(),started,units="secs"))
+  result$dimensoes <- if (!is.null(meta)) paste0(meta$width,"x",meta$height) else NA_character_
+  result$image <- meta
+  result$image_receipt <- failure$image_receipt
+  persistence_error <- if (inherits(failure,"genflow_persistence_error")) failure else NULL
+  result <- .genflow_complete_result(result,
+    inference_status=if (is.null(failure) || inherits(failure,c("genflow_image_output_error","genflow_persistence_error"))) "SUCCESS" else "ERROR",
+    persistence=.genflow_persistence(if (is.null(path)) NULL else as.character(path),requested=persist,error=persistence_error),
+    error=if (is.null(failure)) NULL else .genflow_provider_failure(failure)$error)
+  invisible(result)
 }
 
 #' Hugging Face image generation (internal)
 #'
 #' @keywords internal
 #' @noRd
-.gen_img_hf <- function(prompt, model = "black-forest-labs/FLUX.1-schnell", temp = NULL, steps = 18, h = NULL, y = NULL, directory = NULL, label_sanitized = NULL) {
+.gen_img_hf <- function(prompt, model = "black-forest-labs/FLUX.1-schnell", temp = NULL, steps = 18, h = NULL, y = NULL, directory = NULL, label_sanitized = NULL, budget = .gen_image_budget(600)) {
   service_name <- "hf"
   # Get HF token
   hf_token <- Sys.getenv("HUGGINGFACE_API_TOKEN")
@@ -224,12 +130,11 @@ gen_img.default <- function(
 
   # Use 'model' directly as the model path
   model_path <- model
-  model_sanitized_name <- .sanitize_filename(model) # Sanitize provided name
 
   # URL and Body
   url <- sprintf("https://router.huggingface.co/hf-inference/models/%s", model_path)
-  hx <- round(h / 8) * 8
-  wx <- round(y / 8) * 8
+  hx <- max(8L, round(h / 8) * 8)
+  wx <- max(8L, round(y / 8) * 8)
 
   body <- list(
     inputs = prompt,
@@ -243,7 +148,7 @@ gen_img.default <- function(
     httr::add_headers('Authorization' = paste("Bearer", hf_token)),
     body = body,
     encode = "json",
-    httr::timeout(300)
+    httr::timeout(budget())
   )
   # Process response & get binary
   content_type <- tolower(
@@ -273,12 +178,9 @@ gen_img.default <- function(
     stop(sprintf("HuggingFace API error (%s): %s", httr::status_code(response), error_detail))
   }
 
-  if (!is.raw(img_binary) || length(img_binary) == 0L) {
-    stop("Empty or invalid HuggingFace image content.")
-  }
-
   # Construct filename & path
-  .genflow_write_artifact(img_binary, directory, label_sanitized, service_name, model, "png")
+  .gen_image_publish(.gen_image_receipt(list(.gen_image_source(img_binary)),service_name,model,h,y,
+    list(width=wx,height=hx)),directory,label_sanitized,budget)
 }
 
 #' @rdname gen_img
@@ -322,7 +224,9 @@ gen_img.genflow_agent <- function(prompt, ...) {
                          max_poll_seconds = 600,
                          request = .gen_img_fal_request,
                          sleep = Sys.sleep,
-                         clock = Sys.time) {
+                         clock = Sys.time,
+                         references = list(),
+                         budget = .gen_image_budget(max_poll_seconds,clock)) {
   service_name <- "fal"
   fal_token <- Sys.getenv("FAL_API_KEY")
   if (!nzchar(fal_token)) .gen_stop("missing_credential", params=list(credential="FAL_API_KEY"),stage="preflight")
@@ -339,16 +243,16 @@ gen_img.genflow_agent <- function(prompt, ...) {
   }
 
   model_path <- .gen_img_fal_model_path(model)
-  model_sanitized_name <- .sanitize_filename(model)
   url <- sprintf("https://queue.fal.run/fal-ai/%s", model_path)
   body <- .gen_img_fal_input(model_path, prompt, temp, steps, h, y)
+  if (length(references)) { body$image_urls <- references; body$num_images <- 1L }
 
   response <- request(
     method = "POST",
     url = url,
     token = fal_token,
     body = body,
-    timeout_secs = 300
+    timeout_secs = budget()
   )
   response_status <- suppressWarnings(as.integer(response$status)[1])
   if (is.na(response_status) ||
@@ -384,13 +288,13 @@ gen_img.genflow_agent <- function(prompt, ...) {
       )
     }
 
-    sleep(poll_interval)
+    sleep(min(poll_interval,budget()))
     status_response <- request(
       method = "POLL",
       url = status_url,
       token = fal_token,
       body = NULL,
-      timeout_secs = 300
+      timeout_secs = budget()
     )
     poll_status <- suppressWarnings(as.integer(status_response$status)[1])
     if (is.na(poll_status) || !identical(poll_status, 200L)) {
@@ -420,43 +324,14 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("FAL generation failed: ", status_content$error)
   }
 
-  result_response <- request(
-    method = "RESULT",
-    url = response_url,
-    token = fal_token,
-    body = NULL,
-    timeout_secs = 300
-  )
-  result_status <- suppressWarnings(as.integer(result_response$status)[1])
-  if (is.na(result_status) || !identical(result_status, 200L)) {
-    stop(sprintf(
-      "FAL API result error (%s): %s",
-      result_response$status %||% "unknown",
-      .gen_img_fal_error_detail(result_response)
-    ))
-  }
-  img_url <- .gen_img_fal_output_url(result_response$content)
-
-  img_response <- request(
-    method = "DOWNLOAD",
-    url = img_url,
-    token = NULL,
-    body = NULL,
-    timeout_secs = 300
-  )
-  download_status <- suppressWarnings(as.integer(img_response$status)[1])
-  if (is.na(download_status) || !identical(download_status, 200L)) {
-    stop(
-      "Error downloading FAL image: ",
-      img_response$status %||% "unknown"
-    )
-  }
-  img_binary <- img_response$raw
-  if (!is.raw(img_binary) || length(img_binary) == 0L) {
-    stop("Empty or invalid FAL image content.")
-  }
-
-  .genflow_write_artifact(img_binary, directory, label_sanitized, service_name, model, "png")
+  receipt <- .gen_image_receipt(list(),service_name,model,h,y,body$image_size)
+  receipt$result_url <- response_url
+  .gen_image_publish(receipt,directory,label_sanitized,budget,
+    download=function(url,timeout) {
+      response <- request("DOWNLOAD",url,token=NULL,body=NULL,timeout_secs=timeout)
+      if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE)
+      response$raw
+    }, resolve=function(receipt,budget) .gen_img_resolve_image_receipt(receipt,budget,request))
 }
 
 #' Normalize a FAL model id for queue URLs
@@ -518,32 +393,6 @@ gen_img.genflow_agent <- function(prompt, ...) {
   toupper(trimws(as.character(status %||% "")[1]))
 }
 
-#' Extract a FAL image URL from a result response
-#'
-#' @keywords internal
-#' @noRd
-.gen_img_fal_output_url <- function(content) {
-  if (!is.list(content)) {
-    stop("FAL returned an invalid result response.", call. = FALSE)
-  }
-  content <- content$data %||% content
-  images <- content$images
-  img_url <- if (is.data.frame(images) && "url" %in% names(images) &&
-                 nrow(images) > 0L) {
-    images$url[[1]]
-  } else if (is.list(images) && length(images) > 0L) {
-    first <- images[[1]]
-    if (is.character(first)) first[[1]] else first$url %||% first$uri
-  } else {
-    content$image$url %||% content$image$uri
-  }
-  img_url <- as.character(img_url %||% "")[1]
-  if (is.na(img_url) || !nzchar(img_url)) {
-    stop("Image URL not found in FAL response.")
-  }
-  img_url
-}
-
 #' Extract a readable FAL API error
 #'
 #' @keywords internal
@@ -589,11 +438,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
       httr::timeout(timeout_secs)
     )
   } else {
-    response <- httr::GET(url, httr::timeout(timeout_secs))
-    return(list(
-      status = httr::status_code(response),
-      raw = httr::content(response, as = "raw")
-    ))
+    return(list(status=200L,raw=.gen_image_download(url,timeout_secs)))
   }
 
   list(
@@ -614,7 +459,9 @@ gen_img.genflow_agent <- function(prompt, ...) {
                             y,
                             directory,
                             label_sanitized,
-                            request = .gen_img_openai_request) {
+                            request = .gen_img_openai_request,
+                            references = list(),
+                            budget = .gen_image_budget(600)) {
   openai_key <- Sys.getenv("OPENAI_API_KEY")
   if (!nzchar(openai_key)) .gen_stop("missing_credential", params=list(credential="OPENAI_API_KEY"),stage="preflight")
 
@@ -626,13 +473,14 @@ gen_img.genflow_agent <- function(prompt, ...) {
     size = size_str
   )
 
-  url_api <- "https://api.openai.com/v1/images/generations"
+  url_api <- paste0("https://api.openai.com/v1/images/",if (length(references)) "edits" else "generations")
+  if (length(references)) body$images <- lapply(references,function(uri) list(image_url=uri))
   response <- request(
     method = "POST",
     url = url_api,
     api_key = openai_key,
     body = body,
-    timeout_secs = 300
+    timeout_secs = budget()
   )
 
   status <- as.integer(response$status %||% 0L)
@@ -651,37 +499,12 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("OpenAI API error: ", cont$error$message %||% "unknown error")
   }
 
-  if (!is.list(cont$data) || length(cont$data) < 1) {
-    stop("OpenAI response missing 'data' field.")
-  }
-  item <- cont$data[[1]]
-  img_bin <- NULL
-
-  if (!is.null(item$url)) {
-    download <- request(
-      method = "GET",
-      url = as.character(item$url)[1],
-      api_key = NULL,
-      body = NULL,
-      timeout_secs = 300
-    )
-    if (!identical(as.integer(download$status), 200L)) {
-      stop("Failed to download the image from the returned URL.")
-    }
-    img_bin <- download$raw
-  } else if (!is.null(item$b64_json)) {
-    if (!requireNamespace("base64enc", quietly = TRUE)) {
-      stop("Package 'base64enc' is required to decode OpenAI image output.")
-    }
-    img_bin <- base64enc::base64decode(item$b64_json)
-  } else {
-    stop("Unexpected response: neither url nor b64_json.")
-  }
-  if (!is.raw(img_bin) || length(img_bin) == 0L) {
-    stop("OpenAI returned empty or invalid image content.")
-  }
-
-  .genflow_write_artifact(img_bin, directory, label_sanitized, "openai", model, "png")
+  .gen_image_publish(.gen_image_receipt(lapply(cont$data %||% list(),.gen_image_source),"openai",model,h,y,size_str),
+    directory,label_sanitized,budget,function(url,timeout) {
+      response <- request("GET",url,api_key=NULL,body=NULL,timeout_secs=timeout)
+      if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE)
+      response$raw
+    })
 }
 
 #' Resolve an OpenAI image size for the selected model family
@@ -748,11 +571,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     ))
   }
 
-  response <- httr::GET(url, httr::timeout(timeout_secs))
-  list(
-    status = httr::status_code(response),
-    raw = httr::content(response, as = "raw")
-  )
+  list(status=200L,raw=.gen_image_download(url,timeout_secs))
 }
 #' Replicate image generation (internal)
 #'
@@ -772,7 +591,8 @@ gen_img.genflow_agent <- function(prompt, ...) {
                                max_poll_seconds = 600,
                                request = .gen_img_replicate_request,
                                sleep = Sys.sleep,
-                               clock = Sys.time) {
+                               clock = Sys.time,
+                               budget = .gen_image_budget(max_poll_seconds,clock)) {
   service_name <- "replicate"
   replicate_token <- Sys.getenv("REPLICATE_API_TOKEN")
   if (!nzchar(replicate_token)) .gen_stop("missing_credential", params=list(credential="REPLICATE_API_TOKEN"),stage="preflight")
@@ -789,7 +609,6 @@ gen_img.genflow_agent <- function(prompt, ...) {
 
   model_ref <- .gen_img_replicate_model_ref(model, model_version)
   model_path <- model_ref$model
-  model_sanitized_name <- .sanitize_filename(model)
 
   input_params <- .gen_img_replicate_input(
     model = model_path,
@@ -811,7 +630,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     url = url,
     token = replicate_token,
     body = body_list,
-    timeout_secs = 300
+    timeout_secs = budget()
   )
   response_status <- suppressWarnings(as.integer(response$status)[1])
   if (is.na(response_status) ||
@@ -844,13 +663,13 @@ gen_img.genflow_agent <- function(prompt, ...) {
       )
     }
 
-    sleep(poll_interval)
+    sleep(min(poll_interval,budget()))
     poll_response <- request(
       method = "POLL",
       url = as.character(get_url)[1],
       token = replicate_token,
       body = NULL,
-      timeout_secs = 300
+      timeout_secs = budget()
     )
     poll_status <- suppressWarnings(as.integer(poll_response$status)[1])
     if (is.na(poll_status) || !identical(poll_status, 200L)) {
@@ -877,42 +696,14 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("Replicate prediction did not succeed. Final status: ", status)
   }
 
-  result <- poll_content$output
-  if (is.null(result) || length(result) == 0L) {
-    stop("Output not found in Replicate response.")
-  }
-  first_output <- if (is.list(result)) result[[1]] else result[[1]]
-  img_url <- if (is.character(first_output)) {
-    first_output[[1]]
-  } else if (is.list(first_output)) {
-    first_output$url %||% first_output$uri
-  } else {
-    NULL
-  }
-  if (is.null(img_url) || !is.character(img_url) || !nzchar(img_url[[1]])) {
-    stop("Invalid image URL in Replicate result.")
-  }
-
-  img_response <- request(
-    method = "DOWNLOAD",
-    url = img_url[[1]],
-    token = replicate_token,
-    body = NULL,
-    timeout_secs = 300
-  )
-  download_status <- suppressWarnings(as.integer(img_response$status)[1])
-  if (is.na(download_status) || !identical(download_status, 200L)) {
-    stop(
-      "Error downloading Replicate image: ",
-      img_response$status %||% "unknown"
-    )
-  }
-  img_binary <- img_response$raw
-  if (!is.raw(img_binary) || length(img_binary) == 0L) {
-    stop("Empty or invalid Replicate image content.")
-  }
-
-  .genflow_write_artifact(img_binary, directory, label_sanitized, service_name, model, "png")
+  result <- poll_content$output %||% list()
+  if (is.list(result) && !is.null(names(result))) result <- list(result)
+  .gen_image_publish(.gen_image_receipt(lapply(result,.gen_image_source),service_name,model,h,y),
+    directory,label_sanitized,budget,function(url,timeout) {
+      response <- request("DOWNLOAD",url,token=NULL,body=NULL,timeout_secs=timeout)
+      if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE)
+      response$raw
+    })
 }
 
 #' Parse a Replicate model id and optional pinned version
@@ -1093,14 +884,23 @@ gen_img.genflow_agent <- function(prompt, ...) {
     ))
   }
 
-  headers <- if (is.null(token) || !nzchar(as.character(token)[1])) {
-    NULL
-  } else {
-    httr::add_headers(Authorization = paste("Bearer", token))
-  }
-  response <- httr::GET(url, headers, httr::timeout(timeout_secs))
-  list(
-    status = httr::status_code(response),
-    raw = httr::content(response, as = "raw")
-  )
+  list(status=200L,raw=.gen_image_download(url,timeout_secs))
+}
+
+# FAL may finish inference before its result endpoint becomes readable. Persist
+# that endpoint as a receipt; recovery only GETs it, never resubmits the job.
+.gen_img_resolve_image_receipt <- function(receipt,budget,request=.gen_img_fal_request) {
+  if (is.null(receipt$result_url)) return(receipt)
+  if (!identical(receipt$service,"fal") || !.gen_scalar(receipt$result_url) ||
+      !startsWith(receipt$result_url,"https://queue.fal.run/")) .gen_stop("image_receipt_invalid")
+  key <- Sys.getenv("FAL_API_KEY")
+  if (!nzchar(key)) .gen_stop("missing_credential",params=list(credential="FAL_API_KEY"))
+  response <- tryCatch(request("RESULT",receipt$result_url,token=key,body=NULL,timeout_secs=budget()),
+    error=function(e) .gen_stop("image_download_failed",retryable=TRUE,stage="download"))
+  if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE,stage="download")
+  content <- response$content$data %||% response$content
+  sources <- content$images %||% if (!is.null(content$image)) list(content$image) else list()
+  receipt$sources <- lapply(sources,.gen_image_source)
+  receipt$result_url <- NULL
+  receipt
 }

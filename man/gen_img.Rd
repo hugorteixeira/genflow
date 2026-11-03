@@ -10,20 +10,21 @@ gen_img(prompt, ...)
 
 \method{gen_img}{default}(
   prompt,
-  add = .gen_default("gen_img", "add"),
-  directory = .gen_default("gen_img", "directory"),
-  label = .gen_default("gen_img", "label"),
-  service = .gen_default("gen_img", "service"),
-  model = .gen_default("gen_img", "model"),
-  temp = .gen_default("gen_img", "temp"),
-  steps = .gen_default("gen_img", "steps"),
-  h = .gen_default("gen_img", "h"),
-  y = .gen_default("gen_img", "y"),
-  model_version = .gen_default("gen_img", "model_version"),
-  replicate_input = .gen_default("gen_img", "replicate_input"),
-  poll_interval = .gen_default("gen_img", "poll_interval"),
-  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds"),
-  persist = .gen_default("gen_img", "persist"),
+  add = .gen_default("gen_img", "add", 2L),
+  directory = .gen_default("gen_img", "directory", 2L),
+  label = .gen_default("gen_img", "label", 2L),
+  service = .gen_default("gen_img", "service", 2L),
+  model = .gen_default("gen_img", "model", 2L),
+  temp = .gen_default("gen_img", "temp", 2L),
+  steps = .gen_default("gen_img", "steps", 2L),
+  h = .gen_default("gen_img", "h", 2L),
+  y = .gen_default("gen_img", "y", 2L),
+  model_version = .gen_default("gen_img", "model_version", 2L),
+  replicate_input = .gen_default("gen_img", "replicate_input", 2L),
+  poll_interval = .gen_default("gen_img", "poll_interval", 2L),
+  max_poll_seconds = .gen_default("gen_img", "max_poll_seconds", 2L),
+  persist = .gen_default("gen_img", "persist", 2L),
+  add_img = .gen_default("gen_img", "add_img", 2L),
   ...
 )
 
@@ -65,12 +66,15 @@ argument for model-specific schema fields.}
 
 \item{poll_interval}{Polling interval in seconds for asynchronous providers.}
 
-\item{max_poll_seconds}{Maximum time in seconds to poll an asynchronous
-provider before returning an error.}
+\item{max_poll_seconds}{Total budget in seconds for reference preparation,
+provider requests, polling and image processing.}
 
 \item{persist}{Logical; save to the output directory and record statistics.
 FALSE leaves the image in the R session's temporary directory, returns its
 path in \code{response_value}, and sets \code{saved_file} to NA.}
+
+\item{add_img}{Optional image path, HTTP(S) URL, data URI, or ordered vector/list
+of these references. Support and limits depend on the selected model.}
 }
 \value{
 Invisibly returns a list with fields such as \code{response_value} (saved file path

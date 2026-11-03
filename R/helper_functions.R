@@ -633,7 +633,7 @@
     }
     overrides <- list(directory = if (type == "image") directory_img else directory,
                       label = label, persist = persist)
-    if (type != "image" && (!is.null(add_img_each) || !is.null(add_img))) {
+    if (!is.null(add_img_each) || !is.null(add_img)) {
       overrides$add_img <- if (!is.null(add_img_each)) add_img_each[[i]] else add_img
     }
     target <- if (type == "image") gen_img.default else gen_txt.default
