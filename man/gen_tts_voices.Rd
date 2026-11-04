@@ -18,7 +18,9 @@ Character vector of available voices (empty if not declared).
 }
 \description{
 For Replicate, this inspects the model schema to return the allowed
-voice/speaker options when provided by the model.
+voice/speaker options when provided by the model. Native VoxCPM2 returns an
+empty vector: it generates a voice or conditions on a reference audio file,
+rather than selecting from named preset voices.
 }
 \examples{
 # Requires REPLICATE_API_TOKEN for replicate models

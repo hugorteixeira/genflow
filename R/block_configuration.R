@@ -15,7 +15,12 @@
       put("format", list(enum = as.list(c("wav", "mp3", "opus", "aac"))), "tts_native_parameter")
     } else {
       native <- c("reference_audio", names(Filter(function(p) "local-native" %in% unlist(p[["x-ui"]]$service), props)))
-      for (key in native) fixed(key, list(props[[key]]$default), "tts_native_parameter")
+      for (key in native) {
+        # Remote transports ignore these flags. Accept either boolean in v4 so
+        # prepared v2/v3 calls remain executable when library defaults change.
+        policy <- contract$version >= 4L && key %in% c("reference_consent", "spoken_disclaimer", "marking_responsibility")
+        fixed(key, if (policy) list(TRUE, FALSE) else list(props[[key]]$default), "tts_native_parameter")
+      }
     }
   }
   if (block == "gen_txt") {

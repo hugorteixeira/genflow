@@ -11,7 +11,8 @@
 #' @param service Provider identifier (e.g., "openai", "replicate").
 #' @param model Provider model identifier. Defaults to `gpt-4o-mini-tts`.
 #' @param voice Optional voice identifier supported by the provider. If NULL,
-#'   the first available voice is selected automatically.
+#'   the first available voice is selected automatically. Native VoxCPM2 has no
+#'   named voice catalog; use `reference_audio` to reuse a voice.
 #' @param format Requested output audio format. Defaults to `"mp3"`. Providers
 #'   may return another audio container; the saved filename and returned
 #'   `format` always describe the detected bytes instead of the request label.
@@ -19,13 +20,13 @@
 #' @param instructions Optional instructions to style the voice (OpenAI only).
 #' @param reference_audio Optional local audio file used as a voice reference
 #'   by local VoxCPM2. It is decoded before inference; URLs are not downloaded.
-#' @param reference_consent Explicit permission to use the reference voice,
-#'   required by CrispASR when `reference_audio` is supplied.
+#' @param reference_consent Permission to use the reference voice. Defaults to
+#'   TRUE. Explicit FALSE prevents using `reference_audio` with CrispASR.
 #' @param reference_identity Reference identity: unknown, synthetic or real_person.
-#' @param spoken_disclaimer Keep the engine's audible AI disclosure. Disabling
-#'   it requires `marking_responsibility = TRUE`; engine watermarking remains on.
-#' @param marking_responsibility Explicit engine attestation when disabling
-#'   the spoken disclaimer.
+#' @param spoken_disclaimer Include the engine's audible AI disclosure. Defaults
+#'   to FALSE; disabling it requires `marking_responsibility = TRUE`.
+#' @param marking_responsibility Engine attestation when disabling the spoken
+#'   disclaimer. Defaults to TRUE. Engine watermarking remains on.
 #' @param executable Optional CrispASR executable, overriding local configuration.
 #' @param native_device Local accelerator: auto, cpu, vulkan, cuda or metal.
 #' @param threads Optional native CPU threads (default 4).
@@ -71,35 +72,35 @@ gen_tts <- function(text, ...) {
 #' @export
 gen_tts.default <- function(
   text,
-  add = .gen_default("gen_tts", "add", 3L),
-  directory = .gen_default("gen_tts", "directory", 3L),
-  label = .gen_default("gen_tts", "label", 3L),
-  service = .gen_default("gen_tts", "service", 3L),
-  model = .gen_default("gen_tts", "model", 3L),
-  voice = .gen_default("gen_tts", "voice", 3L),
-  format = .gen_default("gen_tts", "format", 3L),
-  speed = .gen_default("gen_tts", "speed", 3L),
-  instructions = .gen_default("gen_tts", "instructions", 3L),
-  preview = .gen_default("gen_tts", "preview", 3L),
-  timeout_api = .gen_default("gen_tts", "timeout_api", 3L),
-  persist = .gen_default("gen_tts", "persist", 3L),
-  reference_audio = .gen_default("gen_tts", "reference_audio", 3L),
-  reference_consent = .gen_default("gen_tts", "reference_consent", 3L),
-  reference_identity = .gen_default("gen_tts", "reference_identity", 3L),
-  spoken_disclaimer = .gen_default("gen_tts", "spoken_disclaimer", 3L),
-  marking_responsibility = .gen_default("gen_tts", "marking_responsibility", 3L),
-  executable = .gen_default("gen_tts", "executable", 3L),
-  native_device = .gen_default("gen_tts", "native_device", 3L),
-  threads = .gen_default("gen_tts", "threads", 3L),
-  seed = .gen_default("gen_tts", "seed", 3L),
-  steps = .gen_default("gen_tts", "steps", 3L),
-  model_options = .gen_default("gen_tts", "model_options", 3L),
-  parameter_schema = .gen_default("gen_tts", "parameter_schema", 3L),
+  add = .gen_default("gen_tts", "add", 4L),
+  directory = .gen_default("gen_tts", "directory", 4L),
+  label = .gen_default("gen_tts", "label", 4L),
+  service = .gen_default("gen_tts", "service", 4L),
+  model = .gen_default("gen_tts", "model", 4L),
+  voice = .gen_default("gen_tts", "voice", 4L),
+  format = .gen_default("gen_tts", "format", 4L),
+  speed = .gen_default("gen_tts", "speed", 4L),
+  instructions = .gen_default("gen_tts", "instructions", 4L),
+  preview = .gen_default("gen_tts", "preview", 4L),
+  timeout_api = .gen_default("gen_tts", "timeout_api", 4L),
+  persist = .gen_default("gen_tts", "persist", 4L),
+  reference_audio = .gen_default("gen_tts", "reference_audio", 4L),
+  reference_consent = .gen_default("gen_tts", "reference_consent", 4L),
+  reference_identity = .gen_default("gen_tts", "reference_identity", 4L),
+  spoken_disclaimer = .gen_default("gen_tts", "spoken_disclaimer", 4L),
+  marking_responsibility = .gen_default("gen_tts", "marking_responsibility", 4L),
+  executable = .gen_default("gen_tts", "executable", 4L),
+  native_device = .gen_default("gen_tts", "native_device", 4L),
+  threads = .gen_default("gen_tts", "threads", 4L),
+  seed = .gen_default("gen_tts", "seed", 4L),
+  steps = .gen_default("gen_tts", "steps", 4L),
+  model_options = .gen_default("gen_tts", "model_options", 4L),
+  parameter_schema = .gen_default("gen_tts", "parameter_schema", 4L),
   ...
 ) {
   withCallingHandlers({
   start_time <- Sys.time()
-  .gen_internal_validate("gen_tts", version = 3L)
+  .gen_internal_validate("gen_tts", version = 4L)
   if (!is.null(add) && nzchar(add)) text <- paste(text, add)
   requested_format <- format
 
@@ -1019,7 +1020,9 @@ gen_tts.genflow_agent <- function(text, ...) {
 #' List available voices for a TTS model
 #'
 #' For Replicate, this inspects the model schema to return the allowed
-#' voice/speaker options when provided by the model.
+#' voice/speaker options when provided by the model. Native VoxCPM2 returns an
+#' empty vector: it generates a voice or conditions on a reference audio file,
+#' rather than selecting from named preset voices.
 #'
 #' @param service Provider identifier (e.g., "replicate", "openai").
 #' @param model Provider model identifier.

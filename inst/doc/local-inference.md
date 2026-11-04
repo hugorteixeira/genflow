@@ -328,13 +328,25 @@ presented as qualified native generators. GGUF architecture is checked again at
 execution, so a renamed VoxCPM2 file still works and a renamed incompatible file
 does not.
 
-For a reference voice, pass a local `reference_audio` file and explicitly set
-`reference_consent = TRUE`. `reference_identity` is `unknown`, `synthetic` or
-`real_person`. These are engine attestations, never inferred from the filename.
-The engine's spoken disclosure stays enabled by default. Disabling it with
-`spoken_disclaimer = FALSE` requires `marking_responsibility = TRUE`; the adapter
-does not disable engine watermarks or content credentials. Uploaded/generated
-Studio audio is bound to the same typed reference input; it is not a string voice ID.
+For a reference voice, pass a local `reference_audio` file. Current calls and
+new Studio voice blocks use `gen_tts@4`: `reference_consent = TRUE`,
+`spoken_disclaimer = FALSE` and `marking_responsibility = TRUE` are defaults.
+Each remains editable. Explicit `reference_consent = FALSE` rejects a connected
+reference; disabling the spoken disclaimer with `marking_responsibility = FALSE`
+still fails validation. `reference_identity` stays `unknown` unless set to
+`synthetic` or `real_person`; it is never inferred from the filename.
+Engine watermarks and content credentials remain active.
+
+Contracts v2/v3 retain their original defaults and saved values. Existing Studio
+blocks can explicitly select version 4 and restore these fields to their defaults;
+changing the version does not overwrite explicit saved choices. Explicit arguments
+override these defaults; the flags remain owned by the block contract.
+
+VoxCPM2 has no named preset-voice catalog in this adapter (`gen_tts_voices()`
+returns an empty vector). Without reference audio it generates a voice; an
+uploaded or generated audio file can be connected to the typed reference input
+to reuse that voice. The `voice` ID field used by other providers is not a
+reference-file selector.
 
 The library decodes references before inference, converts them to a temporary
 mono 16 kHz WAV, and requires the engine to confirm loading the reference.

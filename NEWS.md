@@ -1,3 +1,11 @@
+# genflow 0.0.21
+
+- `gen_tts@4` defaults to reference consent and marking responsibility enabled,
+  with the spoken disclaimer disabled. Explicit choices and v2/v3 workflow
+  behavior are preserved.
+- Document that the native VoxCPM2 adapter uses reference audio rather than a
+  named preset-voice catalog.
+
 # genflow 0.0.20
 
 - `gen_block_configuration()` exposes an offline projection of block contracts,

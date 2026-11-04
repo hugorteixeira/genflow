@@ -7,7 +7,7 @@ configuration_profile <- function(...) list(type = "object", properties = list(.
 
 test_that("form restrictions and offline validation agree for each speech version", {
   configuration_scope()
-  for (version in c(2L, 3L)) {
+  for (version in c(2L, 3L, 4L)) {
     form <- gen_block_configuration("gen_tts", "local-native", "voice.gguf", version)
     expect_true(form$valid)
     for (key in c("voice", "instructions", "speed")) expect_true(form$arguments$properties[[key]][["x-ui"]]$disabled)
