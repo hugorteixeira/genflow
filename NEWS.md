@@ -1,3 +1,10 @@
+# genflow 0.0.22
+
+- VoxCPM2 accepts voice descriptions through `instructions`, with automatic
+  native prefix encoding and validation of the complete input length.
+- Native voice controls use an installed JSON capability schema; registered
+  service/model schemas can customize descriptions, choices and defaults.
+
 # genflow 0.0.21
 
 - `gen_tts@4` defaults to reference consent and marking responsibility enabled,

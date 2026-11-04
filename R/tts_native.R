@@ -14,8 +14,16 @@
     text <- args$text
     if (usable("add") && !is.null(args$add) && nzchar(args$add)) text <- paste(text,args$add)
     if (nchar(text,type="chars")>4096L) add("text",gen_error_message("too_long",list(limit=4096,unit="characters")),"too_long")
+    else if (usable("instructions") && nchar(.tts_native_text(text,args$instructions),type="chars")>4096L)
+      add("instructions",gen_error_message("too_long",list(limit=4096,unit="characters")),"too_long")
   }
   invisible(NULL)
+}
+
+# Voice design is model syntax, not spoken text or a CLI option.
+.tts_native_text <- function(text,instructions=NULL) {
+  description <- trimws(instructions %||% "")
+  if (nzchar(description)) paste0("(",description,") ",text) else text
 }
 
 .tts_native_budget <- function(seconds) {
@@ -45,7 +53,7 @@
 
 .tts_local_native <- function(text,model,reference_audio,format,speed,timeout,
                               executable,native_device,threads,seed,steps,
-                              reference_consent,reference_identity,spoken_disclaimer,marking_responsibility,model_options=list()) {
+                              reference_consent,reference_identity,spoken_disclaimer,marking_responsibility,model_options=list(),instructions=NULL) {
   budget <- .tts_native_budget(timeout)
   .gen_sound_tools()
   config <- .genflow_read_local_config()
@@ -77,7 +85,7 @@
   args <- c("--backend","voxcpm2-tts","-m",path,"--threads",as.character(threads %||% 4L),
     "--seed",as.character(seed %||% 0L),"--tts-steps",as.character(steps %||% 10L),
     if (device=="cpu") "--no-gpu" else if (device!="auto") c("--gpu-backend",device),
-    "--speaker-identity",reference_identity,"--tts",text,"--tts-output",output)
+    "--speaker-identity",reference_identity,"--tts",.tts_native_text(text,instructions),"--tts-output",output)
   if (!is.null(reference)) args <- c(args,"--voice",reference,"--i-have-rights")
   if (!spoken_disclaimer) args <- c(args,"--no-spoken-disclaimer","--accept-marking-responsibility")
   # The CLI CFG flag is ignored by this backend. Set the validated value

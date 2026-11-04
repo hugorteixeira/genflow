@@ -17,7 +17,9 @@
 #'   may return another audio container; the saved filename and returned
 #'   `format` always describe the detected bytes instead of the request label.
 #' @param speed Numeric speech speed (0.25 to 4.0). Defaults to 1.
-#' @param instructions Optional instructions to style the voice (OpenAI only).
+#' @param instructions Optional voice/style description. VoxCPM2 encodes this as
+#'   a parenthesized prefix in the engine input; OpenAI and compatible Replicate
+#'   models use their instructions field. The speech text stays separate.
 #' @param reference_audio Optional local audio file used as a voice reference
 #'   by local VoxCPM2. It is decoded before inference; URLs are not downloaded.
 #' @param reference_consent Permission to use the reference voice. Defaults to
@@ -188,7 +190,7 @@ gen_tts.default <- function(
     switch(service,
       "local-native" = .tts_local_native(text, model, reference_audio, format,
         speed, timeout_api, executable, native_device, threads, seed, steps,
-        reference_consent, reference_identity, spoken_disclaimer, marking_responsibility, model_options = model_options),
+        reference_consent, reference_identity, spoken_disclaimer, marking_responsibility, model_options = model_options, instructions = instructions),
       "openai" = .tts_openai(text, model, voice %||% "alloy", format, speed, instructions, timeout_api),
       "replicate" = {
         if (!is.null(replicate_model_info_error)) {

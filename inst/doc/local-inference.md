@@ -346,7 +346,20 @@ VoxCPM2 has no named preset-voice catalog in this adapter (`gen_tts_voices()`
 returns an empty vector). Without reference audio it generates a voice; an
 uploaded or generated audio file can be connected to the typed reference input
 to reuse that voice. The `voice` ID field used by other providers is not a
-reference-file selector.
+reference-file selector. To design a voice, pass `instructions` separately:
+
+```r
+speech <- gen_tts("Olá, eu sou a Mimi!", service = "local-native",
+  instructions = "A young woman with a gentle, bright and warm voice",
+  format = "wav", persist = FALSE)
+```
+
+Genflow encodes the description as `(description) speech` only in the native
+engine input. Keep the dialogue itself in `text` (the Studio Prompt), without
+manually adding this prefix. NULL, empty and whitespace-only instructions leave
+the engine text unchanged. Descriptions can also accompany reference audio to
+guide delivery. Descriptions alone do not fix the speaker's identity between
+generations; use a reference for a recurring character.
 
 The library decodes references before inference, converts them to a temporary
 mono 16 kHz WAV, and requires the engine to confirm loading the reference.
@@ -359,13 +372,14 @@ Supported local controls: `threads` (default 4), `seed` (default 0), `steps`
 CrispASR may wrap Opus/AAC in MP4 to retain content credentials. Genflow validates
 the actual file and codec, reports `format = "m4a"` and `mime_type = "audio/mp4"`,
 and preserves `requested_format`. It does not disable the engine's remux policy.
-Voice IDs, style instructions and FLAC/raw PCM are rejected rather than ignored.
+Named voice IDs and FLAC/raw PCM are rejected rather than ignored.
 The qualified VoxCPM2 adapter ignores `--tts-cfg-scale`; Genflow uses the engine's
 initialization environment instead. CFG defaults to 2; `gen_tts@3` accepts
 `model_options = list(cfg = 1)` with a registered or embedded
 [parameter schema](parameter-schemas.md). Version 2 retains its original contract.
 The child process clears hidden output-length overrides and the parent
-environment is preserved. Text is limited to 4096 characters per call;
+environment is preserved. The combined text, added text and description prefix
+are limited to 4096 characters per call;
 make each utterance a separate block. The output carries actual audio metadata and
 native runtime metadata in addition to the common Genflow result.
 

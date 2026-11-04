@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "properties": {
+    "voice": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null
+      ],
+      "x-ui": {
+        "disabled": true
+      },
+      "description": "O VoxCPM2 não oferece vozes por nome. Use Instruções para a voz para descrever uma voz ou conecte um áudio à entrada referência de voz para reutilizá-la."
+    },
+    "instructions": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Descreva a voz e o jeito de falar, por exemplo: voz feminina, jovem, suave e alegre. A Genflow envia a descrição ao VoxCPM2 automaticamente. Escreva apenas a fala no Prompt. Para manter o timbre entre falas, use também um áudio de referência."
+    },
+    "speed": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "enum": [
+        null,
+        1
+      ],
+      "x-ui": {
+        "disabled": true
+      }
+    },
+    "format": {
+      "type": "string",
+      "enum": [
+        "wav",
+        "mp3",
+        "opus",
+        "aac"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

@@ -68,6 +68,39 @@ Use the returned `record$revision` as `expected_revision` when saving a changed
 schema. To resolve an older revision, supply `revisions = list(model = 1)`.
 Each omitted layer chooses its latest revision; revision 0 excludes a layer.
 
+## Example: reusable voice descriptions
+
+VoxCPM2 supports `instructions` as a voice description, not a named `voice` ID.
+Its installed capability schema (`inst/adapter-schemas/voxcpm2-tts.json`) is shared
+by validation and form projection. The adapter owns the actual text-prefix
+translation; registered schemas cannot invent a transport or enable unsupported
+voice IDs. No new block contract is required to use this existing argument.
+
+A service/model registration can constrain `instructions`, change its label and
+help text, set a default, or offer descriptions as choices:
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "instructions": {
+      "type": ["string", "null"],
+      "title": "Estilo da personagem",
+      "description": "Descrições de voz desta história; use referência para manter o timbre.",
+      "enum": [null, "Voz feminina, jovem e alegre", "Voz masculina, suave e calma"],
+      "default": null
+    }
+  }
+}
+```
+
+Save this schema for `service = "local-native"`, `block = "gen_tts"` and the exact
+model ID. These are user-defined descriptions, not built-in speaker identities.
+Omit `enum` to keep free-form text. Studio reads these controls through
+`gen_block_configuration()`; the saved workflow keeps its schema snapshot until
+explicitly refreshed. NULL overrides a registered default.
+
 ## Defaults, composition and validation
 
 The supported vocabulary is the same as [block validation](block-contracts.md).

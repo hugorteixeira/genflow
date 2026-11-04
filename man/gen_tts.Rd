@@ -65,7 +65,9 @@ may return another audio container; the saved filename and returned
 
 \item{speed}{Numeric speech speed (0.25 to 4.0). Defaults to 1.}
 
-\item{instructions}{Optional instructions to style the voice (OpenAI only).}
+\item{instructions}{Optional voice/style description. VoxCPM2 encodes this as
+a parenthesized prefix in the engine input; OpenAI and compatible Replicate
+models use their instructions field. The speech text stays separate.}
 
 \item{preview}{Logical; attempt to open audio after save if interactive.}
 

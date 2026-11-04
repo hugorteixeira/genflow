@@ -1,3 +1,16 @@
+# Installed transport capabilities complement common and registered schemas.
+.gen_adapter_schema <- function(id) {
+  key <- paste0("adapter:", id)
+  if (!exists(key, .gen_contract_cache, inherits = FALSE)) {
+    path <- system.file("adapter-schemas", paste0(id, ".json"), package = "genflow")
+    schema <- tryCatch(jsonlite::read_json(path, simplifyVector = FALSE), error = function(e) NULL)
+    if (is.null(schema) || !gen_check_schema(schema)$valid)
+      .gen_validation_stop(list(.gen_issue("invalid_contract_catalog", "")))
+    .gen_contract_cache[[key]] <- schema
+  }
+  .gen_contract_cache[[key]]
+}
+
 # Adapter restrictions are shared by validation and form projection. Schemas
 # supplied by users can narrow these limits, never enable an unsupported route.
 .gen_argument_rules <- function(contract, args, bound = character()) {
@@ -10,9 +23,9 @@
   if (!.gen_scalar(service)) return(rules)
   if (block == "gen_tts" && contract$version >= 2L) {
     if (service == "local-native") {
-      for (key in c("voice", "instructions")) fixed(key, list(NULL), "tts_native_parameter")
-      fixed("speed", list(NULL, 1), "tts_native_parameter")
-      put("format", list(enum = as.list(c("wav", "mp3", "opus", "aac"))), "tts_native_parameter")
+      native <- .gen_adapter_schema("voxcpm2-tts")$properties
+      for (key in names(native))
+        put(key, native[[key]], "tts_native_parameter", disabled = isTRUE(native[[key]][["x-ui"]]$disabled))
     } else {
       native <- c("reference_audio", names(Filter(function(p) "local-native" %in% unlist(p[["x-ui"]]$service), props)))
       for (key in native) {
@@ -121,11 +134,6 @@ gen_block_configuration <- function(block, service, model = NULL, version = 1L,
   usable_profile <- tryCatch(!is.null(profile) && !length(.gen_parameter_snapshot_errors(profile,
     checked$args$service, checked$args$model, block, TRUE)), error = function(e) FALSE)
   schema <- contract$arguments
-  if (usable_profile) {
-    for (key in intersect(names(props), names(profile$schema$properties)))
-      schema$properties[[key]] <- .gen_form_property(props[[key]], profile$schema$properties[[key]])
-    schema$required <- as.list(union(unlist(schema$required), unlist(profile$schema$required)))
-  }
   rules <- .gen_argument_rules(contract, checked$args, unlist(checked$pending))
   for (key in names(rules)) {
     schema$properties[[key]] <- .gen_form_property(schema$properties[[key]], rules[[key]]$schema)
@@ -133,6 +141,11 @@ gen_block_configuration <- function(block, service, model = NULL, version = 1L,
       schema$properties[[key]][["x-ui"]]$disabled <- TRUE
       schema$properties[[key]][["x-ui"]]$reason <- gen_error_message(rules[[key]]$message)
     }
+  }
+  if (usable_profile) {
+    for (key in intersect(names(props), names(profile$schema$properties)))
+      schema$properties[[key]] <- .gen_form_property(schema$properties[[key]], profile$schema$properties[[key]])
+    schema$required <- as.list(union(unlist(schema$required), unlist(profile$schema$required)))
   }
   if ("model_options" %in% names(props)) {
     options <- schema$properties$model_options

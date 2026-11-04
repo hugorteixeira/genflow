@@ -232,6 +232,14 @@ speech <- gen_tts(
 )
 ```
 
+For local VoxCPM2, set `service = "local-native"` and describe the voice with
+`instructions = "A young woman with a gentle and warm voice"`. Genflow formats
+the engine input automatically. Use `reference_audio` to reuse a character's
+voice; this adapter has no named `voice` catalog. See
+[native TTS](inst/doc/local-inference.md#native-speech-synthesis-voxcpm2) and
+[service/model schemas](inst/doc/parameter-schemas.md#example-reusable-voice-descriptions)
+for free-form descriptions or registered choices.
+
 ### Music and sound effects
 
 ```r

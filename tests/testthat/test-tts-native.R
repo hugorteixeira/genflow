@@ -4,7 +4,7 @@ test_that("native TTS contracts are versioned and reject unsupported controls of
   good <- gen_validate_call("gen_tts",list(text="Olá",service="local-native"),2)
   expect_true(good$valid); expect_identical(good$args$model,"auto")
   expect_identical(gen_block_contracts("gen_tts",2)$inputs$reference_audio,"asset:audio")
-  for (args in list(list(voice="mimi"),list(instructions="happy"),list(speed=2),list(format="pcm"),
+  for (args in list(list(voice="mimi"),list(instructions=42),list(speed=2),list(format="pcm"),
       list(format="flac"),list(cfg_scale=2),list(steps=0),list(threads=0),list(seed=-1),list(native_device="hip"),
       list(reference_audio=42),list(reference_audio="missing.wav"),list(spoken_disclaimer=FALSE))) {
     report <- gen_validate_call("gen_tts",c(list(text="Olá",service="local-native"),args),2)
@@ -76,10 +76,11 @@ test_that("reference audio is decoded before inference and its use must be confi
   f <- native_tts_fixture()
   reference <- gen_tts("Referência",service="local-native",format="wav",persist=FALSE)$response_value
   withr::defer(unlink(reference))
-  result <- gen_tts("Ela disse falling back to zero-shot.",service="local-native",format="wav",reference_audio=reference,reference_consent=TRUE,
+  result <- gen_tts("Ela disse falling back to zero-shot.",service="local-native",format="wav",instructions="Calma e alegre",reference_audio=reference,reference_consent=TRUE,
     reference_identity="synthetic",spoken_disclaimer=FALSE,marking_responsibility=TRUE,persist=FALSE)
   expect_identical(result$status_api,"SUCCESS"); expect_true(result$native$reference_used); unlink(result$response_value)
   args <- unlist(jsonlite::read_json(f$record)$args)
+  expect_identical(args[match("--tts",args)+1L],"(Calma e alegre) Ela disse falling back to zero-shot.")
   expect_true(all(c("--voice","--i-have-rights","--speaker-identity","--no-spoken-disclaimer","--accept-marking-responsibility") %in% args))
   expect_false(file.exists(args[match("--voice",args)+1L]))
   for (mode in c("fallback","unconfirmed")) {
