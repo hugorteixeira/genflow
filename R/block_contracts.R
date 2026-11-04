@@ -215,6 +215,22 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   .gen_prepare_call(block,args,version,bound,check_capabilities,portable=TRUE)
 }
 
+.gen_argument_defaults <- function(args, contract, bound = character()) {
+  block <- contract$id; schema <- contract$arguments
+  if (.gen_scalar(args$service)) {
+    if (!identical(block,"gen_stt")) args$service <- .genflow_normalize_service_alias(args$service)
+  }
+  for (key in setdiff(names(schema$properties),bound)) {
+    mapping <- schema$properties[[key]][["x-default-by"]]
+    replace <- is.null(args[[key]]) || .gen_scalar(args[[key]]) && args[[key]] %in% unlist(mapping$replace)
+    if (!is.null(mapping) && replace && .gen_scalar(args[[mapping$field]])) {
+      value <- mapping$values[[args[[mapping$field]]]]
+      if (!is.null(value)) args[key] <- list(value)
+    }
+  }
+  args
+}
+
 .gen_prepare_call <- function(block, args, version = 1L, bound = character(), check_capabilities = TRUE, portable = TRUE, bindings_known = TRUE) {
   contract <- tryCatch(.gen_call_contract(block,version),error=function(e)e)
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),args=args,defaulted=list(),pending=list()))
@@ -235,17 +251,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   supplied <- names(args)
   runtime_only <- names(Filter(function(p) isTRUE(p[["x-runtime-only"]]),schema$properties))
   args <- .gen_apply_defaults(args,schema,c(bound,if (portable) runtime_only else character()))
-  if (.gen_scalar(args$service)) {
-    if (!identical(block,"gen_stt")) args$service <- .genflow_normalize_service_alias(args$service)
-  }
-  for (key in setdiff(names(schema$properties),bound)) {
-    mapping <- schema$properties[[key]][["x-default-by"]]
-    replace <- is.null(args[[key]]) || .gen_scalar(args[[key]]) && args[[key]] %in% unlist(mapping$replace)
-    if (!is.null(mapping) && replace && .gen_scalar(args[[mapping$field]])) {
-      value <- mapping$values[[args[[mapping$field]]]]
-      if (!is.null(value)) args[key] <- list(value)
-    }
-  }
+  args <- .gen_argument_defaults(args, contract, bound)
   parameters <- .gen_prepare_parameter_args(args, contract, supplied, bound, check_capabilities)
   args <- parameters$args
   errors <- c(errors, parameters$errors)
@@ -272,18 +278,17 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
       if (length(intersect(names(args$replicate_input),protected))) add("replicate_input",gen_error_message("image_override_conflict"),"image_override_conflict")
     }
   }
+  if (isTRUE(check_capabilities) || block == "gen_txt") .gen_validate_argument_rules(contract, args, usable, add, bound, bindings_known)
   if (identical(block,"gen_tts")) .gen_tts_rules(args,usable,add,version,check_capabilities,if (bindings_known) bound else character())
   if (block %in% c("gen_sfx","gen_music")) .gen_sound_rules(sub("^gen_","",block),args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (identical(block,"gen_txt")) {
-    if (usable("max_output_tokens") && !is.null(args$max_output_tokens) && usable("service") && args$service!="openai") add("max_output_tokens",gen_error_message("only_openai_tokens"))
-    if (usable("base_url") && !is.null(args$base_url) && usable("service") && !args$service %in% c("ollama","llamacpp")) add("base_url",gen_error_message("only_local_base_url"))
     if (isTRUE(args$tools) && usable("my_tools") && is.null(args$my_tools)) add("my_tools",gen_error_message("required_tool_definitions"))
   }
   if (identical(block,"gen_vote") && identical(args$return_winner,"content") && usable("underlying_list") && is.null(args$underlying_list)) add("underlying_list",gen_error_message("required_underlying_list"))
   if (block %in% c("json.get","list.split") && usable("pointer") && .gen_scalar(args$pointer)) {
     if (nzchar(args$pointer) && (!startsWith(args$pointer,"/") || grepl("~([^01]|$)",args$pointer,perl=TRUE))) add("pointer",gen_error_message("invalid_pointer"))
   }
-  errors <- .gen_diagnostic_context(errors, block=block)
+  errors <- .gen_diagnostic_context(errors, block=block, version=contract$version)
   list(valid=!length(errors), errors=errors, args=args, defaulted=as.list(setdiff(names(args),supplied)),
        pending=as.list(bound), block=block, contract_version=contract$version)
 }

@@ -7,16 +7,7 @@
   if (local && version<2L) { rule("service","tts_native_v2"); return(invisible(NULL)) }
   if (version<2L) return(invisible(NULL))
   reference <- "reference_audio" %in% bound || usable("reference_audio") && !is.null(args$reference_audio)
-  properties <- gen_block_contracts("gen_tts",2L)$arguments$properties
-  native <- c("reference_audio",names(Filter(function(p) "local-native" %in% unlist(p[["x-ui"]]$service),properties)))
-  defaults <- lapply(properties[native],function(p) p$default)
-  if (!local) {
-    for (key in names(defaults)) if (key %in% bound || usable(key) && !identical(args[[key]],defaults[[key]])) rule(key)
-    return(invisible(NULL))
-  }
-  for (key in c("voice","instructions")) if (usable(key) && !is.null(args[[key]])) rule(key)
-  if (usable("speed") && !is.null(args$speed) && args$speed!=1) rule("speed")
-  if (usable("format") && !args$format %in% c("wav","mp3","opus","aac")) rule("format")
+  if (!local) return(invisible(NULL))
   if (reference && usable("reference_consent") && !isTRUE(args$reference_consent)) rule("reference_consent","tts_reference_consent")
   if (identical(args$spoken_disclaimer,FALSE) && usable("marking_responsibility") && !isTRUE(args$marking_responsibility)) rule("marking_responsibility","tts_marking_required")
   if (usable("text")) {

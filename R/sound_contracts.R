@@ -23,18 +23,13 @@
   if (!providers || !usable("service")) return(invisible(NULL))
   if (args$service == "elevenlabs") {
     if (usable("model") && !args$model %in% .gen_sound_models()[[kind]]) rule("model","sound_model_unsupported")
-    if (usable("format") && !args$format %in% if (kind=="sfx") c("mp3","wav","opus") else c("mp3","opus")) rule("format","sound_format_unsupported")
     if (kind == "music") {
       if (usable("prompt") && nchar(args$prompt)>4100L) add("prompt",gen_error_message("too_long",list(limit=4100,unit="characters")),"too_long")
       if (lyrics) {
         lines <- strsplit(args$lyrics,"\n",fixed=TRUE)[[1L]]
         if (length(lines)>30L || any(nchar(lines)>200L)) rule("lyrics","sound_lyrics_limit")
-        if (usable("duration_seconds") && args$duration_seconds>120) rule("duration_seconds","sound_duration_unsupported")
       }
-      if (usable("seed") && !is.null(args$seed) && usable("lyrics") && !lyrics) rule("seed","sound_seed_unsupported")
     }
   }
-  if (args$service == "acestep" && usable("duration_seconds") && args$duration_seconds<10)
-    rule("duration_seconds","sound_duration_unsupported")
   invisible(NULL)
 }

@@ -44,7 +44,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     prompt_version_id=list(type=c("string","null"),pattern="\\S",maxLength=100),
     contract_version=list(type="integer",minimum=1),output_schema=list(type=c("object","null")),
     fixture=list(type="object")),"operation")
-  finish <- function(contract=NULL) list(valid=!length(errors),errors=.gen_diagnostic_context(errors,body,contract$id),body=body,contract=contract)
+  finish <- function(contract=NULL) list(valid=!length(errors),errors=.gen_diagnostic_context(errors,body,contract$id,contract$version),body=body,contract=contract)
   portable <- tryCatch({ .genflow_validate_portable(body); NULL }, error=function(e)e)
   if (!is.null(portable)) errors <- c(errors,list(.gen_issue("nonportable_document","",conditionMessage(portable))))
   policy <- .gen_schema_errors(check_capabilities,list(type="boolean"),"/check_capabilities")

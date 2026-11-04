@@ -158,3 +158,25 @@ reasoning behavior remains owned by each adapter.
 
 The management UI and its administrator permissions are separate work. Both
 Shiny and Studio can consume this public API; neither needs its own schema engine.
+
+
+## Configuração de formulários
+
+`gen_block_configuration(block, service, model, version, parameters, resolve)`
+projeta o contrato fixado, o snapshot de parâmetros e as restrições do adaptador
+para controles de edição. Retorna `arguments`, `parameter_schema`, `valid` e
+`errors`; `x-ui.disabled` e `x-ui.reason` explicam ajustes indisponíveis. É uma
+consulta local: não executa modelos e não modifica o cadastro.
+
+Use `resolve = TRUE` em uma seleção nova ou atualização explícita do cadastro.
+Um snapshot fornecido sempre é preservado. Use `resolve = FALSE` para reabrir
+configurações históricas, mantendo o comportamento anterior sem perfil. A
+resolução usa os mesmos padrões de serviço/modelo do validador. Os campos não
+citados pelo perfil herdam o contrato comum; limites e escolhas são restringidos,
+nunca ampliados sobre as capacidades do adaptador.
+
+Essa projeção serve aos controles, não substitui `gen_validate_call()` ou
+`gen_validate_agent_definition()`: regras entre campos, entradas conectadas e
+padrões de texto continuam sendo validados pela biblioteca. Objetos complexos
+podem ser editados como JSON. Nenhum valor inválido é apagado para satisfazer um
+schema, e nenhum schema cadastrado pode habilitar um transporte inexistente.

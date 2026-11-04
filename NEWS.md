@@ -1,3 +1,13 @@
+# genflow 0.0.20
+
+- `gen_block_configuration()` exposes an offline projection of block contracts,
+  pinned service/model schemas and adapter restrictions for editable forms.
+  Existing snapshots and explicit invalid values are preserved.
+- Share adapter argument restrictions and provider defaults between form
+  projection and validation; keep connected inputs pending where appropriate.
+- Validation diagnostics retain the actual block contract version, including
+  direct calls and portable agent definitions.
+
 # genflow 0.0.19
 
 - `gen_load_credentials()` lets server processes reload registered credential assignments through the public API, without exposing values or changing unrelated environment variables.

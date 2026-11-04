@@ -182,7 +182,7 @@ gen_error_summary <- function(error) {
 
 # Enrich only from the original document. Never resolve an ID across unrelated
 # subworkflows: the pointer identifies its scope even when IDs are reused.
-.gen_diagnostic_context <- function(errors, document = NULL, block = NULL) {
+.gen_diagnostic_context <- function(errors, document = NULL, block = NULL, version = NULL) {
   if (is.character(document) && length(document) == 1L)
     document <- tryCatch(.gen_parse_document(document), error = function(e) NULL)
   lapply(errors, function(e) {
@@ -204,10 +204,10 @@ gen_error_summary <- function(error) {
     type <- if (.gen_object(node)) node$block %||% node$type else block
     if (.gen_scalar(type)) {
       type <- switch(type, validate = "gen_validate_structure", materialize = "gen_materialize_structure", type)
-      version <- node$contract_version %||% 1L
-      contract <- tryCatch(gen_block_contracts(type, version), error = function(e) NULL)
+      selected_version <- if (.gen_object(node)) node$contract_version %||% 1L else version %||% e$contract_version %||% 1L
+      contract <- tryCatch(gen_block_contracts(type, selected_version), error = function(e) NULL)
       if (!is.null(contract)) {
-        e$block <- type; e$contract_version <- version
+        e$block <- type; e$contract_version <- selected_version
         at <- which(parts %in% c("args", "config", "parameters"))
         if (length(at) && utils::tail(at, 1L) < length(parts)) {
           property <- contract$arguments$properties[[parts[[utils::tail(at, 1L) + 1L]]]]
