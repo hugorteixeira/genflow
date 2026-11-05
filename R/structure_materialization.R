@@ -64,40 +64,17 @@ gen_materialize_structure <- function(document, prefix = .gen_default("gen_mater
   })
   resource_sources <- list(); asset_sources <- list()
   if (bundled) {
-    resources <- value$resources %||% list(); assets <- value$assets %||% list()
-    names(resources) <- vapply(resources,`[[`,character(1),"key")
-    refs <- function(kind,b) {
-      if (kind=="agent") return(b$prompt_version_id %||% character())
-      if (kind!="workflow") return(character())
-      unique(unlist(lapply(b$nodes,function(n) c(n$config$agent_version_id,
-        unlist(n$config$agent_version_ids,use.names=FALSE),n$config$workflow_version_id)),use.names=FALSE))
-    }
-    used <- refs("workflow",body)
-    repeat {
-      next_used <- union(used,unlist(lapply(resources[used],function(r) refs(r$kind,r$body)),use.names=FALSE))
-      if (setequal(used,next_used)) break
-      used <- next_used
-    }
-    resources <- resources[names(resources) %in% used]
-    asset_refs <- function(kind,b) if (kind=="workflow") unlist(lapply(b$nodes,function(n)n$config$artifact_ids),use.names=FALSE) else character()
-    used_assets <- c(asset_refs("workflow",body),unlist(lapply(resources,function(r)asset_refs(r$kind,r$body)),use.names=FALSE))
-    assets <- Filter(function(a)a$key %in% used_assets,assets)
-    remap <- function(kind,b) {
-      if (kind=="agent" && !is.null(b$prompt_version_id)) b$prompt_version_id <- namespace(b$prompt_version_id)
-      if (kind=="workflow") b$nodes <- lapply(b$nodes,function(n) {
-        for (field in c("agent_version_id","workflow_version_id")) if (!is.null(n$config[[field]])) n$config[[field]] <- namespace(n$config[[field]])
-        for (field in c("agent_version_ids","artifact_ids")) if (!is.null(n$config[[field]])) n$config[[field]] <- lapply(n$config[[field]],namespace)
-        n
-      })
-      b
-    }
-    value$root$body <- remap("workflow",body)
-    value$resources <- unname(lapply(resources,function(r) {
-      key <- r$key; r$key <- namespace(key); resource_sources[[r$key]] <<- key
-      r$body <- remap(r$kind,r$body); r
+    value$root$body <- body
+    value <- .gen_prune_definition(value)
+    resource_map <- stats::setNames(lapply(value$resources,function(r) namespace(r$key)),vapply(value$resources,`[[`,character(1),"key"))
+    asset_map <- stats::setNames(lapply(value$assets,function(a) namespace(a$key)),vapply(value$assets,`[[`,character(1),"key"))
+    value$root$body <- gen_remap_definition(body,"workflow",resource_map,asset_map)
+    value$resources <- unname(lapply(value$resources,function(r) {
+      key <- r$key; r$key <- resource_map[[key]]; resource_sources[[r$key]] <<- key
+      r$body <- gen_remap_definition(r$body,r$kind,resource_map,asset_map); r
     }))
-    value$assets <- unname(lapply(assets,function(a) {
-      key <- a$key; a$key <- namespace(key); asset_sources[[a$key]] <<- key; a
+    value$assets <- unname(lapply(value$assets,function(a) {
+      key <- a$key; a$key <- asset_map[[key]]; asset_sources[[a$key]] <<- key; a
     }))
   } else value <- body
   checked <- gen_validate_structure(value,check_capabilities=check_capabilities)

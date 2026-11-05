@@ -32,7 +32,7 @@ test_that("materialization retains local scopes, assets and caller data", {
   child <- d$root; child$key <- "child"
   d$resources <- c(d$resources,list(child))
   d$root$body$nodes <- list(list(id="in",type="input",config=list(key="brief")),
-    list(id="call",type="subworkflow",config=list(workflow_version_id="child"),inputs=list(brief=list(node="in",port="asset"))))
+    list(id="call",type="subworkflow",config=list(workflow_id="child"),inputs=list(brief=list(node="in",port="asset"))))
   r <- gen_materialize_structure(d,"s")
   expect_true(r$valid)
   child <- Filter(function(x)x$key=="s_child",r$document$resources)[[1]]

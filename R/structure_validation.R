@@ -206,7 +206,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
     } else {
       active <<- c(active,key); on.exit(active <<- head(active,-1L))
       if (.gen_object(value) && is.list(value$nodes)) for (n in value$nodes) {
-        if (.gen_object(n) && .gen_scalar(n$block) && n$block %in% c("subworkflow","foreach") && .gen_object(n$args) && .gen_scalar(n$args$workflow_version_id)) resolve(n$args$workflow_version_id)
+        if (.gen_object(n) && .gen_scalar(n$block) && n$block %in% c("subworkflow","foreach") && .gen_object(n$args) && .gen_scalar(n$args$workflow_id)) resolve(n$args$workflow_id)
       }
       if (.gen_object(value)) value$workflows <- interfaces
       report <- .gen_validate_structure_graph(value,TRUE,check_capabilities)
@@ -344,11 +344,11 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
       if (usable[[i]] && complete) {
         child <- list()
         if (n$block %in% c("subworkflow","foreach")) {
-          child <- document$workflows[[n$args$workflow_version_id]]
-          if (is.null(child)) { add("unknown_workflow",paste0(path,"/args/workflow_version_id"),gen_error_message("unknown_workflow"),id); usable[[i]] <- FALSE; next }
+          child <- document$workflows[[n$args$workflow_id]]
+          if (is.null(child)) { add("unknown_workflow",paste0(path,"/args/workflow_id"),gen_error_message("unknown_workflow"),id); usable[[i]] <- FALSE; next }
           # Definitions supply contracts, not arbitrary R resolvers or DB access.
           if (!.gen_object(child) || !.gen_object(child$interface %||% list()) || !.gen_object(child$exports %||% list())) {
-            add("invalid_workflow",paste0(path,"/args/workflow_version_id"),gen_error_message("invalid_workflow"),id); usable[[i]] <- FALSE; next
+            add("invalid_workflow",paste0(path,"/args/workflow_id"),gen_error_message("invalid_workflow"),id); usable[[i]] <- FALSE; next
           }
         }
         checked <- gen_block_ports(n$block,n$args,input_types,n$contract_version,child$interface %||% list(),child$exports %||% list())

@@ -88,7 +88,7 @@ No arbitrary expression evaluation is supported.
 
 A named `workflows` map may contain additional complete documents. A
 `subworkflow` or `foreach` block refers to a map key through
-`args.workflow_version_id`; its interface is derived from `input` and `output`
+`args.workflow_id`; its interface is derived from `input` and `output`
 blocks (or the document's `outputs`). All supplied definitions are checked,
 including unused ones. Recursive definitions are rejected. Limits are 10,000
 nodes per graph, 64 definitions and 8 levels of subworkflow references.
@@ -96,6 +96,34 @@ Applications that already resolve immutable workflow versions may instead supply
 `{ "external": true, "interface": {...}, "exports": {...} }` with declared port
 types. This validates the declared interface only; the application must validate
 the referenced implementation and permissions separately.
+
+`workflow_id` is a stable workflow identity in an application and a resource key
+inside a portable bundle. It is not a model identifier or a node ID. Since
+0.0.23 it replaces the development field `workflow_version_id` in authored
+`subworkflow` and `foreach` configurations. The library does not query a database
+or choose the latest publication. Applications resolve that identity and freeze
+the validated dependency graph for execution.
+
+### Reusable selections
+
+`gen_extract_structure(document, node_ids = NULL)` accepts a valid Studio body
+or complete definition bundle and returns the ordinary extracted `document`, a
+validation report and `boundary` mappings back to original source ports.
+Selecting nodes preserves exactly those nodes. Incoming edges from unselected
+nodes become typed `input` nodes, with their JSON schemas; shared origins remain
+shared. Outgoing edges and terminal results become named public outputs. A
+NULL selection extracts the whole workflow. Only referenced resources and asset
+descriptors are retained. Unsupported boundary types return canonical diagnostics.
+
+Extraction does not replace the original selection, create files, generate media
+or start inference. `gen_materialize_structure()` remains responsible for prefixing
+and mounting documents; its selection includes ancestors instead.
+
+`gen_definition_references(body, kind)` reports declared workflow, agent, prompt
+and asset references with JSON pointers. `gen_remap_definition(body, kind,
+resources, assets)` remaps those fields only, preserving free text and arbitrary
+JSON. Missing mappings are errors. Workflow mappings use stable identities;
+agent and prompt mappings use their published version identities.
 
 ## Complete definition bundles
 

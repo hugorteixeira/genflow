@@ -247,8 +247,8 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     if (n$block=="select") out[] <- list(incoming$candidates)
     if (n$block %in% c("list.split","json.get") && identical(n$args$pointer,"") && identical(n$args$kind,"json"))
       out[] <- list(if (n$block=="list.split") incoming$asset$items else incoming$asset)
-    if (n$block %in% c("subworkflow","foreach") && .gen_scalar(n$args$workflow_version_id))
-      out <- lapply(interfaces[[n$args$workflow_version_id]]$exports,function(x)x$schema)
+    if (n$block %in% c("subworkflow","foreach") && .gen_scalar(n$args$workflow_id))
+      out <- lapply(interfaces[[n$args$workflow_id]]$exports,function(x)x$schema)
     schemas[[id]] <- out
     if (n$block=="select") derived[[id]]["output_schema"] <- list(out$asset)
   }
@@ -325,17 +325,12 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   for (i in seq_along(entries)) {
     e <- entries[[i]]; path <- paste0(paths[[i]],"/body")
     if (!.gen_object(e) || !.gen_object(e$body)) next
-    body <- e$body
-    if (kinds[[i]]=="agent" && !is.null(body$prompt_version_id)) ref(i,body$prompt_version_id,"prompt",paste0(path,"/prompt_version_id"))
-    if (kinds[[i]]=="workflow" && is.list(body$nodes)) for (j in seq_along(body$nodes)) {
-      n <- body$nodes[[j]]; np <- paste0(path,"/nodes/",j-1L,"/config")
-      if (!.gen_object(n) || !.gen_object(n$config)) next
-      for (field in c("agent_version_id","workflow_version_id")) if (!is.null(n$config[[field]])) ref(i,n$config[[field]],if(field=="agent_version_id") "agent" else "workflow",paste0(np,"/",field))
-      if (is.list(n$config$agent_version_ids)) for (k in seq_along(n$config$agent_version_ids)) ref(i,n$config$agent_version_ids[[k]],"agent",paste0(np,"/agent_version_ids/",k-1L))
-      if (is.list(n$config$artifact_ids)) for (k in seq_along(n$config$artifact_ids)) {
-        key <- n$config$artifact_ids[[k]]
-        if (.gen_scalar(key) && is.null(assets[[key]])) add("unknown_asset",paste0(np,"/artifact_ids/",k-1L),gen_error_message("unknown_asset",list(asset=key)))
-      }
+    for (reference in gen_definition_references(e$body,kinds[[i]])) {
+      at <- paste0(path,reference$path)
+      if (reference$kind=="asset") {
+        key <- reference$key
+        if (.gen_scalar(key) && is.null(assets[[key]])) add("unknown_asset",at,gen_error_message("unknown_asset",list(asset=key)))
+      } else ref(i,reference$key,reference$kind,at)
     }
   }
   state <- integer(length(entries)); ordered <- integer(); heights <- integer(length(entries))

@@ -1,0 +1,17 @@
+{
+  "id": "gen_extract_structure",
+  "version": 1,
+  "kind": "function",
+  "function": "gen_extract_structure",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "document": { "type": ["object", "string"], "title": "Documento do workflow" },
+      "node_ids": { "type": ["array", "null"], "default": null, "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "title": "Peças selecionadas" }
+    },
+    "required": ["document"],
+    "additionalProperties": false
+  },
+  "inputs": { "document": "asset:text|asset:json" },
+  "outputs": { "report": "asset:json", "document": "asset:json" }
+}

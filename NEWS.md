@@ -1,3 +1,15 @@
+# genflow 0.0.23
+
+- `gen_extract_structure()` extracts exactly the selected pieces into an ordinary
+  reusable workflow, declaring typed boundary inputs and outputs and retaining
+  only the required resources and media references. It does not execute nodes.
+- `gen_definition_references()` and `gen_remap_definition()` centralize portable
+  reference discovery and remapping for validation, extraction and materialization.
+- Development-format change: `subworkflow` and `foreach` now author a stable
+  `workflow_id`, also used as the workflow resource key in portable bundles.
+  Applications resolve publications and freeze their execution plans; the
+  library validates the supplied documents offline. No parallel legacy contract.
+
 # genflow 0.0.22
 
 - VoxCPM2 accepts voice descriptions through `instructions`, with automatic

@@ -64,6 +64,13 @@ validate and prepare a selected workflow fragment, including its ancestors,
 without executing it. It preserves authored arguments, namespaces identifiers
 and returns the same portable format for an application to preview and apply.
 
+Version 0.0.23 adds `gen_extract_structure(document, node_ids)`: keep exactly the
+selected pieces, expose their typed input/output boundaries and reuse the result
+as an ordinary workflow. `subworkflow` and `foreach` use a stable `workflow_id`;
+the application resolves publications and freezes execution. Reference discovery
+and remapping are shared through `gen_definition_references()` and
+`gen_remap_definition()`.
+
 See [block contracts and the workflow format](inst/doc/block-contracts.md) for
 examples, supported schema keywords, validation limits and versioning.
 

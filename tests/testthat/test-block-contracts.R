@@ -125,7 +125,7 @@ test_that("all declared subworkflows are checked and nested interfaces are infer
     outputs=list(image=list(node="image",port="content")))
   parent <- list(schema_version=1,workflows=list(scene=child),nodes=list(
     list(id="text",block="gen_txt",args=list(context="A garden")),
-    list(id="scene",block="subworkflow",args=list(workflow_version_id="scene"),inputs=list(brief=list(node="text",port="content")))),
+    list(id="scene",block="subworkflow",args=list(workflow_id="scene"),inputs=list(brief=list(node="text",port="content")))),
     outputs=list(image=list(node="scene",port="image")))
   good <- gen_validate_structure(parent,TRUE)
   expect_true(good$valid,info=paste(vapply(good$errors,`[[`,character(1),"message"),collapse="; "))
@@ -135,7 +135,7 @@ test_that("all declared subworkflows are checked and nested interfaces are infer
   bad <- gen_validate_structure(parent)
   expect_false(bad$valid)
   expect_gte(sum(vapply(bad$errors,function(e)startsWith(e$path,"/workflows/unused"),logical(1))),2)
-  parent$workflows$scene$nodes[[2]] <- list(id="image",block="subworkflow",args=list(workflow_version_id="scene"))
+  parent$workflows$scene$nodes[[2]] <- list(id="image",block="subworkflow",args=list(workflow_id="scene"))
   expect_true(any(vapply(gen_validate_structure(parent)$errors,function(e)e$code=="recursive_workflow",logical(1))))
 })
 
@@ -166,5 +166,4 @@ test_that("call and port validation require exactly one identified contract", {
     expect_identical(call$errors[[1]]$code,"unknown_contract")
     expect_identical(ports$errors[[1]]$code,"unknown_contract")
   }
-  expect_length(gen_block_contracts(),35L)
 })

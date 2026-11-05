@@ -46,7 +46,7 @@ test_that("resource IDs, expected kinds, asset manifests and cycles are checked 
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="resource_kind",logical(1))))
   d <- definition_bundle(); d$resources[[2]]$key <- "writer"
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="duplicate_resource",logical(1))))
-  child <- list(schema_version=1L,nodes=list(list(id="recurse",type="subworkflow",config=list(workflow_version_id="child"))))
+  child <- list(schema_version=1L,nodes=list(list(id="recurse",type="subworkflow",config=list(workflow_id="child"))))
   d <- definition_bundle(); d$resources[[3]] <- list(key="child",kind="workflow",name="Child",body=child)
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="recursive_resource",logical(1))))
   d <- definition_bundle(); d$root$body$nodes[[2]]$config <- list(source="provided",kind="text",artifact_ids=list("file"))
@@ -62,7 +62,7 @@ test_that("resource IDs, expected kinds, asset manifests and cycles are checked 
 test_that("subworkflow bodies and interfaces resolve transitively without UUIDs or layout", {
   d <- definition_bundle(); child <- d$root$body; child$ui <- NULL
   d$resources[[3]] <- list(key="scene",kind="workflow",name="Scene",body=child)
-  d$root$body$nodes[[2]] <- list(id="scene",type="subworkflow",config=list(workflow_version_id="scene"),inputs=list(brief=list(node="brief",port="asset")))
+  d$root$body$nodes[[2]] <- list(id="scene",type="subworkflow",config=list(workflow_id="scene"),inputs=list(brief=list(node="brief",port="asset")))
   d$root$body$nodes[[3]]$inputs$story <- list(node="scene",port="story")
   report <- gen_validate_structure(d,TRUE)
   expect_true(report$valid,info=paste(vapply(report$errors,`[[`,character(1),"message"),collapse="; "))

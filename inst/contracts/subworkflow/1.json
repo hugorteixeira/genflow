@@ -5,7 +5,7 @@
   "arguments": {
     "type": "object",
     "properties": {
-      "workflow_version_id": {
+      "workflow_id": {
         "type": "string",
         "pattern": "\\S",
         "x-ui": {
@@ -14,7 +14,7 @@
       }
     },
     "required": [
-      "workflow_version_id"
+      "workflow_id"
     ],
     "additionalProperties": false
   },

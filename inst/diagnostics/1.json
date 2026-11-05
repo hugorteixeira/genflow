@@ -276,6 +276,7 @@
     "schema_required": {"message": "required deve listar propriedades declaradas, sem repetições.", "category": "schema"},
     "schema_type": {"message": "O tipo declarado no schema não é suportado ou está repetido.", "category": "schema"},
     "schema_unique": {"message": "uniqueItems deve ser verdadeiro ou falso.", "category": "schema"},
+    "component_boundary_type": {"message": "Esta conexão não pode ser uma entrada de componente. Inclua também a peça que produz esse resultado.", "category": "workflow"},
     "selected_node_missing": {"message": "A seleção contém uma peça que não existe no workflow principal.", "category": "workflow"},
     "sound_base_url_invalid": {"category": "validation", "message": "A URL base do áudio é inválida.", "hint": "Use HTTP ou HTTPS, sem credenciais, parâmetros ou fragmentos na URL."},
     "sound_deadline": {"category": "transport", "message": "O prazo para concluir o áudio terminou.", "hint": "Se houver recibo, recupere o resultado existente sem gerar novamente."},
