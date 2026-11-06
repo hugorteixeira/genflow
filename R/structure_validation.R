@@ -147,6 +147,8 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
 #'   a Studio workflow body, or a complete `genflow-studio-definition` v1 bundle.
 #'   References to agents, prompts and subworkflows require the complete bundle.
 #' @param require_output Require an explicit final output for a complete graph.
+#' @param purpose `execution` (default) requires complete configuration;
+#'   `authoring` returns configuration `requirements` separately from errors.
 #' @param check_capabilities R-side policy for checking provider capabilities and
 #'   rejecting fixture controls. Defaults to TRUE; FALSE is for isolated fixtures.
 #'   This policy cannot be supplied inside the serialized document.
@@ -156,34 +158,37 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
 #'   execution diagnostics remain in `errors`, including incomplete drafts.
 #'   The supplied input is never modified.
 #' @export
-gen_validate_structure <- function(document, require_output = .gen_default("gen_validate_structure","require_output"), check_capabilities = TRUE) {
-  report <- .gen_validate_structure_document(document, require_output, check_capabilities)
+gen_validate_structure <- function(document, require_output = .gen_default("gen_validate_structure","require_output"), check_capabilities = TRUE, purpose = "execution") {
+  report <- .gen_validate_structure_document(document, require_output, check_capabilities, purpose)
+  report$requirements <- .gen_diagnostic_context(report$requirements %||% list(), if (missing(document)) NULL else document)
+  report$ready <- report$valid && !length(report$requirements)
   report$errors <- .gen_diagnostic_context(report$errors, if (missing(document)) NULL else document)
   if (!is.null(report$bundle_errors)) report$bundle_errors <- .gen_diagnostic_context(report$bundle_errors, if (missing(document)) NULL else document)
   report
 }
 
-.gen_validate_structure_document <- function(document, require_output, check_capabilities) {
-  args <- list(require_output=require_output)
+.gen_validate_structure_document <- function(document, require_output, check_capabilities, purpose) {
+  args <- list(require_output=require_output,purpose=purpose)
   if (!missing(document)) args["document"] <- list(document)
   call <- gen_validate_call("gen_validate_structure",args)
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL,ports=list(),order=list(),pending=list()))
   if (!is.logical(check_capabilities) || length(check_capabilities)!=1L || is.na(check_capabilities))
     return(list(valid=FALSE,errors=list(.gen_issue("invalid_policy","/check_capabilities",gen_error_message("invalid_policy"))),document=NULL,ports=list(),order=list(),pending=list()))
   parsed <- if (.gen_scalar(document)) tryCatch(.gen_parse_document(document),error=function(e)NULL) else document
-  if (.gen_object(parsed) && "format" %in% names(parsed)) return(.gen_validate_definition_bundle(parsed,require_output,check_capabilities))
+  if (.gen_object(parsed) && "format" %in% names(parsed)) return(.gen_validate_definition_bundle(parsed,require_output,check_capabilities,purpose))
   if (.gen_object(parsed) && is.list(parsed$nodes) && any(vapply(parsed$nodes,function(n) .gen_object(n) && "type" %in% names(n),logical(1)))) {
     bundle <- list(format="genflow-studio-definition",schema_version=1L,
       root=list(kind="workflow",name="Workflow",body=parsed),resources=list(),assets=list())
-    report <- .gen_validate_definition_bundle(bundle,require_output,check_capabilities)
+    report <- .gen_validate_definition_bundle(bundle,require_output,check_capabilities,purpose)
     report$document <- report$document$root$body
+    report$requirements <- lapply(report$requirements,function(e) { e$path <- sub("^/root/body","",e$path); e })
     report$errors <- lapply(report$errors,function(e) { e$path <- sub("^/root/body","",e$path); e })
     return(report)
   }
-  if (!.gen_object(parsed) || is.null(parsed$workflows) || !length(parsed$workflows)) return(.gen_validate_structure_graph(document,require_output,check_capabilities))
+  if (!.gen_object(parsed) || is.null(parsed$workflows) || !length(parsed$workflows)) return(.gen_validate_structure_graph(document,require_output,check_capabilities,purpose))
   definitions <- parsed$workflows
   if (!.gen_object(definitions) || length(definitions)>64L) return(list(valid=FALSE,errors=list(.gen_issue("invalid_workflows","/workflows",gen_error_message("invalid_workflows"))),document=parsed,ports=list(),order=list(),pending=list()))
-  reports <- list(); interfaces <- list(); errors <- list(); active <- character()
+  reports <- list(); interfaces <- list(); errors <- list(); requirements <- list(); active <- character()
   resolve <- function(key) {
     if (!is.null(reports[[key]])) return(reports[[key]])
     if (key %in% active || length(active)>=8L) {
@@ -209,7 +214,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         if (.gen_object(n) && .gen_scalar(n$block) && n$block %in% c("subworkflow","foreach") && .gen_object(n$args) && .gen_scalar(n$args$workflow_id)) resolve(n$args$workflow_id)
       }
       if (.gen_object(value)) value$workflows <- interfaces
-      report <- .gen_validate_structure_graph(value,TRUE,check_capabilities)
+      report <- .gen_validate_structure_graph(value,TRUE,check_capabilities,purpose)
       if (report$valid) {
         incoming <- list(); outgoing <- list()
         for (n in report$document$nodes) {
@@ -230,21 +235,24 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
       e$path <- paste0(.gen_pointer("/workflows",key),e$path %||% "")
       errors[[length(errors)+1L]] <<- e
     }
+    for (e in report$requirements) { e$path <- paste0(.gen_pointer("/workflows",key),e$path); requirements[[length(requirements)+1L]] <<- e }
     reports[[key]] <<- report
     report
   }
   for (key in names(definitions)) resolve(key)
   parsed$workflows <- interfaces
-  result <- .gen_validate_structure_graph(parsed,require_output,check_capabilities)
+  result <- .gen_validate_structure_graph(parsed,require_output,check_capabilities,purpose)
+  result$requirements <- c(requirements,result$requirements)
   result$errors <- c(errors,result$errors); result$valid <- !length(result$errors)
   result$document$workflows <- lapply(names(definitions),function(key) reports[[key]]$document %||% definitions[[key]])
   names(result$document$workflows) <- names(definitions)
   result
 }
 
-.gen_validate_structure_graph <- function(document, require_output = FALSE, check_capabilities = TRUE) {
+.gen_validate_structure_graph <- function(document, require_output = FALSE, check_capabilities = TRUE, purpose = "execution", unresolved = character()) {
+  requirements <- list()
   errors <- list(); ports <- list(); prepared <- list(); ordered <- character(); pending <- list()
-  finish <- function(value=NULL) list(valid=!length(errors),errors=errors,document=value,ports=ports,order=as.list(ordered),pending=pending)
+  finish <- function(value=NULL) list(valid=!length(errors),errors=errors,document=value,ports=ports,order=as.list(ordered),pending=pending,requirements=requirements)
   add <- function(code,path,message,node=NULL) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message,node)
   if (.gen_scalar(document)) {
     document <- tryCatch(.gen_parse_document(document),error=function(e)e)
@@ -291,6 +299,11 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
     }
     checked <- gen_validate_call(n$block,n$args %||% list(),version,
       bound=if (contract$kind=="function") names(bindings) else character(), check_capabilities=check_capabilities)
+    if (.gen_authoring(purpose)) {
+      absent <- vapply(checked$errors,function(e) e$code=="required" && sub("^/args/","",e$path) %in% setdiff(names(contract$arguments$properties),names(n$args)),logical(1))
+      for (e in checked$errors[absent]) { e$path <- paste0(path,e$path); e$node_id <- id; requirements[[length(requirements)+1L]] <- e }
+      checked$errors <- checked$errors[!absent]; checked$valid <- !length(checked$errors)
+    }
     for (e in checked$errors) { e$path <- paste0(path,e$path); e$node_id <- id; errors[[length(errors)+1L]] <- e }
     n$args <- checked$args; n$inputs <- bindings; n$contract_version <- version
     prepared[[i]] <- n
@@ -336,14 +349,24 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         ref <- refs[[i]][[key]]; source <- match(ref$node,ids)
         type <- ports[[ref$node]][[ref$port]]
         if (is.null(type)) {
-          if (usable[[source]]) add("unknown_port",paste0(.gen_pointer(paste0(path,"/inputs"),key),"/port"),gen_error_message("unknown_port",list(port=ref$port)),id)
+          if (usable[[source]]) {
+            at <- paste0(.gen_pointer(paste0(path,"/inputs"),key),"/port")
+            if (.gen_authoring(purpose) && !length(ports[[ref$node]]) && any(vapply(requirements,function(e) identical(e$node_id,ref$node),logical(1))))
+              requirements[[length(requirements)+1L]] <- .gen_requirement("port_configuration_pending",at,id)
+            else add("unknown_port",at,gen_error_message("unknown_port",list(port=ref$port)),id)
+          }
           complete <- FALSE
         } else input_types[[key]] <- type
       }
       if (!complete) usable[[i]] <- FALSE
+      if (.gen_authoring(purpose) && id %in% unresolved) {
+        requirements[[length(requirements)+1L]] <- .gen_requirement("port_configuration_pending",paste0(path,"/args/kind"),id)
+        ordered <- c(ordered,id); next
+      }
       if (usable[[i]] && complete) {
         child <- list()
         if (n$block %in% c("subworkflow","foreach")) {
+          if (.gen_authoring(purpose) && is.null(n$args$workflow_id)) { ordered <- c(ordered,id); next }
           child <- document$workflows[[n$args$workflow_id]]
           if (is.null(child)) { add("unknown_workflow",paste0(path,"/args/workflow_id"),gen_error_message("unknown_workflow"),id); usable[[i]] <- FALSE; next }
           # Definitions supply contracts, not arbitrary R resolvers or DB access.
@@ -352,6 +375,12 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
           }
         }
         checked <- gen_block_ports(n$block,n$args,input_types,n$contract_version,child$interface %||% list(),child$exports %||% list())
+        if (.gen_authoring(purpose)) {
+          missing_input <- vapply(checked$errors,function(e) e$code=="required_input",logical(1))
+          for (e in checked$errors[missing_input]) { e$path <- paste0(path,e$path); e$node_id <- id; requirements[[length(requirements)+1L]] <- e }
+          checked$errors <- checked$errors[!missing_input]
+          checked$valid <- !length(checked$errors)
+        }
         for (e in checked$errors) { e$path <- paste0(path,e$path); e$node_id <- id; errors[[length(errors)+1L]] <- e }
         usable[[i]] <- checked$valid
         ports[id] <- list(checked$ports)

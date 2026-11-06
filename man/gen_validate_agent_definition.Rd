@@ -4,13 +4,20 @@
 \alias{gen_validate_agent_definition}
 \title{Validate and prepare a portable agent definition}
 \usage{
-gen_validate_agent_definition(body, check_capabilities = TRUE)
+gen_validate_agent_definition(
+  body,
+  check_capabilities = TRUE,
+  purpose = "execution"
+)
 }
 \arguments{
 \item{body}{A portable agent definition, not a resolved runtime snapshot.}
 
 \item{check_capabilities}{Check installed provider capabilities. FALSE is
 intended for isolated fixture runtimes.}
+
+\item{purpose}{\code{execution} (default) requires complete configuration;
+\code{authoring} returns configuration \code{requirements} separately from errors.}
 }
 \value{
 A list with \code{valid}, structured \code{errors}, prepared \code{body} and \code{contract}.

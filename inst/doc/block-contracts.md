@@ -330,3 +330,22 @@ The public [parameter schema API](parameter-schemas.md) stores revisions beside
 the existing catalogs. Prepared agent definitions and workflows carry their
 effective schema, revisions and content hash; validation on import does not need
 the original catalog. Old contracts and workflows retain their versions.
+
+## Incomplete authoring documents
+
+`gen_validate_structure(document, purpose = "authoring")` separates structural
+`errors` from configuration `requirements`. `valid` means the structure can be
+edited/materialized; `ready` also requires no pending configuration. Execution
+and publication must use the default `purpose = "execution"`.
+`gen_extract_structure()` and `gen_materialize_structure()` accept the same policy.
+In a portable bundle, authoring applies to the root. Resources represent published
+dependencies and remain complete, so validation and materialization agree.
+
+Generator/judge nodes can persist `config.agent_drafts`, an array of proposals
+with a normal `agent` body and optional `prompt = list(template = "...")`.
+A proposal can instead reference an existing prompt version. Proposals and saved
+agent IDs are mutually exclusive. Their operation determines known port types;
+missing service/model identities are not replaced with defaults. An application
+must persist complete agent/prompt versions and replace the proposals with IDs
+before executing. Extraction, export and remapping traverse prompt references
+inside proposals using the same reference walker as published definitions.

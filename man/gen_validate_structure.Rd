@@ -7,7 +7,8 @@
 gen_validate_structure(
   document,
   require_output = .gen_default("gen_validate_structure", "require_output"),
-  check_capabilities = TRUE
+  check_capabilities = TRUE,
+  purpose = "execution"
 )
 }
 \arguments{
@@ -20,6 +21,9 @@ References to agents, prompts and subworkflows require the complete bundle.}
 \item{check_capabilities}{R-side policy for checking provider capabilities and
 rejecting fixture controls. Defaults to TRUE; FALSE is for isolated fixtures.
 This policy cannot be supplied inside the serialized document.}
+
+\item{purpose}{\code{execution} (default) requires complete configuration;
+\code{authoring} returns configuration \code{requirements} separately from errors.}
 }
 \value{
 A report with \code{valid}, \code{errors}, \code{document} (a prepared copy), \code{ports},

@@ -13,6 +13,13 @@
     for (field in c("agent_version_ids","artifact_ids")) if (is.list(n$config[[field]]))
       for (j in seq_along(n$config[[field]])) n$config[[field]][j] <- list(visit(n$config[[field]][[j]],
         if(field=="artifact_ids") "asset" else "agent",paste0(path,field,"/",j-1L),n))
+    if (is.list(n$config$agent_drafts)) for (j in seq_along(n$config$agent_drafts)) {
+      proposal <- n$config$agent_drafts[[j]]
+      if (!.gen_object(proposal)) next
+      a <- proposal$agent
+      if (.gen_object(a) && !is.null(a$prompt_version_id))
+        n$config$agent_drafts[[j]]$agent$prompt_version_id <- visit(a$prompt_version_id,"prompt",paste0(path,"agent_drafts/",j-1L,"/agent/prompt_version_id"),n)
+    }
     body$nodes[[i]] <- n
   }
   body

@@ -1,3 +1,14 @@
+# genflow 0.0.24
+
+- Portable workflow validation, extraction and materialization accept an explicit
+  `purpose = "authoring"`. Structural errors remain blocking; incomplete
+  configuration is returned as `requirements`, with `ready = FALSE`. Execution
+  remains strict by default.
+- Generator and judge nodes can persist canonical `agent_drafts` (agent bodies
+  and optional prompts), mutually exclusive with saved agent references. Their
+  operations define known port types; proposals must be saved as agent versions
+  before execution. Reference discovery/remapping includes draft prompt references.
+
 # genflow 0.0.23
 
 - `gen_extract_structure()` extracts exactly the selected pieces into an ordinary

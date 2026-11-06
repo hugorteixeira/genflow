@@ -7,7 +7,8 @@
 gen_extract_structure(
   document,
   node_ids = .gen_default("gen_extract_structure", "node_ids"),
-  check_capabilities = TRUE
+  check_capabilities = TRUE,
+  purpose = "execution"
 )
 }
 \arguments{
@@ -17,6 +18,9 @@ or JSON string.}
 \item{node_ids}{Exact node IDs to extract. NULL selects the whole workflow.}
 
 \item{check_capabilities}{Check installed provider capabilities.}
+
+\item{purpose}{\code{execution} (default) requires complete configuration;
+\code{authoring} returns configuration \code{requirements} separately from errors.}
 }
 \value{
 A validation report with the extracted \code{document} and \code{boundary}

@@ -59,6 +59,40 @@
         "required": [],
         "additionalProperties": false,
         "default": {}
+      },
+      "agent_drafts": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 1,
+        "items": {
+          "type": "object",
+          "required": [
+            "agent"
+          ],
+          "properties": {
+            "agent": {
+              "type": "object"
+            },
+            "prompt": {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "maxLength": 100000
+                }
+              },
+              "required": [
+                "template"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "x-ui": {
+          "hidden": true
+        }
       }
     },
     "required": [],

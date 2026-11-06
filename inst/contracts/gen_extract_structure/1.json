@@ -6,12 +6,49 @@
   "arguments": {
     "type": "object",
     "properties": {
-      "document": { "type": ["object", "string"], "title": "Documento do workflow" },
-      "node_ids": { "type": ["array", "null"], "default": null, "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "title": "Peças selecionadas" }
+      "document": {
+        "type": [
+          "object",
+          "string"
+        ],
+        "title": "Documento do workflow"
+      },
+      "node_ids": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "default": null,
+        "minItems": 1,
+        "maxItems": 100,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "title": "Peças selecionadas"
+      },
+      "purpose": {
+        "type": "string",
+        "enum": [
+          "execution",
+          "authoring"
+        ],
+        "default": "execution",
+        "title": "Finalidade da validação"
+      }
     },
-    "required": ["document"],
+    "required": [
+      "document"
+    ],
     "additionalProperties": false
   },
-  "inputs": { "document": "asset:text|asset:json" },
-  "outputs": { "report": "asset:json", "document": "asset:json" }
+  "inputs": {
+    "document": "asset:text|asset:json"
+  },
+  "outputs": {
+    "report": "asset:json",
+    "document": "asset:json"
+  }
 }

@@ -14,6 +14,8 @@
 #'   and starting with a letter. Empty preserves identifiers.
 #' @param node_ids Optional root node IDs to select, including their ancestors.
 #'   NULL selects all nodes.
+#' @param purpose `execution` (default) requires complete configuration;
+#'   `authoring` returns configuration `requirements` separately from errors.
 #' @param check_capabilities Check installed provider capabilities. FALSE is for
 #'   isolated fixture runtimes.
 #' @return A validation report with the prepared `document`, `node_map` and
@@ -22,12 +24,13 @@
 #' @export
 gen_materialize_structure <- function(document, prefix = .gen_default("gen_materialize_structure","prefix"),
                                       node_ids = .gen_default("gen_materialize_structure","node_ids"),
-                                      check_capabilities = TRUE) {
+                                      check_capabilities = TRUE, purpose = "execution") {
   args <- list(prefix=prefix,node_ids=node_ids)
   if (!missing(document)) args["document"] <- list(document)
+  args$purpose <- purpose
   call <- gen_validate_call("gen_materialize_structure",args)
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL))
-  checked <- gen_validate_structure(document,check_capabilities=check_capabilities)
+  checked <- gen_validate_structure(document,check_capabilities=check_capabilities,purpose=purpose)
   if (!checked$valid) return(checked)
   value <- if (.gen_scalar(document)) .gen_parse_document(document) else document
   bundled <- identical(value$format,"genflow-studio-definition")
@@ -77,7 +80,7 @@ gen_materialize_structure <- function(document, prefix = .gen_default("gen_mater
       key <- a$key; a$key <- asset_map[[key]]; asset_sources[[a$key]] <<- key; a
     }))
   } else value <- body
-  checked <- gen_validate_structure(value,check_capabilities=check_capabilities)
+  checked <- gen_validate_structure(value,check_capabilities=check_capabilities,purpose=purpose)
   checked$document <- value
   c(checked,list(node_map=node_map,input_map=input_map,resource_sources=resource_sources,asset_sources=asset_sources))
 }

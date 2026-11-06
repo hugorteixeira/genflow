@@ -8,7 +8,8 @@ gen_materialize_structure(
   document,
   prefix = .gen_default("gen_materialize_structure", "prefix"),
   node_ids = .gen_default("gen_materialize_structure", "node_ids"),
-  check_capabilities = TRUE
+  check_capabilities = TRUE,
+  purpose = "execution"
 )
 }
 \arguments{
@@ -23,6 +24,9 @@ NULL selects all nodes.}
 
 \item{check_capabilities}{Check installed provider capabilities. FALSE is for
 isolated fixture runtimes.}
+
+\item{purpose}{\code{execution} (default) requires complete configuration;
+\code{authoring} returns configuration \code{requirements} separately from errors.}
 }
 \value{
 A validation report with the prepared \code{document}, \code{node_map} and

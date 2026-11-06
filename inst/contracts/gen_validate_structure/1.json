@@ -17,6 +17,15 @@
         "type": "boolean",
         "default": false,
         "title": "Exigir uma saída final"
+      },
+      "purpose": {
+        "type": "string",
+        "enum": [
+          "execution",
+          "authoring"
+        ],
+        "default": "execution",
+        "title": "Finalidade da validação"
       }
     },
     "required": [

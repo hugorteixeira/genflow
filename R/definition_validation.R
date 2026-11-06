@@ -32,11 +32,14 @@
 #' resolving a prompt reference or contacting a provider. Use
 #' [gen_validate_structure()] for a complete bundle and its dependencies.
 #' @param body A portable agent definition, not a resolved runtime snapshot.
+#' @param purpose `execution` (default) requires complete configuration;
+#'   `authoring` returns configuration `requirements` separately from errors.
 #' @param check_capabilities Check installed provider capabilities. FALSE is
 #'   intended for isolated fixture runtimes.
 #' @return A list with `valid`, structured `errors`, prepared `body` and `contract`.
 #' @export
-gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
+gen_validate_agent_definition <- function(body, check_capabilities = TRUE, purpose = "execution") {
+  requirements <- list()
   body <- .gen_definition_objects(body,c("parameters","fixture","output_schema"))
   text <- list(type="string",pattern="\\S")
   errors <- .gen_definition_shape(body,list(operation=text,service=text,
@@ -44,10 +47,12 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     prompt_version_id=list(type=c("string","null"),pattern="\\S",maxLength=100),
     contract_version=list(type="integer",minimum=1),output_schema=list(type=c("object","null")),
     fixture=list(type="object")),"operation")
-  finish <- function(contract=NULL) list(valid=!length(errors),errors=.gen_diagnostic_context(errors,body,contract$id,contract$version),body=body,contract=contract)
+  finish <- function(contract=NULL) list(valid=!length(errors),ready=!length(errors) && !length(requirements),
+    requirements=.gen_diagnostic_context(requirements,body,contract$id,contract$version),errors=.gen_diagnostic_context(errors,body,contract$id,contract$version),body=body,contract=contract)
   portable <- tryCatch({ .genflow_validate_portable(body); NULL }, error=function(e)e)
   if (!is.null(portable)) errors <- c(errors,list(.gen_issue("nonportable_document","",conditionMessage(portable))))
-  policy <- .gen_schema_errors(check_capabilities,list(type="boolean"),"/check_capabilities")
+  policy <- c(.gen_schema_errors(check_capabilities,list(type="boolean"),"/check_capabilities"),
+    .gen_schema_errors(purpose,list(type="string",enum=list("execution","authoring")),"/purpose"))
   errors <- c(errors,policy)
   if (!.gen_object(body) || !is.null(portable) || length(policy)) return(finish())
   add <- function(code,path,message) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message)
@@ -65,9 +70,11 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   # Optional bindable fields may be authored literally or supplied by the graph.
   bindings <- unlist(contract$studio$bindings,use.names=FALSE)
   for (key in bindings) if (is.null(args[[key]])) args[key] <- NULL
+  identity_missing <- if (.gen_authoring(purpose)) setdiff(c("service","model"),names(args)) else character()
+  requirements <- lapply(identity_missing,function(key) .gen_requirement("required",paste0("/",key)))
   checked <- .gen_prepare_call(contract$id,args,contract$version,
-    bound=if (isTRUE(contract$studio$available)) setdiff(names(contract$inputs),names(args)) else character(),
-    check_capabilities=check_capabilities,bindings_known=FALSE)
+    bound=union(if (isTRUE(contract$studio$available)) setdiff(names(contract$inputs),names(args)) else character(),identity_missing),
+    check_capabilities=check_capabilities && !length(identity_missing),bindings_known=FALSE)
   for (e in checked$errors) {
     e$path <- sub("^/args","/parameters",e$path)
     if (e$path %in% c("/parameters/service","/parameters/model")) e$path <- sub("/parameters","",e$path)
@@ -82,19 +89,24 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   if (check_capabilities && !is.null(body$fixture)) add("fixture_disabled","/fixture",gen_error_message("fixture_disabled"))
   body$contract_version <- contract$version
   body$parameters <- checked$args[setdiff(names(checked$args),owned)]
-  if (isTRUE(contract$studio$available)) for (key in c("service","model")) body[key] <- checked$args[key]
+  if (isTRUE(contract$studio$available)) for (key in intersect(c("service","model"),names(checked$args))) body[key] <- checked$args[key]
   finish(contract)
 }
 
-.gen_definition_workflow <- function(body, agents, interfaces, assets, require_output, check_capabilities) {
+.gen_definition_workflow <- function(body, agents, interfaces, assets, require_output, check_capabilities, purpose = "execution", prompts = list()) {
   body <- .gen_definition_objects(body,"ui")
-  errors <- list(); nodes <- list(); used <- list(); derived <- list()
+  errors <- list(); requirements <- list(); unresolved <- character(); nodes <- list(); used <- list(); derived <- list()
+  require_config <- function(code,path,id=NULL) {
+    issue <- .gen_requirement(code,path,id)
+    if (.gen_authoring(purpose)) requirements[[length(requirements)+1L]] <<- issue else errors[[length(errors)+1L]] <<- issue
+  }
   add <- function(code,path,message,id=NULL) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message,id)
   object <- list(type="object"); text <- list(type="string")
   errors <- .gen_definition_shape(body,list(schema_version=list(type="integer",enum=list(1L)),
     nodes=list(type="array",items=object),ui=object),c("schema_version","nodes"))
   finish <- function(report=list(ports=list(),order=list(),pending=list())) {
     report$errors <- c(errors,report$errors); report$valid <- !length(report$errors); report$document <- body
+    report$requirements <- c(requirements,report$requirements); report$ready <- report$valid && !length(report$requirements)
     report
   }
   if (!.gen_object(body)) return(finish())
@@ -128,15 +140,28 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       add("invalid_node_type",paste0(path,"/type"),gen_error_message("invalid_node_type"),n$id)
     config <- n$config %||% list()
     if (.gen_object(config)) {
+      if (!is.null(config$agent_drafts) && !(n$type=="judge" || n$type=="generate" && identical(config$source %||% "ai","ai")))
+        add("agent_configuration_conflict",paste0(path,"/config/agent_drafts"),gen_error_message("agent_configuration_conflict"),n$id)
       if (.gen_scalar(n$type) && n$type %in% c("generate","judge") &&
           (n$type=="judge" || identical(config$source %||% contract$arguments$properties$source$default,"ai"))) {
         ids <- config$agent_version_ids %||% if (!is.null(config$agent_version_id)) list(config$agent_version_id) else list()
-        if (!length(ids)) add("required_agent",paste0(path,"/config/agent_version_id"),gen_error_message("required_agent"),n$id)
+        proposals <- config$agent_drafts
+        if (!is.null(proposals) && length(ids)) add("agent_configuration_conflict",paste0(path,"/config/agent_drafts"),gen_error_message("agent_configuration_conflict"),n$id)
+        if (!length(ids) && is.null(proposals)) require_config("required_agent",paste0(path,"/config/agent_version_id"),n$id)
+        if (!is.null(proposals)) require_config("agent_draft_pending",paste0(path,"/config/agent_drafts"),n$id)
         # v1 saves can retain the singular field after editing candidate slots.
         # The plural form has always taken precedence in execution.
         if (!is.null(config$agent_version_ids)) config$agent_version_id <- NULL
         selected <- if (is.list(ids)) lapply(ids,function(key) if (.gen_scalar(key)) agents[[key]] else NULL) else list()
+        if (is.list(proposals) && is.null(names(proposals))) {
+          selected <- lapply(seq_along(proposals),function(j) {
+            a <- .gen_agent_proposal(proposals[[j]],prompts,check_capabilities)
+            for (e in a$errors) { e$path <- paste0(path,"/config/agent_drafts/",j-1L,e$path); e$node_id <- n$id; errors[[length(errors)+1L]] <<- e }
+            if (a$valid) a else NULL
+          })
+        }
         used[[as.character(i)]] <- Filter(Negate(is.null),selected)
+        if (!length(selected) && is.null(config$kind) && n$type=="generate") unresolved <- c(unresolved,n$id)
         if (length(selected) && all(vapply(selected,function(a) !is.null(a),logical(1)))) {
           kinds <- vapply(selected,function(a) if (!is.null(a$body$output_schema)) "json" else a$contract$studio$output,character(1))
           if (n$type=="generate") {
@@ -145,8 +170,8 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
               for (e in .gen_schema_errors(config[[field]],contract$arguments$properties[[field]],paste0(path,"/config/",field)))
                 { e$node_id <- n$id; errors[[length(errors)+1L]] <- e }
             }
-            if (!"count" %in% names(config)) config$count <- contract$arguments$properties$count$default %||% length(ids)
-            if (length(ids)!=1L && !isTRUE(length(ids)==config$count)) add("agent_count",paste0(path,"/config/count"),gen_error_message("agent_count"),n$id)
+            if (!"count" %in% names(config)) config$count <- contract$arguments$properties$count$default %||% length(selected)
+            if (length(selected)!=1L && !isTRUE(length(selected)==config$count)) add("agent_count",paste0(path,"/config/count"),gen_error_message("agent_count"),n$id)
             if (length(unique(kinds))!=1L) add("mixed_outputs",paste0(path,"/config"),gen_error_message("mixed_outputs"),n$id) else config$kind <- kinds[[1L]]
             schemas <- lapply(selected,function(a) a$body$output_schema)
             if (!all(vapply(schemas,function(s) .gen_json_equal(s,schemas[[1L]]),logical(1)))) add("mixed_schemas",paste0(path,"/config"),gen_error_message("mixed_schemas"),n$id)
@@ -158,7 +183,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
         }
       }
       if (identical(n$type,"generate") && identical(config$source,"provided")) {
-        if (!length(config$artifact_ids)) add("required_assets",paste0(path,"/config/artifact_ids"),gen_error_message("required_assets"),n$id)
+        if (!length(config$artifact_ids)) require_config("required_assets",paste0(path,"/config/artifact_ids"),n$id)
         for (key in config$artifact_ids) if (.gen_scalar(key) && !is.null(assets[[key]]) && !identical(assets[[key]]$kind,config$kind))
           add("asset_kind",paste0(path,"/config/artifact_ids"),gen_error_message("asset_kind"),n$id)
       }
@@ -171,11 +196,12 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     }
     nodes[[i]] <- list(id=n$id,block=block,contract_version=n$contract_version %||% 1L,args=config,inputs=n$inputs %||% list())
   }
-  report <- .gen_validate_structure_graph(list(schema_version=body$schema_version,nodes=nodes,workflows=interfaces),require_output,check_capabilities)
+  report <- .gen_validate_structure_graph(list(schema_version=body$schema_version,nodes=nodes,workflows=interfaces),require_output,check_capabilities,purpose,unresolved)
   report$errors <- lapply(report$errors,function(e) {
     e$path <- sub("^(/nodes/[0-9]+)/args","\\1/config",e$path)
     e$path <- sub("^(/nodes/[0-9]+)/block","\\1/type",e$path); e
   })
+  report$requirements <- lapply(report$requirements,function(e) { e$path <- sub("^(/nodes/[0-9]+)/args","\\1/config",e$path); e })
   # Cross-resource constraints need the inferred ports, but never generated values.
   for (i in seq_along(nodes)) {
     n <- report$document$nodes[[i]]; path <- paste0("/nodes/",i-1L)
@@ -186,10 +212,13 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       vars <- .gen_template_variables(template)
       textual <- names(Filter(function(t) !is.null(t) && t %in% c("asset:text","asset:json"),types))
       if (n$block=="judge") textual <- setdiff(textual,"candidates")
-      if (a$body$operation!="audio.transcribe" && !all(vars %in% textual)) add("prompt_binding",paste0(path,"/inputs"),gen_error_message("prompt_binding",list(variables=paste(setdiff(vars,textual),collapse=", "))),n$id)
+      if (a$body$operation!="audio.transcribe" && !all(vars %in% textual)) {
+        if (.gen_authoring(purpose) && all(vapply(setdiff(vars,textual),function(key) is.null(types[[key]]),logical(1)))) require_config("prompt_binding",paste0(path,"/inputs"),n$id)
+        else add("prompt_binding",paste0(path,"/inputs"),gen_error_message("prompt_binding",list(variables=paste(setdiff(vars,textual),collapse=", "))),n$id)
+      }
       if (n$block=="generate") {
         bindings <- a$contract$studio$bindings
-        if (length(bindings)) {
+        if (length(bindings) && (!isTRUE(a$proposal) || all(c("service","model") %in% names(a$body)))) {
           args <- c(list(service=a$body$service,model=a$body$model),a$body$parameters)
           connected <- intersect(names(bindings),names(n$inputs))
           bound <- c(setdiff(names(a$contract$inputs),unlist(bindings,use.names=FALSE)),unlist(bindings[connected],use.names=FALSE))
@@ -206,13 +235,13 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
             error$node_id <- n$id; errors[[length(errors)+1L]] <- error
           }
         }
-        if (a$body$operation=="audio.transcribe" && !identical(types$audio,"asset:audio")) add("required_audio",paste0(path,"/inputs/audio"),gen_error_message("required_audio"),n$id)
+        if (a$body$operation=="audio.transcribe" && is.null(types$audio)) require_config("required_audio",paste0(path,"/inputs/audio"),n$id)
         if (!is.null(types$audio) && a$body$operation!="audio.transcribe") add("incompatible_input",paste0(path,"/inputs/audio"),gen_error_message("audio_only_transcription"),n$id)
         if (!is.null(types$image)) {
           declared <- strsplit(a$contract$studio$inputs$image %||% "","|",fixed=TRUE)[[1]]
           declared <- ifelse(grepl(":",declared,fixed=TRUE),declared,paste0("asset:",declared))
           accepts <- types$image %in% declared
-          if (accepts && check_capabilities) {
+          if (accepts && check_capabilities && (!isTRUE(a$proposal) || all(c("service","model") %in% names(a$body)))) {
             cap <- tryCatch(gen_capabilities(a$body$service,a$body$model),error=function(e) NULL)
             if (a$body$operation=="text.generate") accepts <- isTRUE(cap$adapter_features$vision)
             if (a$body$operation=="image.generate") accepts <- isTRUE(cap$image_references$supported)
@@ -267,13 +296,14 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
   finish(report)
 }
 
-.gen_validate_definition_bundle <- function(document, require_output, check_capabilities) {
+.gen_validate_definition_bundle <- function(document, require_output, check_capabilities, purpose = "execution") {
+  requirements <- list(); prompts <- list()
   errors <- list(); bundle_errors <- NULL; resource_order <- character(); reports <- list(); agents <- list(); interfaces <- list(); plans <- list()
   add <- function(code,path,message) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message)
   collect <- function(items,prefix) for (e in items) { e$path <- paste0(prefix,e$path); errors[[length(errors)+1L]] <<- e }
   finish <- function() {
     root <- reports[["1"]] %||% list()
-    list(valid=!length(errors),errors=errors,document=document,ports=root$ports %||% list(),
+    list(valid=!length(errors),ready=!length(errors) && !length(requirements),requirements=requirements,errors=errors,document=document,ports=root$ports %||% list(),
       order=root$order %||% list(),pending=root$pending %||% list(),resource_order=as.list(resource_order),
       assets_verified=FALSE, bundle_errors=bundle_errors %||% errors,
       graph=root[c("order","ports","schemas","interface","exports","height","derived")], plans=plans)
@@ -354,6 +384,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
     e <- entries[[i]]; path <- paste0(paths[[i]],"/body")
     if (!.gen_object(e) || !.gen_object(e$body)) next
     if (kinds[[i]]=="prompt") collect(.gen_definition_shape(e$body,list(template=list(type="string",pattern="\\S",maxLength=100000)),"template"),path)
+    if (kinds[[i]]=="prompt" && nzchar(keys[[i]]) && .gen_scalar(e$body$template)) prompts[[keys[[i]]]] <- e$body$template
     if (kinds[[i]]=="agent") {
       checked <- gen_validate_agent_definition(e$body,check_capabilities); collect(checked$errors,path)
       e$body <- checked$body
@@ -365,7 +396,11 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE) {
       }
     }
     if (kinds[[i]]=="workflow") {
-      checked <- .gen_definition_workflow(e$body,agents,interfaces,assets,if(i==1L) require_output else TRUE,check_capabilities)
+      # Bundle resources represent published dependencies. Only the root is an
+      # editable draft; an incomplete dependency cannot be materialized as a version.
+      checked <- .gen_definition_workflow(e$body,agents,interfaces,assets,if(i==1L) require_output else TRUE,
+        check_capabilities,if(i==1L) purpose else "execution",prompts)
+      for (r in checked$requirements) { r$path <- paste0(path,r$path); requirements[[length(requirements)+1L]] <- r }
       checked$height <- heights[[i]]
       collect(checked$errors,path); reports[[as.character(i)]] <- checked; e$body <- checked$document
       if (nzchar(keys[[i]])) plans[[keys[[i]]]] <- checked[c("order","ports","schemas","interface","exports","height","derived")]

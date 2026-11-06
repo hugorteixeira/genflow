@@ -7,17 +7,20 @@
 #' @param document A valid Studio body or complete definition bundle, as a list
 #'   or JSON string.
 #' @param node_ids Exact node IDs to extract. NULL selects the whole workflow.
+#' @param purpose `execution` (default) requires complete configuration;
+#'   `authoring` returns configuration `requirements` separately from errors.
 #' @param check_capabilities Check installed provider capabilities.
 #' @return A validation report with the extracted `document` and `boundary`
 #'   maps from public input/output names to original source ports.
 #' @export
 gen_extract_structure <- function(document, node_ids = .gen_default("gen_extract_structure","node_ids"),
-                                  check_capabilities = TRUE) {
+                                  check_capabilities = TRUE, purpose = "execution") {
   args <- list(node_ids=node_ids)
   if (!missing(document)) args["document"] <- list(document)
+  args$purpose <- purpose
   call <- gen_validate_call("gen_extract_structure",args)
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL))
-  checked <- gen_validate_structure(document,check_capabilities=check_capabilities)
+  checked <- gen_validate_structure(document,check_capabilities=check_capabilities,purpose=purpose)
   if (!checked$valid) return(checked)
   value <- if (.gen_scalar(document)) .gen_parse_document(document) else document
   bundled <- identical(value$format,"genflow-studio-definition")
@@ -49,7 +52,7 @@ gen_extract_structure <- function(document, node_ids = .gen_default("gen_extract
       input <- inputs[[reused[[1L]]]]
     } else {
       type <- graph$ports[[ref$node]][[ref$port]]
-      if (!grepl("^(asset|list|candidates):",type)) return(fail("component_boundary_type",paste0("/nodes/",match(nodes[[i]]$id,ids)-1L,"/inputs/",key)))
+      if (!.gen_scalar(type) || !grepl("^(asset|list|candidates):",type)) return(fail("component_boundary_type",paste0("/nodes/",match(nodes[[i]]$id,ids)-1L,"/inputs/",key)))
       parts <- strsplit(type,":",fixed=TRUE)[[1L]]
       name <- unique_name(key,input_keys); input_keys <- c(input_keys,name)
       id <- unique_name(paste0("component_input_",length(inputs)+1L),occupied_ids); occupied_ids <- c(occupied_ids,id)
@@ -80,7 +83,7 @@ gen_extract_structure <- function(document, node_ids = .gen_default("gen_extract
   body$nodes <- c(inputs,nodes); body$ui <- NULL
   if(bundled) value$root$body <- body else value <- body
   value <- .gen_prune_definition(value)
-  result <- gen_validate_structure(value,require_output=TRUE,check_capabilities=check_capabilities)
+  result <- gen_validate_structure(value,require_output=TRUE,check_capabilities=check_capabilities,purpose=purpose)
   result$document <- value; result$boundary <- boundary
   result
 }
