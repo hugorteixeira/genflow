@@ -1,20 +1,19 @@
-test_that("the image v2 contract adds optional ordered references without rewriting v1", {
+test_that("the current image contract validates ordered references and rejects retired contracts", {
   args <- list(prompt="Garden",service="openai",model="gpt-image-2",add_img=list("one.png","two.png"))
   expect_false(gen_validate_call("gen_img",args,1)$valid)
-  expect_true(gen_validate_call("gen_img",args,2)$valid)
-  expect_null(gen_block_contracts("gen_img",1)$inputs$add_img)
-  expect_identical(gen_block_contracts("gen_img",2)$inputs$add_img,"asset:image|list:image")
-  expect_true(gen_validate_call("gen_img",list(prompt="Garden"),2)$valid)
+  expect_true(gen_validate_call("gen_img", args, 3)$valid)
+  expect_identical(gen_block_contracts("gen_img", 3)$inputs$add_img,"asset:image|list:image")
+  expect_true(gen_validate_call("gen_img", list(prompt="Garden"), 3)$valid)
   for (value in list(NA_character_, " ", list("ok",2), list("ok",""))) {
     args$add_img <- value
-    expect_false(gen_validate_call("gen_img",args,2)$valid)
+    expect_false(gen_validate_call("gen_img", args, 3)$valid)
   }
   args$add_img <- as.list(rep("image.png",17))
-  expect_identical(gen_validate_call("gen_img",args,2)$errors[[1]]$code,"image_reference_limit")
+  expect_identical(gen_validate_call("gen_img", args, 3)$errors[[1]]$code,"image_reference_limit")
   args$add_img <- "image.png"; args$service <- "replicate"
-  expect_identical(gen_validate_call("gen_img",args,2)$errors[[1]]$code,"image_references_unsupported")
-  expect_false(gen_validate_call("gen_img",list(prompt="ok",replicate_input=list(prompt="")),2)$valid)
-  expect_true(gen_validate_call("gen_img",list(prompt="ok",replicate_input=list(seed=42)),2)$valid)
+  expect_identical(gen_validate_call("gen_img", args, 3)$errors[[1]]$code,"image_references_unsupported")
+  expect_false(gen_validate_call("gen_img", list(prompt="ok",replicate_input=list(prompt="")), 3)$valid)
+  expect_true(gen_validate_call("gen_img", list(prompt="ok",service="replicate",replicate_input=list(seed=42)), 3)$valid)
 })
 
 test_that("OpenAI edits preserve reference order and accept all supported output encodings", {

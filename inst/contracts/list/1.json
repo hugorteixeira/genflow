@@ -1,5 +1,5 @@
 {
-  "id": "list.concat",
+  "id": "list",
   "version": 1,
   "kind": "workflow",
   "arguments": {
@@ -11,7 +11,6 @@
           "type": "string",
           "pattern": "\\S"
         },
-        "maxItems": 100,
         "uniqueItems": true,
         "default": []
       },
@@ -22,14 +21,24 @@
           "json",
           "image",
           "audio",
-          "video"
+          "video",
+          "ballot"
         ],
-        "default": "text",
+        "x-ui": {
+          "enum_labels": {
+            "text": "Texto",
+            "json": "JSON",
+            "image": "Imagem",
+            "audio": "Áudio",
+            "video": "Vídeo",
+            "ballot": "Recibo de voto"
+          }
+        },
         "title": "Tipo de conteúdo"
       }
     },
     "required": [],
     "additionalProperties": false
   },
-  "port_rule": "list.concat"
+  "port_rule": "list"
 }

@@ -36,19 +36,12 @@
   invisible(TRUE)
 }
 
-# Profiles are independent of block versions. Keep their historical fields
-# readable when a later block changes; the selected block validates each call.
-.gen_parameter_contract_properties <- function(block) {
-  entries <- Filter(function(x) identical(x$id, block), gen_block_contracts())
-  lapply(entries, function(x) x$arguments$properties)
-}
-
 # Configurations may describe endpoint/executable fields. Portable generation
 # profiles cannot change connection, identity, input ownership or consent.
 .gen_parameter_protected <- c("parameter_schema", "base_url", "executable", "native_engine", "native_backend",
   "plugins", "my_tools", "tools", "reference_consent", "reference_identity", "spoken_disclaimer", "marking_responsibility")
 .gen_option_protected <- function(block) unique(c(
-  unlist(lapply(.gen_parameter_contract_properties(block), names), use.names = FALSE), .gen_parameter_protected,
+  names(gen_block_contracts(block)$arguments$properties), .gen_parameter_protected,
   "api_key", "api_token", "authorization", "headers", "url", "endpoint", "command", "env",
   "messages", "input", "text", "prompt", "model", "stream", "temperature", "reasoning_effort",
   "num_outputs", "num_images", "n", "image", "images", "image_urls", "input_image", "input_images",
@@ -77,9 +70,9 @@
   }
   visit(schema)
   if (!is.null(block)) {
-    versions <- .gen_parameter_contract_properties(block)
-    known <- unique(unlist(lapply(versions, names), use.names = FALSE))
-    owned <- unique(unlist(lapply(versions, function(p) names(Filter(function(x) identical(x[["x-owner"]], "runtime"), p)))))
+    properties <- gen_block_contracts(block)$arguments$properties
+    known <- names(properties)
+    owned <- names(Filter(function(x) identical(x[["x-owner"]], "runtime"), properties))
     allowed <- setdiff(known, c(owned, .gen_parameter_protected))
     for (key in setdiff(names(schema$properties), allowed)) add(.gen_pointer("/properties", key), "parameter_schema_reserved")
     # A profile only adds constraints to canonical arguments. Model options are
@@ -87,9 +80,7 @@
     for (key in intersect(names(schema$properties), known)) {
       prop <- schema$properties[[key]]
       if ("default" %in% names(prop) && key != "model_options") {
-        definitions <- Filter(Negate(is.null), lapply(versions, `[[`, key))
-        checks <- lapply(definitions, function(p) .gen_schema_errors(prop$default, p))
-        if (all(lengths(checks) > 0L)) for (e in checks[[length(checks)]]) {
+        for (e in .gen_schema_errors(prop$default, properties[[key]])) {
           e$path <- paste0("/properties/", key, "/default", e$path); errors[[length(errors) + 1L]] <- e
         }
       }

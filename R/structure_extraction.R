@@ -22,7 +22,7 @@ gen_extract_structure <- function(document, node_ids = .gen_default("gen_extract
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL))
   checked <- gen_validate_structure(document,check_capabilities=check_capabilities,purpose=purpose)
   if (!checked$valid) return(checked)
-  value <- if (.gen_scalar(document)) .gen_parse_document(document) else document
+  value <- if (.gen_scalar(document)) gen_parse_json(document) else document
   bundled <- identical(value$format,"genflow-studio-definition")
   body <- if(bundled) value$root$body else value
   fail <- function(code,path) { checked$valid <- FALSE; checked$errors <- list(.gen_issue(code,path)); checked }
@@ -56,7 +56,7 @@ gen_extract_structure <- function(document, node_ids = .gen_default("gen_extract
       parts <- strsplit(type,":",fixed=TRUE)[[1L]]
       name <- unique_name(key,input_keys); input_keys <- c(input_keys,name)
       id <- unique_name(paste0("component_input_",length(inputs)+1L),occupied_ids); occupied_ids <- c(occupied_ids,id)
-      input <- list(id=id,type="input",config=list(key=name,value_type=parts[[1L]],kind=parts[[2L]]))
+      input <- list(id=id,type="input",contract_version=2L,config=list(key=name,value_type=parts[[1L]],kind=parts[[2L]]))
       schema <- graph$schemas[[ref$node]][[ref$port]]
       if (!is.null(schema)) input$config$output_schema <- schema
       inputs[[length(inputs)+1L]] <- input
@@ -84,6 +84,6 @@ gen_extract_structure <- function(document, node_ids = .gen_default("gen_extract
   if(bundled) value$root$body <- body else value <- body
   value <- .gen_prune_definition(value)
   result <- gen_validate_structure(value,require_output=TRUE,check_capabilities=check_capabilities,purpose=purpose)
-  result$document <- value; result$boundary <- boundary
+  result$document <- .gen_authored_objects(value,result$document); result$boundary <- boundary
   result
 }

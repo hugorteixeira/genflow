@@ -8,7 +8,8 @@
       "pointer": {
         "type": "string",
         "default": "",
-        "title": "Caminho no JSON"
+        "title": "Caminho no JSON",
+        "description": "Caminho JSON Pointer do valor. Exemplo: /cenas/0/texto. Vazio seleciona o documento inteiro."
       },
       "kind": {
         "type": "string",
@@ -17,7 +18,13 @@
           "json"
         ],
         "default": "json",
-        "title": "Produzir"
+        "title": "Produzir",
+        "x-ui": {
+          "enum_labels": {
+            "text": "Texto",
+            "json": "JSON"
+          }
+        }
       }
     },
     "required": [],

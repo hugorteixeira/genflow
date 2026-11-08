@@ -138,7 +138,10 @@
         "type": "number",
         "exclusiveMinimum": 0,
         "default": 240,
-        "title": "Tempo máximo da chamada (s)"
+        "title": "Tempo máximo da chamada (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "persist": {
         "type": "boolean",
@@ -179,7 +182,12 @@
         "x-ui": {
           "service": [
             "local-native"
-          ]
+          ],
+          "enum_labels": {
+            "unknown": "Não informada",
+            "synthetic": "Voz sintética",
+            "real_person": "Pessoa real"
+          }
         },
         "enum": [
           "unknown",
@@ -218,7 +226,8 @@
         "x-ui": {
           "service": [
             "local-native"
-          ]
+          ],
+          "group": "infrastructure"
         },
         "pattern": "\\S"
       },
@@ -232,7 +241,11 @@
         "x-ui": {
           "service": [
             "local-native"
-          ]
+          ],
+          "group": "infrastructure",
+          "enum_labels": {
+            "auto": "Automático"
+          }
         },
         "enum": [
           null,
@@ -253,7 +266,8 @@
         "x-ui": {
           "service": [
             "local-native"
-          ]
+          ],
+          "group": "infrastructure"
         },
         "minimum": 1,
         "maximum": 256

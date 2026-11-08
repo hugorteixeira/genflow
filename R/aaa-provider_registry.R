@@ -127,7 +127,7 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
       c("supports_vision", "supports_tools", "supports_reasoning", "supports_plugins"),
       function(field) isTRUE(custom[[field]]), logical(1))
   }
-  if (id == "openai" && !is.null(reasoning)) features[c("vision", "tools")] <- FALSE
+  if (id == "openai" && !is.null(reasoning)) features["tools"] <- FALSE
   list(schema_version = 1L, service = id, model = model,
        modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, sfx = FALSE, music = FALSE, video = FALSE),
        adapter_features = features, model_support = "unverified",

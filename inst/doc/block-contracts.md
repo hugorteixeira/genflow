@@ -133,29 +133,17 @@ workflow together with its agent, prompt and subworkflow definitions:
 
 ```json
 {
-  "format": "genflow-studio-definition",
-  "schema_version": 1,
-  "root": {
-    "kind": "workflow",
-    "name": "A short story",
-    "body": {
-      "schema_version": 1,
-      "nodes": [
-        {"id": "brief", "type": "input", "config": {"key": "brief"}},
-        {"id": "write", "type": "generate", "config": {"agent_version_id": "writer"},
-         "inputs": {"input": {"node": "brief", "port": "asset"}}},
-        {"id": "out", "type": "output", "inputs": {"story": {"node": "write", "port": "asset"}}}
-      ]
-    }
-  },
-  "resources": [
-    {"key": "writer", "kind": "agent", "name": "Writer",
-     "body": {"operation": "text.generate", "service": "openai", "model": "gpt-5-mini",
-              "prompt_version_id": "prompt", "parameters": {"temp": 0.7}}},
-    {"key": "prompt", "kind": "prompt", "name": "Prompt",
-     "body": {"template": "Write a short story about {{input}}"}}
-  ],
-  "assets": []
+  "format": "genflow-studio-definition", "schema_version": 1,
+  "root": {"kind": "workflow", "name": "A short story", "body": {
+    "schema_version": 1, "nodes": [
+      {"id": "brief", "type": "input", "contract_version": 2, "config": {"key": "brief"}},
+      {"id": "write", "type": "content", "contract_version": 1,
+       "config": {"content_type": "text", "source": "ai", "ai": {
+         "service": "openai", "model": "gpt-5-mini", "contract_version": 2,
+         "parameters": {}, "content": [{"text": "Write about: "}, {"input": "brief"}]}},
+       "inputs": {"brief": {"node": "brief", "port": "asset"}}},
+      {"id": "out", "type": "output", "inputs": {"story": {"node": "write", "port": "asset"}}}
+    ]}}, "resources": [], "assets": []
 }
 ```
 
@@ -183,12 +171,8 @@ runtime availability. A valid reserved operation remains unavailable for
 execution until its adapter exists. Future connection values are checked at
 execution, not invented by validation.
 
-For compatibility with v1 exports, empty object fields historically serialized
-as `[]` are normalized to `{}` only where the definition shape expects an
-object. Arrays of nodes, resources, assets and argument values remain arrays.
-When an old node retains both agent reference fields, `agent_version_ids` keeps
-its established precedence; the unused singular field is removed from the
-prepared copy. Neither normalization writes back to stored versions or results.
+R callers may use `list()` for an empty argument object. JSON must use `{}` for
+objects and `[]` for arrays; incompatible document shapes are rejected.
 
 `check_capabilities = FALSE` is an R-side policy for isolated fixture tests,
 including fixture agent controls. It is not part of the serialized block
@@ -290,36 +274,27 @@ order, and compare numbers exactly (R integer/double storage is equivalent).
 Omitted counts may be inferred from agents or a versioned default; explicit null
 counts are invalid and are never replaced by a default.
 
-Catalog entries are keyed by `(id, version)`. Consumers should choose a default
-version only when creating a new piece and always resolve a saved piece by its
-pinned version. `examples/definition-parity.json` provides shared cases for
-validity, preparation, ports and schemas without provider calls.
+Catalog entries are keyed by `(id, version)`, with one supported version per ID.
+An omitted version selects the current contract; preparation records it in the
+document. An explicit unsupported version is an error, never an automatic upgrade.
+`examples/definition-parity.json` provides shared cases for validity, preparation,
+ports and schemas without provider calls.
 
-## Image references (gen_img v2)
+## Image references
 
-`gen_img()` executes v2; `gen_validate_call("gen_img", args, version = 2)` checks
-that same contract. Missing versions in saved documents still mean v1. The v1
-contract is preserved; new image blocks should select v2 explicitly. Its optional
-`add_img` port accepts `asset:image|list:image`. Model mappings and reference
-limits are exposed by `gen_capabilities()` and validated without provider calls.
-The current runtime also corrects invalid media acceptance and rejects provider
-options that override canonical prompt/reference/count fields; it does not
-reproduce those legacy bugs when an old configuration is executed again.
+`gen_img()` executes its current contract (`gen_img@3`). The optional `add_img`
+port accepts `asset:image|list:image`. Model mappings and reference limits are
+exposed by `gen_capabilities()` and validated without provider calls.
 
+### Native voice
 
-### Native voice contract v2
-
-`gen_tts@2` adds optional `reference_audio: asset:audio` and native controls while
-retaining the cloud defaults. `audio.speak@2` binds the same Studio port to that
-argument. Existing v1 contracts and saved agents remain pinned; upgrading is explicit.
-`gen_validate_call("gen_tts", args, version = 2)` checks provider combinations,
-reference consent and disclosure options without launching a process. Execution
-additionally verifies files, GGUF architecture, engine capabilities and decoded output.
-
+`gen_tts@4` supports optional `reference_audio: asset:audio` and native controls.
+Validation checks provider combinations before execution, which additionally
+verifies files, GGUF architecture, engine capabilities and decoded output.
 
 ### Service/model parameter profiles
 
-`gen_txt@2`, `gen_img@3`, `gen_tts@3`, `gen_stt@2`, `gen_sfx@2` and `gen_music@2`
+`gen_txt@2`, `gen_img@3`, `gen_tts@4`, `gen_stt@2`, `gen_sfx@2` and `gen_music@2`
 add `model_options` and `parameter_schema`. Common types, runtime-owned fields
 and hard adapter restrictions remain in the immutable block contracts. A selected
 service/model profile adds narrower rules and omitted defaults; options must have
@@ -341,11 +316,27 @@ and publication must use the default `purpose = "execution"`.
 In a portable bundle, authoring applies to the root. Resources represent published
 dependencies and remain complete, so validation and materialization agree.
 
-Generator/judge nodes can persist `config.agent_drafts`, an array of proposals
-with a normal `agent` body and optional `prompt = list(template = "...")`.
-A proposal can instead reference an existing prompt version. Proposals and saved
-agent IDs are mutually exclusive. Their operation determines known port types;
-missing service/model identities are not replaced with defaults. An application
-must persist complete agent/prompt versions and replace the proposals with IDs
-before executing. Extraction, export and remapping traverse prompt references
-inside proposals using the same reference walker as published definitions.
+Content, judge and transcribe nodes keep a single `config.ai` object. It contains
+service, model, function contract version, parameters and ordered primary values.
+Each value is exactly one of `{ "text": "literal" }`, `{ "asset": "key" }` or
+`{ "input": "port" }`. Strings never interpolate variables. Parameters reuse the
+public agent/function validator and preserve pinned service/model schemas.
+
+`content.config.content_type` declares text, image, voice, music, sfx, audio or
+video; its descriptor limits `source` to inline, asset and/or AI. All produce one
+`asset`. Video/audio currently accept files only. Text inline/asset can use JSON
+format with `output_schema`. `additions` declare a role and value, for example
+`context_image`, `reference_image`, `reference_audio` or `lyrics`. Unused inputs,
+unsupported roles and conflicting literal/function parameters are errors.
+
+`text.join@2` accepts ordered `parts` (literal, asset or input) and a separator,
+empty by default. It expands one layer of text/JSON collections. `list@1` combines
+homogeneous items/lists in declared order. Judges and selections accept that list
+directly. `asset:ballot` and `list:ballot` designate receipts whose provenance the
+runtime must verify; writing a JSON object does not create a valid ballot.
+
+## Unsupported documents
+
+Retired piece types and contract versions are not converted or executed. Import,
+materialization and normal editing use the same current validator. Applications
+must remove incompatible development data before activating this catalog.

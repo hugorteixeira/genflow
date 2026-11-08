@@ -17,7 +17,13 @@
           "json"
         ],
         "default": "json",
-        "title": "Produzir"
+        "title": "Produzir",
+        "x-ui": {
+          "enum_labels": {
+            "text": "Texto",
+            "json": "JSON"
+          }
+        }
       }
     },
     "required": [],

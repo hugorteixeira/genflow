@@ -21,7 +21,7 @@
   fixed <- function(key, values, code, message = code) put(key, list(enum = values), code, TRUE, message)
   service <- args$service; block <- contract$id
   if (!.gen_scalar(service)) return(rules)
-  if (block == "gen_tts" && contract$version >= 2L) {
+  if (block == "gen_tts") {
     if (service == "local-native") {
       native <- .gen_adapter_schema("voxcpm2-tts")$properties
       for (key in names(native))
@@ -29,12 +29,16 @@
     } else {
       native <- c("reference_audio", names(Filter(function(p) "local-native" %in% unlist(p[["x-ui"]]$service), props)))
       for (key in native) {
-        # Remote transports ignore these flags. Accept either boolean in v4 so
-        # prepared v2/v3 calls remain executable when library defaults change.
-        policy <- contract$version >= 4L && key %in% c("reference_consent", "spoken_disclaimer", "marking_responsibility")
+        # These policy flags do not affect remote transports.
+        policy <- key %in% c("reference_consent", "spoken_disclaimer", "marking_responsibility")
         fixed(key, if (policy) list(TRUE, FALSE) else list(props[[key]]$default), "tts_native_parameter")
       }
     }
+  }
+  if (block %in% c("gen_txt","gen_img")) {
+    cap <- tryCatch(gen_capabilities(service,args$model),error=function(e) NULL)
+    supported <- if(block=="gen_txt") isTRUE(unname(cap$adapter_features["vision"])) else isTRUE(cap$image_references$supported)
+    if (!is.null(cap) && !supported) fixed("add_img",list(NULL),"image_not_supported")
   }
   if (block == "gen_txt") {
     if (service != "openai") fixed("max_output_tokens", list(NULL), "invalid_combination", "only_openai_tokens")
@@ -100,7 +104,7 @@
 #' @param parameters Explicit editable arguments, including an optional frozen
 #'   `parameter_schema`. Values are never discarded or repaired.
 #' @param resolve Look up the current service/model profile only when no frozen
-#'   profile is supplied. FALSE preserves legacy configurations without a profile.
+#'   profile is supplied. FALSE uses only the supplied parameter configuration.
 #' @param directory Optional parameter registry directory, as in [gen_models()].
 #' @return `arguments` for controls (including `x-ui.disabled` and `reason`), the
 #'   selected `parameter_schema`, `valid`, and canonical `errors`. The projection
@@ -108,7 +112,7 @@
 #'   patterns remain enforced by the canonical validator. Complex values are
 #'   editable as JSON. Absence of a profile property inherits the base contract.
 #' @export
-gen_block_configuration <- function(block, service, model = NULL, version = 1L,
+gen_block_configuration <- function(block, service, model = NULL, version = NULL,
                                     parameters = list(), resolve = FALSE, directory = NULL) {
   contract <- .gen_call_contract(block, version)
   .gen_management_flag(resolve, "resolve")

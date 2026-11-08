@@ -4,15 +4,14 @@
     t == "any" || t == source || endsWith(t,":*") && startsWith(source,substring(t,1L,nchar(t)-1L)),logical(1)))
 }
 
-.gen_template_variables <- function(text) {
-  if (!.gen_scalar(text)) return(character())
-  hits <- regmatches(text,gregexpr("\\{\\{[a-zA-Z][a-zA-Z0-9_]*\\}\\}",text,perl=TRUE))[[1L]]
-  unique(gsub("[{}]","",hits))
-}
-
 # R's list() is convenient for empty argument objects. JSON explicitly
 # distinguishes [] from {}, so retain that distinction at the JSON boundary.
-.gen_parse_document <- function(text) {
+#' Parse JSON without losing the distinction between empty arrays and objects
+#' @param text A JSON string.
+#' @return Parsed data; empty arrays carry a `genflow.json_array` attribute so
+#'   R convenience normalization cannot turn explicit JSON arrays into objects.
+#' @export
+gen_parse_json <- function(text) {
   mark_arrays <- function(value, depth=0L) {
     if (!is.list(value) || depth>64L) return(value)
     if (!length(value) && is.null(names(value))) attr(value,"genflow.json_array") <- TRUE
@@ -26,20 +25,23 @@
 #' @param block Block identifier.
 #' @param args Prepared block configuration or arguments.
 #' @param inputs Named list of source port types, such as `asset:image`.
-#' @param version Contract version.
+#' @param version Exact supported version, or NULL for the current contract.
 #' @param interface Declared input ports of a referenced subworkflow.
 #' @param exports Declared output ports of a referenced subworkflow.
 #' @return A list with `valid`, `errors`, and inferred output `ports`.
 #' @export
-gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L, interface = list(), exports = list()) {
+gen_block_ports <- function(block, args = list(), inputs = list(), version = NULL, interface = list(), exports = list()) {
   contract <- tryCatch(.gen_call_contract(block,version),error=function(e)e)
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),ports=list()))
-  errors <- list(); ports <- list()
+  errors <- list(); ports <- list(); wanted <- list()
   add <- function(key,message,code="incompatible_input") errors[[length(errors)+1L]] <<- .gen_issue(code,.gen_pointer("/inputs",key),message)
   if (!.gen_object(args) || !.gen_object(inputs)) return(list(valid=FALSE,errors=list(.gen_issue("invalid_arguments","",gen_error_message("invalid_arguments"))),ports=list()))
   for (key in names(inputs)) if (!.gen_scalar(inputs[[key]])) add(key,gen_error_message("input_content_type"))
   if (length(errors)) return(list(valid=FALSE,errors=errors,ports=ports))
+  if (block %in% c("content","transcribe","judge","text.join"))
+    return(.gen_piece_ports(block,args,inputs))
   need <- function(key,type,required=TRUE) {
+    wanted[[key]] <<- list(type=type,optional=!required)
     if (!key %in% names(inputs)) { if (required) add(key,gen_error_message("required_input"),"required_input"); return(NULL) }
     if (!.gen_type_compatible(inputs[[key]],type)) add(key,gen_error_message("port_type",list(expected=type,actual=inputs[[key]])))
     inputs[[key]]
@@ -66,69 +68,52 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = 1L,
   } else if (block=="input") {
     only(character()); type <- args$value_type %||% "asset"
     ports <- stats::setNames(list(paste0(type,":",config_kind)),type)
-  } else if (block=="generate") {
-    media <- list()
-    for (entry in gen_block_contracts()) for (key in setdiff(names(entry$studio$inputs),"text")) {
-      declared <- strsplit(entry$studio$inputs[[key]],"|",fixed=TRUE)[[1]]
-      declared <- ifelse(grepl(":",declared,fixed=TRUE),declared,paste0("asset:",declared))
-      media[[key]] <- unique(c(media[[key]],declared))
-    }
-    for (key in names(inputs)) need(key,if (key %in% names(media)) paste(media[[key]],collapse="|") else "asset:text|asset:json")
-    ports <- list(candidates=paste0("candidates:",config_kind))
-    count <- if (identical(args$source,"provided")) length(args$artifact_ids) else args$count
-    if (!is.null(count) && count==1) ports$asset <- paste0("asset:",config_kind)
-  } else if (block %in% c("judge","vote","select")) {
-    candidates <- need("candidates","candidates:*")
+  } else if (block %in% c("vote","select")) {
+    candidates <- need("candidates","list:*")
     k <- kind(candidates)
-    if (block=="judge") {
-      for (key in setdiff(names(inputs),"candidates")) need(key,"asset:text|asset:json")
-      ports <- list(asset="asset:json")
-    } else if (block=="vote") {
-      only(c("candidates","votes")); need("votes","list:json")
+    if (block=="vote") {
+      only(c("candidates","votes")); need("votes","list:ballot")
       if (!is.null(k)) ports <- list(round=paste0("round:",k))
     } else {
       only(c("candidates","evaluation"))
       if (!is.null(k)) { need("evaluation",paste0("round:",k),FALSE); ports <- list(asset=paste0("asset:",k)) }
     }
-  } else if (block %in% c("list.pack","list.concat")) {
-    prefix <- if (block=="list.pack") "asset" else "list"
-    for (key in names(inputs)) need(key,paste0(prefix,":*"))
-    if (length(unique(unlist(inputs)))>1L) add("",gen_error_message("list_content_type"))
+  } else if (block=="list") {
+    for (key in names(inputs)) need(key,"asset:*|list:*")
+    kinds <- unique(vapply(inputs,kind,character(1)))
+    if (length(kinds)>1L || !is.null(args$kind) && length(kinds) && !identical(args$kind,kinds[[1L]]))
+      add("",gen_error_message("list_content_type"))
     order <- unlist(args$order,use.names=FALSE)
     if (anyDuplicated(order) || !setequal(order,names(inputs))) add("",gen_error_message("input_order"),"invalid_order")
-    k <- if (length(inputs)) kind(inputs[[1L]]) else config_kind
-    ports <- list(list=paste0("list:",k))
+    if (!length(kinds) && is.null(args$kind)) add("",gen_error_message("required_kind"),"required_kind")
+    if (length(kinds) || !is.null(args$kind)) ports <- list(list=paste0("list:",if(length(kinds)) kinds[[1L]] else args$kind))
   } else if (block %in% c("list.split","json.get")) {
     only("asset"); need("asset","asset:json")
     ports <- if (block=="list.split") list(list=paste0("list:",config_kind)) else list(asset=paste0("asset:",config_kind))
-  } else if (block %in% c("list.item","candidates","text.join")) {
-    only("list"); source <- need("list",if (block=="text.join") "list:text|list:json" else "list:*")
-    if (block=="text.join") ports <- list(asset="asset:text") else if (!is.null(source))
-      ports <- if (block=="list.item") list(asset=paste0("asset:",kind(source))) else list(candidates=paste0("candidates:",kind(source)))
-  } else if (block=="template") {
-    for (key in unique(c(.gen_template_variables(args$template),names(inputs)))) need(key,"asset:text|asset:json")
-    ports <- list(asset="asset:text")
+  } else if (block=="list.item") {
+    only("list"); source <- need("list","list:*")
+    if (!is.null(source)) ports <- list(asset=paste0("asset:",kind(source)))
   } else if (block=="output") {
     if (!length(inputs)) add("",gen_error_message("output_input"),"required_input")
-    for (key in names(inputs)) need(key,"asset:*|list:*|candidates:*")
+    for (key in names(inputs)) need(key,"asset:*|list:*")
   } else if (block %in% c("subworkflow","foreach")) {
-    wanted <- lapply(interface,function(x) if (is.list(x)) x$type else x)
+    expected <- lapply(interface,function(x) if (is.list(x)) x$type else x)
     exported <- lapply(exports,function(x) if (is.list(x)) x$type else x)
     if (block=="foreach") {
       item <- args$item_input
-      if (!.gen_scalar(item) || !item %in% names(wanted)) add("items",gen_error_message("child_item_input")) else {
-        need("items",sub("^asset:","list:",wanted[[item]])); wanted[[item]] <- NULL
+      if (!.gen_scalar(item) || !item %in% names(expected)) add("items",gen_error_message("child_item_input")) else {
+        need("items",sub("^asset:","list:",expected[[item]])); expected[[item]] <- NULL
       }
-      only(c(names(wanted),"items"))
+      only(c(names(expected),"items"))
       for (key in names(exported)) {
         if (!startsWith(exported[[key]],"asset:")) add(key,gen_error_message("child_artifact_output"))
         exported[[key]] <- sub("^asset:","list:",exported[[key]])
       }
-    } else only(names(wanted))
-    for (key in names(wanted)) need(key,wanted[[key]])
+    } else only(names(expected))
+    for (key in names(expected)) need(key,expected[[key]])
     ports <- exported
   }
-  list(valid=!length(errors),errors=errors,ports=ports)
+  list(valid=!length(errors),errors=errors,ports=ports,inputs=wanted)
 }
 
 #' Validate a declarative workflow without running its operations
@@ -174,7 +159,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL,ports=list(),order=list(),pending=list()))
   if (!is.logical(check_capabilities) || length(check_capabilities)!=1L || is.na(check_capabilities))
     return(list(valid=FALSE,errors=list(.gen_issue("invalid_policy","/check_capabilities",gen_error_message("invalid_policy"))),document=NULL,ports=list(),order=list(),pending=list()))
-  parsed <- if (.gen_scalar(document)) tryCatch(.gen_parse_document(document),error=function(e)NULL) else document
+  parsed <- if (.gen_scalar(document)) tryCatch(gen_parse_json(document),error=function(e)NULL) else document
   if (.gen_object(parsed) && "format" %in% names(parsed)) return(.gen_validate_definition_bundle(parsed,require_output,check_capabilities,purpose))
   if (.gen_object(parsed) && is.list(parsed$nodes) && any(vapply(parsed$nodes,function(n) .gen_object(n) && "type" %in% names(n),logical(1)))) {
     bundle <- list(format="genflow-studio-definition",schema_version=1L,
@@ -204,7 +189,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
       ok <- .gen_object(value$interface %||% list()) && .gen_object(value$exports %||% list())
       for (port in c(value$interface %||% list(),value$exports %||% list())) {
         type <- if (is.list(port)) port$type else port
-        ok <- ok && .gen_scalar(type) && grepl("^(asset|list|candidates|round):(text|json|image|audio|video)$",type)
+        ok <- ok && .gen_scalar(type) && grepl("^(asset|list|candidates|round):(text|json|image|audio|video|ballot)$",type)
       }
       report <- list(valid=ok,errors=if(ok) list() else list(.gen_issue("invalid_interface","",gen_error_message("invalid_interface"))),document=value)
       if (ok) interfaces[[key]] <<- value
@@ -251,11 +236,11 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
 
 .gen_validate_structure_graph <- function(document, require_output = FALSE, check_capabilities = TRUE, purpose = "execution", unresolved = character()) {
   requirements <- list()
-  errors <- list(); ports <- list(); prepared <- list(); ordered <- character(); pending <- list()
-  finish <- function(value=NULL) list(valid=!length(errors),errors=errors,document=value,ports=ports,order=as.list(ordered),pending=pending,requirements=requirements)
+  errors <- list(); ports <- list(); input_ports <- list(); prepared <- list(); ordered <- character(); pending <- list()
+  finish <- function(value=NULL) list(valid=!length(errors),errors=errors,document=value,ports=ports,order=as.list(ordered),pending=pending,requirements=requirements,input_ports=input_ports)
   add <- function(code,path,message,node=NULL) errors[[length(errors)+1L]] <<- .gen_issue(code,path,message,node)
   if (.gen_scalar(document)) {
-    document <- tryCatch(.gen_parse_document(document),error=function(e)e)
+    document <- tryCatch(gen_parse_json(document),error=function(e)e)
     if (inherits(document,"error")) { add("invalid_json","",conditionMessage(document)); return(finish()) }
   }
   portable <- tryCatch({ .genflow_validate_portable(document); TRUE },error=function(e)e)
@@ -282,9 +267,10 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
     if (!.gen_object(n)) { add("invalid_node",path,gen_error_message("invalid_node"),id); next }
     if (!valid_ids[[i]]) add(if (duplicate[[i]] && nzchar(ids[[i]])) "duplicate_id" else "invalid_id",paste0(path,"/id"),gen_error_message("invalid_id"),id)
     for (key in setdiff(names(n),c("id","block","contract_version","args","inputs","label","metadata"))) add("unknown_field",.gen_pointer(path,key),gen_error_message("unknown_field"),id)
-    version <- n$contract_version %||% 1L
+    version <- n$contract_version
     contract <- tryCatch(gen_block_contracts(n$block,version),error=function(e)e)
     if (is.null(n$block) || inherits(contract,"error")) { add("unknown_contract",paste0(path,"/block"),if (inherits(contract,"error")) conditionMessage(contract) else "A block identifier is required.",id); next }
+    version <- contract$version
     contracts[[i]] <- contract
     bindings <- n$inputs %||% list()
     if (!.gen_object(bindings)) { add("invalid_bindings",paste0(path,"/inputs"),gen_error_message("invalid_bindings"),id); bindings <- list() }
@@ -300,7 +286,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
     checked <- gen_validate_call(n$block,n$args %||% list(),version,
       bound=if (contract$kind=="function") names(bindings) else character(), check_capabilities=check_capabilities)
     if (.gen_authoring(purpose)) {
-      absent <- vapply(checked$errors,function(e) e$code=="required" && sub("^/args/","",e$path) %in% setdiff(names(contract$arguments$properties),names(n$args)),logical(1))
+      absent <- vapply(checked$errors,function(e) e$code %in% c("required","required_kind"),logical(1))
       for (e in checked$errors[absent]) { e$path <- paste0(path,e$path); e$node_id <- id; requirements[[length(requirements)+1L]] <- e }
       checked$errors <- checked$errors[!absent]; checked$valid <- !length(checked$errors)
     }
@@ -384,6 +370,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
         for (e in checked$errors) { e$path <- paste0(path,e$path); e$node_id <- id; errors[[length(errors)+1L]] <- e }
         usable[[i]] <- checked$valid
         ports[id] <- list(checked$ports)
+        input_ports[id] <- list(checked$inputs)
         if (n$block=="select" && !is.null(n$inputs$evaluation)) {
           producer <- prepared[[match(n$inputs$evaluation$node,ids)]]
           if (!identical(producer$inputs$candidates,n$inputs$candidates)) add("candidate_set_mismatch",paste0(path,"/inputs/evaluation"),gen_error_message("candidate_set_mismatch"),id)

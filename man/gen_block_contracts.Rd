@@ -4,12 +4,12 @@
 \alias{gen_block_contracts}
 \title{Read versioned contracts for workflow blocks}
 \usage{
-gen_block_contracts(block = NULL, version = 1L)
+gen_block_contracts(block = NULL, version = NULL)
 }
 \arguments{
 \item{block}{Optional exact block identifier, for example \code{"gen_img"}.}
 
-\item{version}{Positive contract version. Defaults to version 1.}
+\item{version}{Exact supported contract version. NULL selects the current contract.}
 }
 \value{
 A contract, or a named list of all installed contracts when \code{block}

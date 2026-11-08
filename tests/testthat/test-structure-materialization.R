@@ -1,9 +1,9 @@
 materialization_bundle <- function() list(format="genflow-studio-definition",schema_version=1L,
   root=list(kind="workflow",name="Scene",body=list(schema_version=1L,nodes=list(
-    list(id="brief",type="input",config=list(key="brief",kind="text")),
-    list(id="write",type="generate",config=list(agent_version_id="writer"),inputs=list(input=list(node="brief",port="asset"))),
+    list(id="brief",type="input",contract_version=2L,config=list(key="brief",kind="text")),
+    list(id="write",type="content",config=list(content_type="text",source="ai",ai=list(service="openai",model="gpt-4.1-mini",contract_version=2L,content=list(list(text="Write: "),list(input="input")))),inputs=list(input=list(node="brief",port="asset"))),
     list(id="out",type="output",inputs=list(story=list(node="write",port="asset"))),
-    list(id="unused",type="template",config=list(template="Unused"))))),
+    list(id="unused",type="content",config=list(content_type="text",source="inline",text="Unused"))))),
   resources=list(list(key="writer",kind="agent",name="Writer",body=list(operation="text.generate",prompt_version_id="prompt")),
     list(key="prompt",kind="prompt",name="Prompt",body=list(template="Write: {{input}}")),
     list(key="unused",kind="prompt",name="Unused",body=list(template="Unused"))),assets=list())
@@ -16,11 +16,10 @@ test_that("materialization includes ancestors, prunes resources and namespaces e
   expect_identical(serialize(d,NULL),before)
   expect_identical(unlist(report$node_map),c(brief="scene1_brief",write="scene1_write",out="scene1_out"))
   expect_identical(report$input_map,list(brief="scene1_brief"))
-  expect_identical(report$resource_sources,list(scene1_writer="writer",scene1_prompt="prompt"))
-  expect_length(report$document$resources,2L)
-  expect_identical(report$document$resources[[1]]$body$prompt_version_id,"scene1_prompt")
+  expect_length(report$resource_sources,0L)
+  expect_length(report$document$resources,0L)
   expect_identical(report$document$root$body$nodes[[2]]$inputs$input,list(node="scene1_brief",port="asset"))
-  expect_identical(report$document$root$body$nodes[[2]]$config$agent_version_id,"scene1_writer")
+  expect_identical(report$document$root$body$nodes[[2]]$config$ai$content[[2]],list(input="input"))
   expect_identical(names(report$document$root$body$nodes[[3]]$inputs),"scene1_story")
   expect_true(gen_validate_structure(report$document,TRUE)$valid)
   expect_identical(report,gen_materialize_structure(d,"scene1",list("out")))
@@ -31,24 +30,24 @@ test_that("materialization retains local scopes, assets and caller data", {
   d <- materialization_bundle()
   child <- d$root; child$key <- "child"
   d$resources <- c(d$resources,list(child))
-  d$root$body$nodes <- list(list(id="in",type="input",config=list(key="brief")),
+  d$root$body$nodes <- list(list(id="in",type="input",contract_version=2L,config=list(key="brief")),
     list(id="call",type="subworkflow",config=list(workflow_id="child"),inputs=list(brief=list(node="in",port="asset"))))
   r <- gen_materialize_structure(d,"s")
   expect_true(r$valid)
   child <- Filter(function(x)x$key=="s_child",r$document$resources)[[1]]
   expect_identical(child$body$nodes[[1]]$id,"brief")
   expect_identical(child$body$nodes[[1]]$config$key,"brief")
-  expect_identical(child$body$nodes[[2]]$config$agent_version_id,"s_writer")
+  expect_identical(child$body$nodes[[2]]$config$ai$service,"openai")
   expect_identical(names(r$document$root$body$nodes[[2]]$inputs),"brief")
-  d <- list(schema_version=1L,nodes=list(list(id="a",type="template",config=list(template="Hello"),notes="Keep me",position=list(x=1,y=2))))
+  d <- list(schema_version=1L,nodes=list(list(id="a",type="content",config=list(content_type="text",source="inline",text="Hello"),notes="Keep me",position=list(x=1,y=2))))
   expect_equal(gen_materialize_structure(d)$document$nodes[[1]]$position,d$nodes[[1]]$position)
   bundle <- list(format="genflow-studio-definition",schema_version=1L,root=list(kind="workflow",name="Assets",body=list(schema_version=1L,
-    nodes=list(list(id="a",type="generate",config=list(source="provided",kind="text",artifact_ids=list("a")))))),
+    nodes=list(list(id="a",type="content",config=list(content_type="text",source="asset",asset_id="a"))))),
     assets=list(list(key="a",kind="text",sha256=paste(rep("a",64),collapse=""))))
   r <- gen_materialize_structure(bundle,"s")
   expect_true(r$valid)
   expect_identical(r$asset_sources,list(s_a="a"))
-  expect_identical(r$document$root$body$nodes[[1]]$config$artifact_ids,list("s_a"))
+  expect_identical(r$document$root$body$nodes[[1]]$config$asset_id,"s_a")
 })
 
 test_that("invalid selections and documents stop before materialization", {

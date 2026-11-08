@@ -1,0 +1,275 @@
+{
+  "id": "content",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "content_type": {
+        "type": "string",
+        "enum": [
+          "text",
+          "image",
+          "voice",
+          "music",
+          "sfx",
+          "audio",
+          "video"
+        ],
+        "x-ui": {
+          "enum_labels": {
+            "text": "Texto",
+            "image": "Imagem",
+            "audio": "Áudio",
+            "video": "Vídeo"
+          }
+        },
+        "title": "Finalidade"
+      },
+      "source": {
+        "type": "string",
+        "enum": [
+          "inline",
+          "asset",
+          "ai"
+        ],
+        "x-ui": {
+          "enum_labels": {
+            "asset": "Um conteúdo"
+          }
+        },
+        "title": "Origem"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "text",
+          "json"
+        ],
+        "x-ui": {
+          "enum_labels": {
+            "text": "Texto",
+            "json": "JSON"
+          }
+        },
+        "title": "Formato do conteúdo"
+      },
+      "text": {
+        "type": "string",
+        "maxLength": 1000000,
+        "title": "Texto"
+      },
+      "asset_id": {
+        "type": "string",
+        "pattern": "\\S",
+        "title": "Arquivo"
+      },
+      "ai": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "pattern": "\\S",
+            "title": "Serviço"
+          },
+          "model": {
+            "type": "string",
+            "pattern": "\\S",
+            "title": "Modelo"
+          },
+          "contract_version": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Versão do contrato"
+          },
+          "parameters": {
+            "type": "object",
+            "title": "Parâmetros"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 256,
+            "title": "Conteúdo principal"
+          },
+          "fixture": {
+            "type": "object"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "title": "Configuração da IA"
+      },
+      "additions": {
+        "type": "array",
+        "maxItems": 64,
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "pattern": "\\S",
+              "title": "Papel"
+            },
+            "value": {
+              "type": "object",
+              "title": "Conteúdo"
+            }
+          },
+          "required": [
+            "role",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        "title": "Adendos"
+      },
+      "output_schema": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "title": "Schema da resposta JSON"
+      }
+    },
+    "required": [
+      "content_type",
+      "source"
+    ],
+    "additionalProperties": false
+  },
+  "pieces": {
+    "text": {
+      "label": "Texto",
+      "output": "text",
+      "sources": [
+        "inline",
+        "asset",
+        "ai"
+      ],
+      "roles": [
+        "context_text",
+        "context_image"
+      ],
+      "function": "gen_txt",
+      "function_version": 2,
+      "operation": "text.generate",
+      "primary": "context",
+      "primary_label": "Instrução para a IA"
+    },
+    "image": {
+      "label": "Imagem",
+      "output": "image",
+      "sources": [
+        "asset",
+        "ai"
+      ],
+      "roles": [
+        "context_text",
+        "reference_image"
+      ],
+      "function": "gen_img",
+      "function_version": 3,
+      "operation": "image.generate",
+      "primary": "prompt",
+      "primary_label": "Descrição da imagem"
+    },
+    "voice": {
+      "label": "Voz",
+      "output": "audio",
+      "sources": [
+        "asset",
+        "ai"
+      ],
+      "roles": [
+        "reference_audio"
+      ],
+      "function": "gen_tts",
+      "function_version": 4,
+      "operation": "audio.speak",
+      "primary": "text",
+      "primary_label": "Texto a falar"
+    },
+    "music": {
+      "label": "Música",
+      "output": "audio",
+      "sources": [
+        "asset",
+        "ai"
+      ],
+      "roles": [
+        "context_text",
+        "lyrics"
+      ],
+      "function": "gen_music",
+      "function_version": 2,
+      "operation": "audio.music",
+      "primary": "prompt",
+      "primary_label": "Descrição musical"
+    },
+    "sfx": {
+      "label": "Efeito sonoro",
+      "output": "audio",
+      "sources": [
+        "asset",
+        "ai"
+      ],
+      "roles": [
+        "context_text"
+      ],
+      "function": "gen_sfx",
+      "function_version": 2,
+      "operation": "audio.sfx",
+      "primary": "prompt",
+      "primary_label": "Descrição do som"
+    },
+    "audio": {
+      "label": "Áudio",
+      "output": "audio",
+      "sources": [
+        "asset"
+      ],
+      "roles": []
+    },
+    "video": {
+      "label": "Vídeo",
+      "output": "video",
+      "sources": [
+        "asset"
+      ],
+      "roles": []
+    }
+  },
+  "roles": {
+    "context_text": {
+      "label": "Texto de contexto",
+      "argument": "add",
+      "type": "asset:text|asset:json|list:text|list:json"
+    },
+    "context_image": {
+      "label": "Imagem para análise",
+      "argument": "add_img",
+      "type": "asset:image|list:image"
+    },
+    "reference_image": {
+      "label": "Referência visual",
+      "argument": "add_img",
+      "type": "asset:image|list:image"
+    },
+    "reference_audio": {
+      "label": "Referência de voz",
+      "argument": "reference_audio",
+      "type": "asset:audio",
+      "max": 1
+    },
+    "lyrics": {
+      "label": "Letra",
+      "argument": "lyrics",
+      "type": "asset:text|asset:json",
+      "max": 1
+    }
+  },
+  "port_rule": "content"
+}

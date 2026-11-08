@@ -1,0 +1,74 @@
+{
+  "id": "transcribe",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "ai": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "pattern": "\\S",
+            "title": "Serviço"
+          },
+          "model": {
+            "type": "string",
+            "pattern": "\\S",
+            "title": "Modelo"
+          },
+          "contract_version": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Versão do contrato"
+          },
+          "parameters": {
+            "type": "object",
+            "title": "Parâmetros"
+          },
+          "fixture": {
+            "type": "object"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "title": "Configuração da IA"
+      },
+      "audio": {
+        "type": "object",
+        "title": "Áudio para transcrever"
+      },
+      "additions": {
+        "type": "array",
+        "maxItems": 64,
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "pattern": "\\S",
+              "title": "Papel"
+            },
+            "value": {
+              "type": "object",
+              "title": "Conteúdo"
+            }
+          },
+          "required": [
+            "role",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        "title": "Adendos"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "function": "gen_stt",
+  "operation": "audio.transcribe",
+  "primary": "audio",
+  "port_rule": "transcribe"
+}

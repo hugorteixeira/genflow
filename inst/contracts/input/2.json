@@ -1,6 +1,6 @@
 {
   "id": "input",
-  "version": 1,
+  "version": 2,
   "kind": "workflow",
   "arguments": {
     "type": "object",
@@ -18,20 +18,36 @@
           "json",
           "image",
           "audio",
-          "video"
+          "video",
+          "ballot"
         ],
         "default": "text",
-        "title": "Tipo de conteúdo"
+        "title": "Tipo de conteúdo",
+        "x-ui": {
+          "enum_labels": {
+            "text": "Texto",
+            "json": "JSON",
+            "image": "Imagem",
+            "audio": "Áudio",
+            "video": "Vídeo",
+            "ballot": "Recibo de voto"
+          }
+        }
       },
       "value_type": {
         "type": "string",
         "enum": [
           "asset",
-          "list",
-          "candidates"
+          "list"
         ],
         "default": "asset",
-        "title": "Receber"
+        "title": "Receber",
+        "x-ui": {
+          "enum_labels": {
+            "asset": "Um conteúdo",
+            "list": "Uma lista"
+          }
+        }
       },
       "output_schema": {
         "type": [

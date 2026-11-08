@@ -106,25 +106,37 @@
         "type": "number",
         "exclusiveMinimum": 0,
         "default": 240,
-        "title": "Tempo máximo da chamada (s)"
+        "title": "Tempo máximo da chamada (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "timeout_per_audio_minute": {
         "type": "number",
         "minimum": 0,
         "default": 60,
-        "title": "Tempo adicional por minuto de áudio (s)"
+        "title": "Tempo adicional por minuto de áudio (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "poll_interval": {
         "type": "number",
         "exclusiveMinimum": 0,
         "default": 5,
-        "title": "Intervalo de consulta (s)"
+        "title": "Intervalo de consulta (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "max_poll_seconds": {
         "type": "number",
         "exclusiveMinimum": 0,
         "default": 600,
-        "title": "Tempo máximo de espera (s)"
+        "title": "Tempo máximo de espera (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "executable": {
         "type": [
@@ -133,7 +145,10 @@
         ],
         "pattern": "\\S",
         "default": null,
-        "title": "Executável local"
+        "title": "Executável local",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "native_engine": {
         "type": [
@@ -147,7 +162,13 @@
           null
         ],
         "default": null,
-        "title": "Motor local"
+        "title": "Motor local",
+        "x-ui": {
+          "enum_labels": {
+            "auto": "Automático"
+          },
+          "group": "infrastructure"
+        }
       },
       "native_backend": {
         "type": [
@@ -156,7 +177,10 @@
         ],
         "pattern": "\\S",
         "default": null,
-        "title": "Arquitetura local"
+        "title": "Arquitetura local",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "native_quant": {
         "type": [
@@ -165,7 +189,10 @@
         ],
         "pattern": "\\S",
         "default": null,
-        "title": "Quantização"
+        "title": "Quantização",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "native_kv_quant": {
         "type": [
@@ -179,7 +206,10 @@
           null
         ],
         "default": null,
-        "title": "Quantização KV"
+        "title": "Quantização KV",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "native_device": {
         "type": [
@@ -188,7 +218,10 @@
         ],
         "pattern": "\\S",
         "default": null,
-        "title": "Dispositivo local"
+        "title": "Dispositivo local",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "max_new_tokens": {
         "type": [
@@ -206,7 +239,10 @@
         ],
         "pattern": "\\S",
         "default": null,
-        "title": "Endereço do serviço local"
+        "title": "Endereço do serviço local",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "api_key": {
         "type": [
@@ -234,7 +270,13 @@
           "never"
         ],
         "default": "auto",
-        "title": "Divisão do áudio"
+        "title": "Divisão do áudio",
+        "x-ui": {
+          "enum_labels": {
+            "auto": "Automático",
+            "never": "Nunca"
+          }
+        }
       },
       "chunk_bitrate_kbps": {
         "type": "integer",
@@ -292,7 +334,10 @@
         "type": "number",
         "minimum": 0,
         "default": 2,
-        "title": "Espera inicial entre tentativas (s)"
+        "title": "Espera inicial entre tentativas (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "output": {
         "type": "string",
@@ -314,7 +359,12 @@
           "mp3"
         ],
         "default": "auto",
-        "title": "Formato dos trechos"
+        "title": "Formato dos trechos",
+        "x-ui": {
+          "enum_labels": {
+            "auto": "Automático"
+          }
+        }
       },
       "checkpoint_retention": {
         "type": "string",

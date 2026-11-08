@@ -8,7 +8,7 @@ gen_block_configuration(
   block,
   service,
   model = NULL,
-  version = 1L,
+  version = NULL,
   parameters = list(),
   resolve = FALSE,
   directory = NULL
@@ -27,7 +27,7 @@ gen_block_configuration(
 \code{parameter_schema}. Values are never discarded or repaired.}
 
 \item{resolve}{Look up the current service/model profile only when no frozen
-profile is supplied. FALSE preserves legacy configurations without a profile.}
+profile is supplied. FALSE uses only the supplied parameter configuration.}
 
 \item{directory}{Optional parameter registry directory, as in \code{\link[=gen_models]{gen_models()}}.}
 }

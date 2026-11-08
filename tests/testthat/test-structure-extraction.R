@@ -1,17 +1,18 @@
-component_node <- function(id,type,config=list(),inputs=list()) list(id=id,type=type,config=config,inputs=inputs)
+component_node <- function(id,type,config=structure(list(),names=character()),inputs=structure(list(),names=character()))
+ list(id=id,type=type,contract_version=gen_block_contracts(type)$version,config=config,inputs=inputs)
 component_ref <- function(node,port="asset") list(node=node,port=port)
 component_body <- function(...) list(schema_version=1L,nodes=list(...))
 
 test_that("exact selection declares boundary inputs and outputs without ancestors", {
   d <- component_body(
     component_node("brief","input",list(key="brief")),
-    component_node("write","template",list(template="{{text}}"),list(text=component_ref("brief"))),
+    component_node("write","text.join",list(parts=list(list(input="text"))),list(text=component_ref("brief"))),
     component_node("outside","output",inputs=list(story=component_ref("write"))))
   original <- serialize(d,NULL)
   r <- gen_extract_structure(d,list("write"))
   expect_true(r$valid)
   expect_identical(serialize(d,NULL),original)
-  expect_identical(vapply(r$document$nodes,`[[`,character(1),"type"),c("input","template","output"))
+  expect_identical(vapply(r$document$nodes,`[[`,character(1),"type"),c("input","text.join","output"))
   expect_false("brief" %in% vapply(r$document$nodes,`[[`,character(1),"id"))
   expect_identical(r$boundary$inputs,list(text=component_ref("brief")))
   expect_identical(r$boundary$outputs,list(story=component_ref("write")))
@@ -21,7 +22,7 @@ test_that("exact selection declares boundary inputs and outputs without ancestor
 
 test_that("shared incoming edges stay shared and generated names avoid collisions", {
   d <- component_body(component_node("brief","input",list(key="brief")),
-    component_node("component_input_1","template",list(template="{{a}} {{b}}"),
+    component_node("component_input_1","text.join",list(parts=list(list(input="a"),list(text=" "),list(input="b"))),
       list(a=component_ref("brief"),b=component_ref("brief"))))
   r <- gen_extract_structure(d,list("component_input_1"))
   expect_true(r$valid)
@@ -49,12 +50,12 @@ test_that("typed collection boundaries retain JSON schemas and existing exports"
 })
 
 test_that("bundled extraction prunes unrelated resources and keeps shared components", {
-  child <- component_body(component_node("voice","generate",list(source="provided",kind="audio",artifact_ids=list("voice"))),
+  child <- component_body(component_node("voice","content",list(content_type="audio",source="asset",asset_id="voice")),
     component_node("out","output",inputs=list(voice=component_ref("voice"))))
   d <- list(format="genflow-studio-definition",schema_version=1L,
     root=list(kind="workflow",name="Story",body=component_body(
       component_node("mimi","subworkflow",list(workflow_id="character")),
-      component_node("irrelevant","template",list(template="hello")))),
+      component_node("irrelevant","content",list(content_type="text",source="inline",text="hello")))),
     resources=list(list(key="character",kind="workflow",name="Mimi",body=child),
       list(key="unused",kind="prompt",name="Unused",body=list(template="Unused"))),
     assets=list(list(key="voice",kind="audio",sha256=strrep("a",64)),list(key="unused",kind="text",sha256=strrep("b",64))))
@@ -67,32 +68,31 @@ test_that("bundled extraction prunes unrelated resources and keeps shared compon
   expect_identical(mounted$document$root$body$nodes[[1]]$config$workflow_id,"scene_character")
 })
 
-test_that("reference traversal and mapping touch only declared fields", {
+test_that("reference traversal and mapping touch only current declared fields", {
   b <- component_body(component_node("one","subworkflow",list(workflow_id="child")),
-    component_node("two","generate",list(agent_version_ids=list("agent","agent"))),
-    component_node("three","generate",list(source="provided",artifact_ids=list("file"))),
-    component_node("text","template",list(template="child agent file")))
+    component_node("two","content",list(content_type="text",source="asset",asset_id="file")),
+    component_node("text","content",list(content_type="text",source="inline",text="child file")))
   refs <- gen_definition_references(b,"workflow")
-  expect_identical(vapply(refs,`[[`,character(1),"kind"),c("workflow","agent","agent","asset"))
+  expect_identical(vapply(refs,`[[`,character(1),"kind"),c("workflow","asset"))
   expect_identical(refs[[1]]$path,"/nodes/0/config/workflow_id")
-  renamed <- gen_remap_definition(b,"workflow",list(child="new_child",agent="new_agent"),list(file="new_file"))
-  expect_identical(renamed$nodes[[4]]$config$template,"child agent file")
+  renamed <- gen_remap_definition(b,"workflow",list(child="new_child"),list(file="new_file"))
+  expect_identical(renamed$nodes[[3]]$config$text,"child file")
   expect_identical(renamed$nodes[[1]]$config$workflow_id,"new_child")
-  expect_identical(renamed$nodes[[2]]$config$agent_version_ids,list("new_agent","new_agent"))
+  expect_identical(renamed$nodes[[2]]$config$asset_id,"new_file")
   expect_error(gen_remap_definition(b,"workflow"),class="genflow_validation_error")
 })
 
 test_that("bad selections and unsupported boundary types produce canonical errors", {
-  d <- component_body(component_node("a","template",list(template="hello")))
+  d <- component_body(component_node("a","content",list(content_type="text",source="inline",text="hello")))
   for (ids in list(list(),list("missing"),list("a","a"),42)) expect_false(gen_extract_structure(d,ids)$valid)
   expect_false(gen_extract_structure("{")$valid)
   expect_false(gen_extract_structure(d,check_capabilities="no")$valid)
   expect_false(gen_extract_structure()$valid)
   d <- component_body(
-    component_node("choices","input",list(key="choices",value_type="candidates")),
-    component_node("votes","input",list(key="votes",value_type="list",kind="json")),
-    component_node("vote","vote",inputs=list(candidates=component_ref("choices","candidates"),votes=component_ref("votes","list"))),
-    component_node("select","select",inputs=list(candidates=component_ref("choices","candidates"),evaluation=component_ref("vote","round"))))
+    component_node("choices","input",list(key="choices",value_type="list")),
+    component_node("votes","input",list(key="votes",value_type="list",kind="ballot")),
+    component_node("vote","vote",inputs=list(candidates=component_ref("choices","list"),votes=component_ref("votes","list"))),
+    component_node("select","select",inputs=list(candidates=component_ref("choices","list"),evaluation=component_ref("vote","round"))))
   expect_true(gen_validate_structure(d)$valid)
   r <- gen_extract_structure(d,list("select"))
   expect_false(r$valid)

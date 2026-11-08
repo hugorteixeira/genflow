@@ -71,6 +71,13 @@ the application resolves publications and freezes execution. Reference discovery
 and remapping are shared through `gen_definition_references()` and
 `gen_remap_definition()`.
 
+Workflow pieces now have a fixed purpose and a configurable origin. `content`
+contains inline AI settings, ordered primary parts and explicit typed additions.
+`text.join` and `list` are deterministic transformations. Only the current
+contract for each block is supported; incompatible documents are rejected without
+automatic conversion. Omitted versions resolve to the current contract, and
+prepared documents record that exact version.
+
 See [block contracts and the workflow format](inst/doc/block-contracts.md) for
 examples, supported schema keywords, validation limits and versioning.
 

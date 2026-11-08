@@ -83,30 +83,30 @@ test_that("invalid schemas, defaults and unsafe generator fields fail before sav
 test_that("snapshots are self-contained and verify identity and content", {
   root <- parameter_scope()
   gen_save_parameter_schema("local-native", parameter_cfg(), block = "gen_tts")
-  prepared <- gen_validate_call("gen_tts", list(text = "Olá", service = "local-native", model = "voice.gguf", model_options = list(cfg = 1)), 3)
+  prepared <- gen_validate_call("gen_tts", list(text = "Olá", service = "local-native", model = "voice.gguf", model_options = list(cfg = 1)), 4)
   expect_true(prepared$valid, info = paste(vapply(prepared$errors, `[[`, "", "message"), collapse = "; "))
   expect_equal(prepared$args$parameter_schema$revisions$service, 1)
   copy <- parameter_json(prepared$args)
   withr::local_options(list(genflow.models_dir = file.path(root, "destination")))
-  expect_true(gen_validate_call("gen_tts", copy, 3)$valid)
+  expect_true(gen_validate_call("gen_tts", copy, 4)$valid)
   expect_false(dir.exists(getOption("genflow.models_dir")))
   changed <- copy; changed$model <- "other.gguf"
-  expect_true("parameter_schema_mismatch" %in% vapply(gen_validate_call("gen_tts", changed, 3)$errors, `[[`, "", "code"))
+  expect_true("parameter_schema_mismatch" %in% vapply(gen_validate_call("gen_tts", changed, 4)$errors, `[[`, "", "code"))
   changed <- copy; changed$parameter_schema$schema$properties$model_options$properties$cfg$default <- 7
-  expect_true("parameter_schema_integrity" %in% vapply(gen_validate_call("gen_tts", changed, 3)$errors, `[[`, "", "code"))
+  expect_true("parameter_schema_integrity" %in% vapply(gen_validate_call("gen_tts", changed, 4)$errors, `[[`, "", "code"))
   expect_false(gen_validate_call("gen_tts", list(text = "Olá", service = "local-native", model_options = list(cfg = 1)), 3)$valid)
   expect_false(gen_validate_call("gen_tts", copy, 2)$valid)
   # Even a correctly rehashed imported schema cannot introduce transport fields.
   changed <- copy; changed$parameter_schema$schema$properties$executable <- list(type = "string", default = "/bad")
   changed$parameter_schema$sha256 <- genflow:::.gen_parameter_hash(changed$parameter_schema[setdiff(names(changed$parameter_schema), "sha256")])
-  expect_true("parameter_schema_reserved" %in% vapply(gen_validate_call("gen_tts", changed, 3)$errors, `[[`, "", "code"))
+  expect_true("parameter_schema_reserved" %in% vapply(gen_validate_call("gen_tts", changed, 4)$errors, `[[`, "", "code"))
 })
 
 test_that("the normal validator aggregates profile errors and refuses unsupported execution", {
   parameter_scope()
   schema <- parameter_cfg(); schema$properties$model_options$properties$variant <- list(type = "string", enum = list("a", "b"))
   gen_save_parameter_schema("local-native", schema, block = "gen_tts")
-  checked <- gen_validate_call("gen_tts", list(text = "", service = "local-native", model_options = list(cfg = "bad", variant = "z", typo = 1)), 3)
+  checked <- gen_validate_call("gen_tts", list(text = "", service = "local-native", model_options = list(cfg = "bad", variant = "z", typo = 1)), 4)
   expect_false(checked$valid)
   expect_true(all(c("/args/text", "/args/model_options/cfg", "/args/model_options/variant", "/args/model_options/typo") %in%
     vapply(checked$errors, `[[`, "", "path")))
@@ -144,29 +144,27 @@ test_that("concurrent creates cannot lose a registered revision", {
 test_that("prepared portable workflows retain profiles through materialization", {
   root <- parameter_scope()
   gen_save_parameter_schema("local-native", parameter_cfg(), block = "gen_tts")
-  agent <- list(operation = "audio.speak", contract_version = 3, service = "local-native", model = "voice.gguf", prompt_version_id = "prompt", parameters = list(model_options = list(cfg = 1)))
-  document <- list(format = "genflow-studio-definition", schema_version = 1,
-    root = list(kind = "workflow", name = "Voice", body = list(schema_version = 1, nodes = list(
-      list(id = "voice", type = "generate", config = list(agent_version_id = "agent")),
-      list(id = "out", type = "output", inputs = list(audio = list(node = "voice", port = "candidates")))))),
-    resources = list(list(key = "agent", kind = "agent", name = "Voice", body = agent),
-      list(key = "prompt", kind = "prompt", name = "Line", body = list(template = "Olá, Mimi!"))))
+  document <- list(format="genflow-studio-definition",schema_version=1,
+    root=list(kind="workflow",name="Voice",body=list(schema_version=1,nodes=list(
+      list(id="voice",type="content",config=list(content_type="voice",source="ai",ai=list(
+        contract_version=4,service="local-native",model="voice.gguf",parameters=list(model_options=list(cfg=1)),content=list(list(text="Olá, Mimi!")) ))),
+      list(id="out",type="output",inputs=list(audio=list(node="voice",port="asset")))))))
   report <- gen_validate_structure(document)
   expect_true(report$valid, info = paste(vapply(report$errors, `[[`, "", "message"), collapse = "; "))
   exported <- parameter_json(report$document)
-  pinned <- exported$resources[[1]]$body$parameters$parameter_schema
+  pinned <- exported$root$body$nodes[[1]]$config$ai$parameters$parameter_schema
   expect_equal(pinned$revisions$service, 1)
   gen_save_parameter_schema("local-native", parameter_cfg(7), block = "gen_tts", expected_revision = 1)
   withr::local_options(list(genflow.models_dir = file.path(root, "empty")))
   restored <- gen_materialize_structure(exported, prefix = "copy")
   expect_true(restored$valid)
-  expect_identical(restored$document$resources[[1]]$body$parameters$parameter_schema, pinned)
-  expect_equal(restored$document$resources[[1]]$body$parameters$model_options$cfg, 1)
+  expect_identical(restored$document$root$body$nodes[[1]]$config$ai$parameters$parameter_schema, pinned)
+  expect_equal(restored$document$root$body$nodes[[1]]$config$ai$parameters$model_options$cfg, 1)
   expect_false(dir.exists(getOption("genflow.models_dir")))
-  exported$resources[[1]]$body$parameters$model_options$cfg <- "invalid"
+  exported$root$body$nodes[[1]]$config$ai$parameters$model_options$cfg <- "invalid"
   bad <- gen_validate_structure(exported)
   expect_false(bad$valid)
-  expect_true("/resources/0/body/parameters/model_options/cfg" %in% vapply(bad$errors, `[[`, "", "path"))
+  expect_true("/root/body/nodes/0/config/ai/parameters/model_options/cfg" %in% vapply(bad$errors, `[[`, "", "path"))
 })
 
 test_that("provider JSON options and model reasoning flow through direct, agent and batch calls", {
@@ -340,7 +338,7 @@ test_that("every profiled generator resolves defaults through its existing contr
     list(block = "gen_txt", version = 2L, args = list(context = "Hello"), field = "temp", value = 0.3),
     list(block = "gen_img", version = 3L, args = list(prompt = "Garden"), field = "steps", value = 20L),
     list(block = "gen_stt", version = 2L, args = list(audio = "audio.wav"), field = "language", value = "pt"),
-    list(block = "gen_tts", version = 3L, args = list(text = "Hello"), field = "speed", value = 0.9),
+    list(block = "gen_tts", version = 4L, args = list(text = "Hello"), field = "speed", value = 0.9),
     list(block = "gen_sfx", version = 2L, args = list(prompt = "Wings"), field = "duration_seconds", value = 2),
     list(block = "gen_music", version = 2L, args = list(prompt = "Piano"), field = "duration_seconds", value = 10))
   for (case in cases) {

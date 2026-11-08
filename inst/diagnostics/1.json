@@ -117,7 +117,6 @@
     "additionalProperties": false
   },
   "messages": {
-    "tts_native_v2": {"message": "A geração local de voz exige a versão 2 do bloco.", "hint": "Atualize explicitamente a versão do bloco; os workflows antigos permanecem na versão 1.", "category": "validation"},
     "tts_native_parameter": {"message": "Este parâmetro não é suportado pelo adaptador de voz escolhido.", "hint": "Remova o parâmetro ou escolha um serviço compatível.", "category": "validation"},
     "tts_reference_consent": {"message": "Confirme a autorização para usar o áudio de referência.", "hint": "Preencha Tenho autorização para usar esta voz antes de executar.", "category": "validation"},
     "tts_marking_required": {"message": "O motor exige assumir a identificação do áudio gerado para desativar o aviso falado.", "hint": "Ative Assumo a identificação do áudio como gerado por IA ou mantenha o aviso falado.", "category": "validation"},
@@ -142,6 +141,8 @@
     "image_output_count": {"message": "Era esperada exatamente uma imagem, mas a resposta contém outra quantidade de arquivos.", "hint": "Use chamadas separadas para gerar alternativas.", "category": "provider", "stage": "output_validation"},
     "image_download_failed": {"message": "Não foi possível baixar a imagem.", "hint": "Confira o endereço. Para saídas já geradas, retome pelo recibo existente.", "category": "transport", "stage": "download", "retryable": true},
     "image_receipt_invalid": {"message": "O resultado não contém um recibo de imagem recuperável válido.", "category": "validation"},
+    "image_replicate_only": {"message": "Parâmetros específicos do Replicate exigem o serviço Replicate.", "hint": "Use model_options com o schema do serviço/modelo selecionado.", "category": "validation"},
+    "content_parameter_binding": {"message": "Este conteúdo deve ser informado nos trechos ou adendos da peça.", "hint": "Remova o conteúdo dos ajustes do modelo e use o campo correspondente da peça.", "category": "validation", "stage": "validation"},
     "image_override_conflict": {"message": "Os parâmetros específicos não podem substituir o prompt, as referências ou a quantidade de imagens.", "category": "validation"},
     "unsupported_input_file": {"message": "Este formato de arquivo não é aceito como texto de entrada. Use .txt ou .csv.", "category": "validation"},
     "unsupported_modality": {"message": "Este tipo de agente não é suportado pelo executor de lotes.", "category": "validation"},
@@ -330,6 +331,15 @@
     "parameter_schema_mismatch": {"message": "O schema selecionado pertence a outro serviço, modelo ou função.", "hint": "Selecione o schema correspondente a este bloco.", "category": "validation"},
     "parameter_schema_required": {"message": "Estas opções precisam de um schema de serviço/modelo.", "hint": "Cadastre as opções e selecione o snapshot retornado por gen_resolve_parameter_schema().", "category": "validation"},
     "model_options_conflict": {"message": "As opções específicas entram em conflito com argumentos já definidos.", "hint": "Informe cada opção em um único lugar. Não combine model_options com replicate_input.", "category": "validation"},
-    "model_options_unsupported": {"message": "A Genflow ainda não encaminha esta opção para o serviço selecionado.", "hint": "Cadastrar um schema valida os dados, mas o motor também precisa ter suporte ao envio da opção.", "category": "validation"}
+    "model_options_unsupported": {"message": "A Genflow ainda não encaminha esta opção para o serviço selecionado.", "hint": "Cadastrar um schema valida os dados, mas o motor também precisa ter suporte ao envio da opção.", "category": "validation"},
+    "content_source": {"message": "Esta origem não está disponível para esta peça.", "category": "validation", "stage": "validation"},
+    "content_source_fields": {"message": "Há campos de outra origem na configuração desta peça.", "category": "validation", "stage": "validation"},
+    "content_role": {"message": "Este adendo não é aceito por esta peça.", "category": "validation", "stage": "validation"},
+    "content_value": {"message": "Informe exatamente um texto literal, um conteúdo salvo ou uma entrada conectada.", "category": "validation", "stage": "validation"},
+    "unused_input": {"message": "Esta entrada está conectada, mas não está sendo usada pela peça.", "category": "validation", "stage": "validation"},
+    "content_cardinality": {"message": "Há mais valores do que este campo permite.", "category": "validation", "stage": "validation"},
+    "piece_identity": {"message": "A finalidade de uma peça não pode mudar. Adicione uma nova peça.", "category": "validation", "stage": "validation"},
+    "content_format": {"message": "Este formato de conteúdo não é aceito por esta peça.", "category": "validation", "stage": "validation"},
+    "literal_json": {"message": "O texto informado não é um documento JSON válido.", "category": "validation", "stage": "validation"}
   }
 }

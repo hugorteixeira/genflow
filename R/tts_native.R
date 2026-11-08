@@ -1,11 +1,9 @@
 # Native TTS adapter: one CLI invocation, no server lifecycle or auto-download.
 # Syntax/combination rules are also used by offline workflow validation.
-.gen_tts_rules <- function(args,usable,add,version,providers=TRUE,bound=character()) {
+.gen_tts_rules <- function(args,usable,add,providers=TRUE,bound=character()) {
   if (!providers || !usable("service")) return(invisible(NULL))
   local <- identical(args$service,"local-native")
   rule <- function(key,code="tts_native_parameter") add(key,gen_error_message(code),code)
-  if (local && version<2L) { rule("service","tts_native_v2"); return(invisible(NULL)) }
-  if (version<2L) return(invisible(NULL))
   reference <- "reference_audio" %in% bound || usable("reference_audio") && !is.null(args$reference_audio)
   if (!local) return(invisible(NULL))
   if (reference && usable("reference_consent") && !isTRUE(args$reference_consent)) rule("reference_consent","tts_reference_consent")

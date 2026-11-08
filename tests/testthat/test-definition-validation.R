@@ -1,7 +1,7 @@
 definition_bundle <- function() list(format="genflow-studio-definition",schema_version=1L,source="draft",
   root=list(kind="workflow",name="Story",body=list(schema_version=1L,ui=list(viewport=list(x=5,y=9,zoom=1)),nodes=list(
-    list(id="brief",type="input",config=list(key="brief"),position=list(x=2,y=4)),
-    list(id="draft",type="generate",config=list(agent_version_id="writer"),inputs=list(input=list(node="brief",port="asset"))),
+    list(id="brief",type="input",contract_version=2L,config=list(key="brief"),position=list(x=2,y=4)),
+    list(id="draft",type="content",config=list(content_type="text",source="ai",ai=list(service="openai",model="gpt-4.1-mini",contract_version=2L,content=list(list(text="Write a story: "),list(input="input")))),inputs=list(input=list(node="brief",port="asset"))),
     list(id="out",type="output",inputs=list(story=list(node="draft",port="asset")))))),
   resources=list(
     list(key="writer",kind="agent",name="Writer",body=list(operation="text.generate",prompt_version_id="prompt",parameters=list(temp=0.7))),
@@ -40,16 +40,16 @@ test_that("resource diagnostics accumulate with original JSON paths including un
 })
 
 test_that("resource IDs, expected kinds, asset manifests and cycles are checked offline", {
-  d <- definition_bundle(); d$resources <- d$resources[-1]
+  d <- definition_bundle(); d$resources <- d$resources[-2]
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="unknown_resource",logical(1))))
-  d <- definition_bundle(); d$root$body$nodes[[2]]$config$agent_version_id <- "prompt"
+  d <- definition_bundle(); d$resources[[1]]$body$prompt_version_id <- "writer"
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="resource_kind",logical(1))))
   d <- definition_bundle(); d$resources[[2]]$key <- "writer"
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="duplicate_resource",logical(1))))
   child <- list(schema_version=1L,nodes=list(list(id="recurse",type="subworkflow",config=list(workflow_id="child"))))
   d <- definition_bundle(); d$resources[[3]] <- list(key="child",kind="workflow",name="Child",body=child)
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="recursive_resource",logical(1))))
-  d <- definition_bundle(); d$root$body$nodes[[2]]$config <- list(source="provided",kind="text",artifact_ids=list("file"))
+  d <- definition_bundle(); d$root$body$nodes[[2]]$config <- list(content_type="text",source="asset",asset_id="file"); d$root$body$nodes[[2]]$inputs <- list()
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="unknown_asset",logical(1))))
   d$assets <- list(list(key="file",kind="image",sha256=strrep("a",64)))
   expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="asset_kind",logical(1))))
@@ -67,36 +67,34 @@ test_that("subworkflow bodies and interfaces resolve transitively without UUIDs 
   report <- gen_validate_structure(d,TRUE)
   expect_true(report$valid,info=paste(vapply(report$errors,`[[`,character(1),"message"),collapse="; "))
   expect_identical(report$ports$scene$story,"asset:text")
-  expect_identical(unlist(report$resource_order),c("prompt","writer","scene"))
+  expect_setequal(unlist(report$resource_order),c("prompt","writer","scene"))
   d$resources[[3]]$body$nodes[[2]]$inputs$input$port <- "missing"
   report <- gen_validate_structure(d)
   expect_false(report$valid)
   expect_true(any(vapply(report$errors,function(e) e$path=="/resources/2/body/nodes/1/inputs/input/port",logical(1))))
 })
 
-test_that("agent prompts, modalities and candidate multiplicity agree with graph bindings", {
-  d <- definition_bundle(); d$resources[[2]]$body$template <- "{{missing}}"
-  expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="prompt_binding",logical(1))))
-  d <- definition_bundle(); d$resources[[1]]$body$operation <- "audio.transcribe"; d$resources[[1]]$body$parameters <- list()
-  expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="required_audio",logical(1))))
-  d <- definition_bundle(); d$root$body$nodes[[2]]$config <- list(agent_version_ids=list("writer","writer"),count=3)
-  expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="agent_count",logical(1))))
-  d <- definition_bundle(); d$root$body$nodes[[2]]$config$agent_version_ids <- list("writer")
-  report <- gen_validate_structure(d)
-  expect_true(report$valid)
-  expect_null(report$document$root$body$nodes[[2]]$config[["agent_version_id"]])
+test_that("piece values, modalities and explicit cardinality agree with bindings", {
+  d <- definition_bundle(); d$root$body$nodes[[2]]$config$ai$content <- list(list(input="missing"))
+  expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="required_input",logical(1))))
+  d <- definition_bundle(); d$root$body$nodes[[2]] <- list(id="draft",type="transcribe",config=list(ai=list(service="openai",model="whisper-1")))
+  expect_false(gen_validate_structure(d)$valid)
+  d <- definition_bundle(); d$root$body$nodes[[2]]$config$count <- 3
+  expect_true(any(vapply(gen_validate_structure(d)$errors,function(e)e$code=="unknown_argument",logical(1))))
+  d <- definition_bundle(); expect_true(gen_validate_structure(d)$valid)
+  expect_identical(gen_validate_structure(d)$ports$draft,list(asset="asset:text"))
 })
 
 test_that("bare Studio bodies work when self-contained and retain the source shape", {
   body <- definition_bundle()$root$body
-  body$nodes[[2]] <- list(id="draft",type="template",config=list(template="{{input}}"),inputs=list(input=list(node="brief",port="asset")))
+  body$nodes[[2]] <- list(id="draft",type="text.join",contract_version=2L,config=list(parts=list(list(input="input"))),inputs=list(input=list(node="brief",port="asset")))
   checked <- gen_validate_structure(body,TRUE)
   expect_true(checked$valid)
   expect_null(checked$document$root)
-  expect_identical(checked$document$nodes[[2]]$type,"template")
-  body$nodes[[2]]$config$template <- "{{missing}}"
+  expect_identical(checked$document$nodes[[2]]$type,"text.join")
+  body$nodes[[2]]$config$parts <- list(list(input="missing"))
   expect_true(any(vapply(gen_validate_structure(body)$errors,function(e)startsWith(e$path,"/nodes/1"),logical(1))))
-  expect_false(gen_validate_structure(definition_bundle()$root$body)$valid)
+  expect_true(gen_validate_structure(definition_bundle()$root$body)$valid)
 })
 
 test_that("malformed bundle sections produce reports instead of throwing", {
@@ -131,9 +129,9 @@ test_that("JSON schemas are checked across collection and subworkflow boundaries
   schema <- list(type="object",properties=list(name=list(type="string")))
   d <- definition_bundle(); d$resources <- list()
   d$root$body$nodes <- list(
-    list(id="one",type="input",config=list(key="one",kind="json",output_schema=schema)),
-    list(id="two",type="input",config=list(key="two",kind="json",output_schema=list(properties=schema$properties,type="object"))),
-    list(id="list",type="list.pack",config=list(order=list("a","b")),inputs=list(a=list(node="one",port="asset"),b=list(node="two",port="asset"))),
+    list(id="one",type="input",contract_version=2L,config=list(key="one",kind="json",output_schema=schema)),
+    list(id="two",type="input",contract_version=2L,config=list(key="two",kind="json",output_schema=list(properties=schema$properties,type="object"))),
+    list(id="list",type="list",config=list(order=list("a","b")),inputs=list(a=list(node="one",port="asset"),b=list(node="two",port="asset"))),
     list(id="out",type="output",inputs=list(items=list(node="list",port="list"))))
   expect_true(gen_validate_structure(d)$valid)
   d$root$body$nodes[[2]]$config$output_schema$properties$name$type <- "integer"
@@ -142,9 +140,12 @@ test_that("JSON schemas are checked across collection and subworkflow boundaries
   expect_false(gen_validate_structure(d)$valid)
 })
 
-test_that("legacy empty object fields normalize without confusing true arrays", {
+test_that("R empty object fields round trip through JSON without confusing true arrays", {
   d <- definition_bundle(); d$resources[[1]]$body$parameters <- list()
   d$root$body$nodes[[3]]$config <- list(); d$root$body$nodes[[1]]$inputs <- list()
+  d$resources[[1]]$body$parameters <- structure(list(), names=character())
+  d$root$body$nodes[[3]]$config <- structure(list(), names=character())
+  d$root$body$nodes[[1]]$inputs <- structure(list(), names=character())
   encoded <- as.character(jsonlite::toJSON(d,auto_unbox=TRUE,null="null"))
   report <- gen_validate_structure(encoded)
   expect_true(report$valid)
@@ -172,15 +173,7 @@ test_that("shared definition cases produce prepared plans without losing invalid
       expect_equal(checked$graph$order,checked$order)
       expect_true(gen_validate_structure(checked$document,TRUE,check_capabilities=FALSE)$valid,info=case$name)
     }
-    if (case$name=="omitted_count") {
-      expect_equal(checked$document$root$body$nodes[[1]]$config$count,1)
-      expect_identical(checked$ports$g$asset,"asset:text")
-      expect_identical(checked$graph$exports$result$node,"g")
-    }
-    if (case$name=="null_count") {
-      expect_true("count" %in% names(checked$document$root$body$nodes[[1]]$config))
-      expect_null(checked$document$root$body$nodes[[1]]$config$count)
-    }
+
   }
 })
 
@@ -190,14 +183,16 @@ test_that("agent preparation pins versions and runtime ownership is independent 
   v2$version <- 2L; v2$arguments$properties$temp$default <- 0.25
   v2$arguments$properties$persist[["x-ui"]]$hidden <- FALSE
   catalog[["gen_txt@2"]] <- v2
-  testthat::local_mocked_bindings(gen_block_contracts=function(block=NULL,version=1L) {
+  testthat::local_mocked_bindings(gen_block_contracts=function(block=NULL,version=NULL) {
     if (is.null(block)) return(catalog)
-    value <- catalog[[paste0(block,"@",version)]]
+    value <- catalog[[paste0(block,"@",version %||% original(block)$version)]]
     if (is.null(value)) return(original(block,version))
     value
   },.package="genflow")
-  a <- list(operation="text.generate",service="fixture",contract_version=1L)
-  expect_equal(gen_validate_agent_definition(a,FALSE)$body$parameters$temp,1)
+  a <- list(operation="text.generate",service="fixture")
+  expect_equal(gen_validate_agent_definition(a,FALSE)$body$parameters$temp,0.25)
+  a$contract_version <- 1L
+  expect_false(gen_validate_agent_definition(a,FALSE)$valid)
   a$contract_version <- 2L
   expect_equal(gen_validate_agent_definition(a,FALSE)$body$parameters$temp,0.25)
   a$parameters <- list(persist=TRUE)
@@ -215,14 +210,14 @@ test_that("bundle diagnostics separate incomplete roots from invalid dependencie
   checked <- gen_validate_structure(d,TRUE)
   expect_false(checked$valid)
   expect_true(any(vapply(checked$bundle_errors,function(e)grepl("/resources/0/body/parameters/temp",e$path,fixed=TRUE),logical(1))))
-  d <- definition_bundle(); d$resources <- list()
+  d <- definition_bundle(); d$resources <- d$resources[-2]
   checked <- gen_validate_structure(d,TRUE)
   expect_true(any(vapply(checked$bundle_errors,function(e)e$code=="unknown_resource",logical(1))))
 })
 
 test_that("invalid node configuration remains a structured diagnostic", {
   for (value in list(7, TRUE, "bad", list("bad"))) {
-    d <- list(schema_version=1L,nodes=list(list(id="in",type="input",config=value)))
+    d <- list(schema_version=1L,nodes=list(list(id="in",type="input",contract_version=2L,config=value)))
     checked <- gen_validate_structure(d)
     expect_false(checked$valid)
     expect_gt(length(checked$errors),0L)
@@ -232,12 +227,12 @@ test_that("invalid node configuration remains a structured diagnostic", {
 test_that("preparation preserves authored empty connection objects", {
   for (empty in list(list(), structure(list(), names=character()))) {
     d <- list(schema_version=1L, nodes=list(
-      list(id="text",type="template",config=list(template="Hello"),inputs=empty),
+      list(id="text",type="content",config=list(content_type="text",source="inline",text="Hello"),inputs=empty),
       list(id="out",type="output",inputs=list(result=list(node="text",port="asset")))))
     before <- serialize(d,NULL)
     checked <- gen_validate_structure(d,TRUE)
     expect_true(checked$valid)
-    expect_identical(checked$document$nodes[[1]]$inputs,empty)
+    expect_identical(checked$document$nodes[[1]]$inputs,structure(list(),names=character()))
     expect_identical(serialize(d,NULL),before)
   }
 })

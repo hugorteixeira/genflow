@@ -8,17 +8,20 @@
     n <- body$nodes[[i]]
     if (!.gen_object(n) || !.gen_object(n$config)) next
     path <- paste0("/nodes/",i-1L,"/config/")
-    for (field in c("agent_version_id","workflow_id")) if (!is.null(n$config[[field]]))
-      n$config[field] <- list(visit(n$config[[field]],if(field=="workflow_id") "workflow" else "agent",paste0(path,field),n))
-    for (field in c("agent_version_ids","artifact_ids")) if (is.list(n$config[[field]]))
-      for (j in seq_along(n$config[[field]])) n$config[[field]][j] <- list(visit(n$config[[field]][[j]],
-        if(field=="artifact_ids") "asset" else "agent",paste0(path,field,"/",j-1L),n))
-    if (is.list(n$config$agent_drafts)) for (j in seq_along(n$config$agent_drafts)) {
-      proposal <- n$config$agent_drafts[[j]]
-      if (!.gen_object(proposal)) next
-      a <- proposal$agent
-      if (.gen_object(a) && !is.null(a$prompt_version_id))
-        n$config$agent_drafts[[j]]$agent$prompt_version_id <- visit(a$prompt_version_id,"prompt",paste0(path,"agent_drafts/",j-1L,"/agent/prompt_version_id"),n)
+    if (isTRUE(n$type %in% c("subworkflow","foreach")) && !is.null(n$config$workflow_id))
+      n$config$workflow_id <- visit(n$config$workflow_id,"workflow",paste0(path,"workflow_id"),n)
+    if (identical(n$type,"content") && !is.null(n$config$asset_id))
+      n$config$asset_id <- visit(n$config$asset_id,"asset",paste0(path,"asset_id"),n)
+    value <- function(v,at) {
+      if (.gen_object(v) && !is.null(v$asset)) v$asset <- visit(v$asset,"asset",paste0(path,at,"/asset"),n)
+      v
+    }
+    if (.gen_scalar(n$type) && n$type %in% c("content","transcribe","judge","text.join")) {
+      if (!is.null(n$config$audio)) n$config$audio <- value(n$config$audio,"audio")
+      for (j in seq_along(n$config$parts)) n$config$parts[[j]] <- value(n$config$parts[[j]],paste0("parts/",j-1L))
+      for (j in seq_along(if(.gen_object(n$config$ai)) n$config$ai$content else NULL)) n$config$ai$content[[j]] <- value(n$config$ai$content[[j]],paste0("ai/content/",j-1L))
+      for (j in seq_along(n$config$additions)) if (.gen_object(n$config$additions[[j]]))
+        n$config$additions[[j]]$value <- value(n$config$additions[[j]]$value,paste0("additions/",j-1L,"/value"))
     }
     body$nodes[[i]] <- n
   }

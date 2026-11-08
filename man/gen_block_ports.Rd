@@ -8,7 +8,7 @@ gen_block_ports(
   block,
   args = list(),
   inputs = list(),
-  version = 1L,
+  version = NULL,
   interface = list(),
   exports = list()
 )
@@ -20,7 +20,7 @@ gen_block_ports(
 
 \item{inputs}{Named list of source port types, such as \code{asset:image}.}
 
-\item{version}{Contract version.}
+\item{version}{Exact supported version, or NULL for the current contract.}
 
 \item{interface}{Declared input ports of a referenced subworkflow.}
 

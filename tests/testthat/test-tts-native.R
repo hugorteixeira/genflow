@@ -1,23 +1,23 @@
-test_that("native TTS contracts are versioned and reject unsupported controls offline", {
-  expect_identical(gen_block_contracts("gen_tts",1)$inputs,list(text="asset:text|asset:json"))
-  expect_false(gen_validate_call("gen_tts",list(text="Olá",service="local-native"))$valid)
-  good <- gen_validate_call("gen_tts",list(text="Olá",service="local-native"),2)
+test_that("native TTS contract rejects unsupported controls offline", {
+  expect_identical(gen_block_contracts("gen_tts", 4)$inputs$text,"asset:text|asset:json")
+  expect_true(gen_validate_call("gen_tts",list(text="Olá",service="local-native"))$valid)
+  good <- gen_validate_call("gen_tts", list(text="Olá",service="local-native"), 4)
   expect_true(good$valid); expect_identical(good$args$model,"auto")
-  expect_identical(gen_block_contracts("gen_tts",2)$inputs$reference_audio,"asset:audio")
+  expect_identical(gen_block_contracts("gen_tts", 4)$inputs$reference_audio,"asset:audio")
   for (args in list(list(voice="mimi"),list(instructions=42),list(speed=2),list(format="pcm"),
       list(format="flac"),list(cfg_scale=2),list(steps=0),list(threads=0),list(seed=-1),list(native_device="hip"),
-      list(reference_audio=42),list(reference_audio="missing.wav"),list(spoken_disclaimer=FALSE))) {
-    report <- gen_validate_call("gen_tts",c(list(text="Olá",service="local-native"),args),2)
+      list(reference_audio=42),list(reference_audio="missing.wav",reference_consent=FALSE),list(marking_responsibility=FALSE))) {
+    report <- gen_validate_call("gen_tts", c(list(text="Olá",service="local-native"),args), 4)
     expect_false(report$valid,info=names(args))
   }
   for (service in c("openai","replicate")) {
-    expect_true(gen_validate_call("gen_tts",list(text="Olá",service=service),2)$valid)
-    expect_false(gen_validate_call("gen_tts",list(text="Olá",service=service,seed=1),2)$valid)
-    expect_false(gen_validate_call("gen_tts",list(text="Olá",service=service),2,bound="reference_audio")$valid)
+    expect_true(gen_validate_call("gen_tts", list(text="Olá",service=service), 4)$valid)
+    expect_false(gen_validate_call("gen_tts", list(text="Olá",service=service,seed=1), 4)$valid)
+    expect_false(gen_validate_call("gen_tts", list(text="Olá",service=service), 4, bound="reference_audio")$valid)
   }
-  report <- gen_validate_call("gen_tts",list(text="Olá",service="local-native",voice="mimi",speed=2,steps=0,cfg=4),2)
+  report <- gen_validate_call("gen_tts", list(text="Olá",service="local-native",voice="mimi",speed=2,steps=0,cfg=4), 4)
   expect_gte(length(report$errors),4L)
-  expect_true(gen_validate_call("gen_tts",list(text="Olá",service="local-native",reference_consent=TRUE),2,bound="reference_audio")$valid)
+  expect_true(gen_validate_call("gen_tts", list(text="Olá",service="local-native",reference_consent=TRUE), 4, bound="reference_audio")$valid)
   expect_identical(gen_tts_voices("local-native"),character())
 })
 
@@ -170,7 +170,7 @@ test_that("native TTS preserves successful inference on publication failure", {
   expect_identical(result$status_api,"ERROR"); expect_identical(result$inference_status,"SUCCESS")
   expect_identical(result$error$stage,"persistence")
   expect_true(file.exists(result$response_value)); unlink(result$response_value)
-  expect_true(gen_validate_call("gen_tts",list(text="Olá",service="local-native",reference_identity="synthetic"),2)$valid)
-  too_long <- gen_validate_call("gen_tts",list(text=paste(rep("a",4090),collapse=""),add="more words",service="local-native"),2)
+  expect_true(gen_validate_call("gen_tts", list(text="Olá",service="local-native",reference_identity="synthetic"), 4)$valid)
+  too_long <- gen_validate_call("gen_tts", list(text=paste(rep("a",4090),collapse=""),add="more words",service="local-native"), 4)
   expect_false(too_long$valid)
 })

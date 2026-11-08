@@ -1,0 +1,66 @@
+{
+  "id": "judge",
+  "version": 2,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "on_failure": {
+        "type": "string",
+        "enum": [
+          "pause",
+          "abstain"
+        ],
+        "default": "pause",
+        "title": "Se este juiz falhar",
+        "x-ui": {
+          "enum_labels": {
+            "pause": "Pausar",
+            "abstain": "Abster-se"
+          }
+        }
+      },
+      "ai": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "pattern": "\\S",
+            "title": "Serviço"
+          },
+          "model": {
+            "type": "string",
+            "pattern": "\\S",
+            "title": "Modelo"
+          },
+          "contract_version": {
+            "type": "integer",
+            "minimum": 1,
+            "title": "Versão do contrato"
+          },
+          "parameters": {
+            "type": "object",
+            "title": "Parâmetros"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 256,
+            "title": "Conteúdo principal"
+          },
+          "fixture": {
+            "type": "object"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "title": "Configuração da IA"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "judge"
+}

@@ -1,3 +1,17 @@
+# genflow 0.0.25
+
+- Fixed-purpose `content` pieces use one active origin (inline, asset or AI).
+  Inline AI configuration reuses generator and service/model contracts; explicit
+  primary parts and typed additions replace hidden prompt interpolation.
+- `text.join@2` combines ordered text, files and lists. `list@1` combines items
+  and lists. `judge@2`, `vote@2` and `select@2` consume collections directly;
+  ballot ports distinguish registered votes from arbitrary JSON.
+- `gen_txt(add_img)` accepts ordered image references with verified MIME types.
+  Unsupported adapters reject images before inference, without silent discards.
+- Removed retired workflow conversion and historical function contracts. Each
+  block has one supported contract; explicit incompatible versions are rejected.
+  Omitted versions select the current contract and are pinned during preparation.
+
 # genflow 0.0.24
 
 - Portable workflow validation, extraction and materialization accept an explicit

@@ -7,7 +7,7 @@
 gen_validate_call(
   block,
   args = list(),
-  version = 1L,
+  version = NULL,
   bound = character(),
   check_capabilities = TRUE
 )
@@ -18,7 +18,7 @@ gen_validate_call(
 \item{args}{Named list of explicit arguments. Omitted fields receive defaults;
 explicit NULL values are retained and validated.}
 
-\item{version}{Contract version.}
+\item{version}{Exact supported version, or NULL for the current contract.}
 
 \item{bound}{Names of arguments supplied by upstream connections. They receive
 no defaults and their concrete values must be validated at execution.}

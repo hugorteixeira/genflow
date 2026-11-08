@@ -25,7 +25,13 @@
           "authoring"
         ],
         "default": "execution",
-        "title": "Finalidade da validação"
+        "title": "Finalidade da validação",
+        "x-ui": {
+          "enum_labels": {
+            "execution": "Execução",
+            "authoring": "Edição"
+          }
+        }
       }
     },
     "required": [

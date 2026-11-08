@@ -138,7 +138,8 @@
         "x-ui": {
           "service": [
             "acestep"
-          ]
+          ],
+          "group": "infrastructure"
         }
       },
       "base_url": {
@@ -149,13 +150,19 @@
         "title": "URL base do serviço",
         "default": null,
         "pattern": "^https?://[^\\s]+$",
-        "maxLength": 2048
+        "maxLength": 2048,
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "timeout_api": {
         "type": "number",
         "title": "Tempo máximo total (s)",
         "default": 600,
-        "exclusiveMinimum": 0
+        "exclusiveMinimum": 0,
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "persist": {
         "type": "boolean",

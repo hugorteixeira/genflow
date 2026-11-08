@@ -184,7 +184,7 @@ gen_error_summary <- function(error) {
 # subworkflows: the pointer identifies its scope even when IDs are reused.
 .gen_diagnostic_context <- function(errors, document = NULL, block = NULL, version = NULL) {
   if (is.character(document) && length(document) == 1L)
-    document <- tryCatch(.gen_parse_document(document), error = function(e) NULL)
+    document <- tryCatch(gen_parse_json(document), error = function(e) NULL)
   lapply(errors, function(e) {
     parts <- strsplit(sub("^/", "", e$path %||% ""), "/", fixed = TRUE)[[1L]]
     parts <- gsub("~0", "~", gsub("~1", "/", parts, fixed = TRUE), fixed = TRUE)

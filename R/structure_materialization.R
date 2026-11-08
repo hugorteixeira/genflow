@@ -32,7 +32,7 @@ gen_materialize_structure <- function(document, prefix = .gen_default("gen_mater
   if (!call$valid) return(list(valid=FALSE,errors=call$errors,document=NULL))
   checked <- gen_validate_structure(document,check_capabilities=check_capabilities,purpose=purpose)
   if (!checked$valid) return(checked)
-  value <- if (.gen_scalar(document)) .gen_parse_document(document) else document
+  value <- if (.gen_scalar(document)) gen_parse_json(document) else document
   bundled <- identical(value$format,"genflow-studio-definition")
   body <- if (bundled) value$root$body else value
   fail <- function(code,path,message) {
@@ -81,6 +81,6 @@ gen_materialize_structure <- function(document, prefix = .gen_default("gen_mater
     }))
   } else value <- body
   checked <- gen_validate_structure(value,check_capabilities=check_capabilities,purpose=purpose)
-  checked$document <- value
+  checked$document <- .gen_authored_objects(value,checked$document)
   c(checked,list(node_map=node_map,input_map=input_map,resource_sources=resource_sources,asset_sources=asset_sources))
 }

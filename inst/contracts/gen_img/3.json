@@ -129,13 +129,19 @@
         ],
         "additionalProperties": true,
         "default": null,
-        "title": "Parâmetros específicos do Replicate"
+        "title": "Parâmetros específicos do Replicate",
+        "x-ui": {
+          "hidden": true
+        }
       },
       "poll_interval": {
         "type": "number",
         "exclusiveMinimum": 0,
         "default": 3,
-        "title": "Intervalo de consulta (s)"
+        "title": "Intervalo de consulta (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "max_poll_seconds": {
         "type": "number",

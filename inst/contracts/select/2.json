@@ -1,6 +1,6 @@
 {
   "id": "select",
-  "version": 1,
+  "version": 2,
   "kind": "workflow",
   "arguments": {
     "type": "object",
@@ -9,11 +9,16 @@
         "type": "string",
         "enum": [
           "auto",
-          "manual",
-          "assisted"
+          "manual"
         ],
-        "default": "assisted",
-        "title": "Quem escolhe"
+        "default": "manual",
+        "title": "Quem escolhe",
+        "x-ui": {
+          "enum_labels": {
+            "auto": "Automático",
+            "manual": "Eu escolho"
+          }
+        }
       }
     },
     "required": [],

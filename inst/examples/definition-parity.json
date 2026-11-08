@@ -1,30 +1,35 @@
 [
   {
-    "name": "omitted_count",
+    "name": "literal_text",
+    "valid": true,
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "literal_text",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "g",
-              "type": "generate",
+              "id": "text",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "agent_version_id": "writer"
+                "content_type": "text",
+                "source": "inline",
+                "text": "literal {{unchanged}}"
               },
               "inputs": {}
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "g",
+                  "node": "text",
                   "port": "asset"
                 }
               }
@@ -32,119 +37,53 @@
           ]
         }
       },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "text.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
+      "resources": [],
       "assets": []
-    },
-    "valid": true
+    }
   },
   {
-    "name": "one_agent_per_candidate",
+    "name": "inline_json",
+    "valid": true,
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "inline_json",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "g",
-              "type": "generate",
+              "id": "json",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "agent_version_ids": [
-                  "writer",
-                  "writer"
-                ]
-              },
-              "inputs": {}
-            },
-            {
-              "id": "out",
-              "type": "output",
-              "config": {},
-              "inputs": {
-                "result": {
-                  "node": "g",
-                  "port": "candidates"
+                "content_type": "text",
+                "source": "inline",
+                "format": "json",
+                "text": "{\"a\":1}",
+                "output_schema": {
+                  "type": "object",
+                  "required": [
+                    "a"
+                  ],
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    }
+                  }
                 }
-              }
-            }
-          ]
-        }
-      },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "text.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
-      "assets": []
-    },
-    "valid": true
-  },
-  {
-    "name": "null_count",
-    "document": {
-      "format": "genflow-studio-definition",
-      "schema_version": 1,
-      "root": {
-        "kind": "workflow",
-        "name": "Contract parity",
-        "body": {
-          "schema_version": 1,
-          "nodes": [
-            {
-              "id": "g",
-              "type": "generate",
-              "config": {
-                "agent_version_id": "writer",
-                "count": null
               },
               "inputs": {}
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "g",
+                  "node": "json",
                   "port": "asset"
                 }
               }
@@ -152,59 +91,41 @@
           ]
         }
       },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "text.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
+      "resources": [],
       "assets": []
-    },
+    }
+  },
+  {
+    "name": "wrong_origin",
     "valid": false,
-    "error_code": "invalid_type"
-  },
-  {
-    "name": "zero_count",
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "wrong_origin",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "g",
-              "type": "generate",
+              "id": "image",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "agent_version_id": "writer",
-                "count": 0
+                "content_type": "image",
+                "source": "inline",
+                "text": "wrong"
               },
               "inputs": {}
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "g",
+                  "node": "image",
                   "port": "asset"
                 }
               }
@@ -212,59 +133,43 @@
           ]
         }
       },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "text.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
+      "resources": [],
       "assets": []
     },
-    "valid": false,
-    "error_code": "out_of_range"
+    "error_code": "content_source"
   },
   {
-    "name": "text_count",
+    "name": "invalid_json",
+    "valid": false,
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "invalid_json",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "g",
-              "type": "generate",
+              "id": "json",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "agent_version_id": "writer",
-                "count": "1"
+                "content_type": "text",
+                "source": "inline",
+                "format": "json",
+                "text": "{"
               },
               "inputs": {}
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "g",
+                  "node": "json",
                   "port": "asset"
                 }
               }
@@ -272,63 +177,67 @@
           ]
         }
       },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "text.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
+      "resources": [],
       "assets": []
     },
-    "valid": false,
-    "error_code": "invalid_type"
+    "error_code": "literal_json"
   },
   {
-    "name": "agent_count_mismatch",
+    "name": "joined_parts",
+    "valid": true,
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "joined_parts",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "g",
-              "type": "generate",
+              "id": "text",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "agent_version_ids": [
-                  "writer",
-                  "writer",
-                  "writer"
+                "content_type": "text",
+                "source": "inline",
+                "text": "literal {{unchanged}}"
+              },
+              "inputs": {}
+            },
+            {
+              "id": "join",
+              "type": "text.join",
+              "contract_version": 2,
+              "config": {
+                "parts": [
+                  {
+                    "text": "prefix "
+                  },
+                  {
+                    "input": "value"
+                  },
+                  {
+                    "text": " suffix"
+                  }
                 ],
-                "count": 2
+                "separator": ""
               },
-              "inputs": {}
+              "inputs": {
+                "value": {
+                  "node": "text",
+                  "port": "asset"
+                }
+              }
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "g",
+                  "node": "join",
                   "port": "asset"
                 }
               }
@@ -336,116 +245,57 @@
           ]
         }
       },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "text.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
+      "resources": [],
       "assets": []
-    },
+    }
+  },
+  {
+    "name": "unused_input",
     "valid": false,
-    "error_code": "agent_count"
-  },
-  {
-    "name": "image_output",
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "unused_input",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "g",
-              "type": "generate",
+              "id": "text",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "agent_version_id": "writer"
+                "content_type": "text",
+                "source": "inline",
+                "text": "literal {{unchanged}}"
               },
               "inputs": {}
             },
             {
-              "id": "out",
-              "type": "output",
-              "config": {},
+              "id": "unused",
+              "type": "content",
+              "contract_version": 1,
+              "config": {
+                "content_type": "text",
+                "source": "inline",
+                "text": "x"
+              },
               "inputs": {
-                "result": {
-                  "node": "g",
+                "ignored": {
+                  "node": "text",
                   "port": "asset"
                 }
               }
-            }
-          ]
-        }
-      },
-      "resources": [
-        {
-          "key": "writer",
-          "kind": "agent",
-          "name": "Writer",
-          "body": {
-            "operation": "image.generate",
-            "service": "fixture",
-            "model": "fixture-v1",
-            "prompt_version_id": "prompt"
-          }
-        },
-        {
-          "key": "prompt",
-          "kind": "prompt",
-          "name": "Prompt",
-          "body": {
-            "template": "Write a short story."
-          }
-        }
-      ],
-      "assets": []
-    },
-    "valid": true
-  },
-  {
-    "name": "input_defaults",
-    "document": {
-      "format": "genflow-studio-definition",
-      "schema_version": 1,
-      "root": {
-        "kind": "workflow",
-        "name": "Contract parity",
-        "body": {
-          "schema_version": 1,
-          "nodes": [
-            {
-              "id": "in",
-              "type": "input",
-              "config": {
-                "key": "brief"
-              },
-              "inputs": {}
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "in",
+                  "node": "unused",
                   "port": "asset"
                 }
               }
@@ -456,73 +306,50 @@
       "resources": [],
       "assets": []
     },
-    "valid": true
+    "error_code": "unused_input"
   },
   {
-    "name": "schema_keys",
+    "name": "ai_text",
+    "valid": true,
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "ai_text",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "a",
-              "type": "input",
+              "id": "ai",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "key": "a",
-                "kind": "json",
-                "output_schema": {
-                  "type": "integer",
-                  "minimum": 1
+                "content_type": "text",
+                "source": "ai",
+                "ai": {
+                  "service": "fixture",
+                  "model": "m",
+                  "contract_version": 2,
+                  "parameters": {},
+                  "content": [
+                    {
+                      "text": "Describe"
+                    }
+                  ]
                 }
               },
               "inputs": {}
-            },
-            {
-              "id": "b",
-              "type": "input",
-              "config": {
-                "key": "b",
-                "kind": "json",
-                "output_schema": {
-                  "type": "integer",
-                  "maximum": 1
-                }
-              },
-              "inputs": {}
-            },
-            {
-              "id": "items",
-              "type": "list.pack",
-              "config": {
-                "order": [
-                  "a",
-                  "b"
-                ]
-              },
-              "inputs": {
-                "a": {
-                  "node": "a",
-                  "port": "asset"
-                },
-                "b": {
-                  "node": "b",
-                  "port": "asset"
-                }
-              }
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "items",
-                  "port": "list"
+                  "node": "ai",
+                  "port": "asset"
                 }
               }
             }
@@ -531,75 +358,41 @@
       },
       "resources": [],
       "assets": []
-    },
+    }
+  },
+  {
+    "name": "mixed_origin_fields",
     "valid": false,
-    "error_code": "mixed_schemas"
-  },
-  {
-    "name": "schema_order",
     "document": {
       "format": "genflow-studio-definition",
       "schema_version": 1,
       "root": {
         "kind": "workflow",
-        "name": "Contract parity",
+        "name": "mixed_origin_fields",
         "body": {
           "schema_version": 1,
           "nodes": [
             {
-              "id": "a",
-              "type": "input",
+              "id": "text",
+              "type": "content",
+              "contract_version": 1,
               "config": {
-                "key": "a",
-                "kind": "json",
-                "output_schema": {
-                  "type": "integer",
-                  "minimum": 1
-                }
+                "content_type": "text",
+                "source": "inline",
+                "text": "x",
+                "asset_id": "f"
               },
               "inputs": {}
-            },
-            {
-              "id": "b",
-              "type": "input",
-              "config": {
-                "key": "b",
-                "kind": "json",
-                "output_schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "inputs": {}
-            },
-            {
-              "id": "items",
-              "type": "list.pack",
-              "config": {
-                "order": [
-                  "a",
-                  "b"
-                ]
-              },
-              "inputs": {
-                "a": {
-                  "node": "a",
-                  "port": "asset"
-                },
-                "b": {
-                  "node": "b",
-                  "port": "asset"
-                }
-              }
             },
             {
               "id": "out",
               "type": "output",
+              "contract_version": 1,
               "config": {},
               "inputs": {
                 "result": {
-                  "node": "items",
-                  "port": "list"
+                  "node": "text",
+                  "port": "asset"
                 }
               }
             }
@@ -609,6 +402,6 @@
       "resources": [],
       "assets": []
     },
-    "valid": true
+    "error_code": "content_source_fields"
   }
 ]

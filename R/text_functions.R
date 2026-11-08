@@ -115,11 +115,7 @@
   }
   headers <- do.call(httr::add_headers, header_args)
   # Build the user message, including an inline image when requested.
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(list(type = "text", text = prompt), list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img)))))
-  } else {
-    prompt
-  })
+  initial_message <- list(role = "user", content = .gen_text_user_content(prompt, add_img))
   # Build the endpoint-specific request body.
   if (grepl("^o", model)) {
     temp_v <- 1
@@ -130,17 +126,8 @@
     NULL
   }
   if (use_responses) {
-    if (!is.null(add_img)) {
-      warning("Image attachments are not currently supported with reasoning-enabled OpenAI responses; ignoring `add_img`.")
-    }
-    input_payload <- list(
-      list(
-        role = "user",
-        content = list(
-          list(type = "input_text", text = prompt)
-        )
-      )
-    )
+    input_payload <- list(list(role="user", content=c(
+      list(list(type="input_text", text=prompt)), .gen_text_image_parts(add_img, "responses"))))
     body <- list(
       model = model,
       input = input_payload,
@@ -257,11 +244,7 @@
   your_app_name <- Sys.getenv("YOUR_APP_NAME", "Voting_LLMs")
   headers <- add_headers("Content-Type" = "application/json", "Authorization" = paste("Bearer", api_key_openrouter), "HTTP-Referer" = your_app_url, "X-Title" = your_app_name)
   # Build the user message, including an inline image when requested.
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(list(type = "text", text = prompt), list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img)))))
-  } else {
-    prompt
-  })
+  initial_message <- list(role = "user", content = .gen_text_user_content(prompt, add_img))
   # Build the request body and optional tool definitions.
   body <- list(
     model = model,
@@ -602,14 +585,7 @@
     paste0(base_url, chat_path)
   }
 
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(
-      list(type = "text", text = prompt),
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    prompt
-  })
+  initial_message <- list(role = "user", content = .gen_text_user_content(prompt, add_img))
 
   body <- list(
     model = model,
@@ -775,8 +751,7 @@
   }
 
   if (!supports_vision && !is.null(add_img)) {
-    warning("`add_img` is not supported for service = '", provider_id, "'. Ignoring image input.")
-    add_img <- NULL
+    .gen_stop("image_not_supported", path="/args/add_img", stage="preflight")
   }
   if (!supports_tools && (isTRUE(tools) || !is.null(my_tools))) {
     warning("`tools` is not supported for service = '", provider_id, "'. Ignoring tools.")
@@ -1123,18 +1098,7 @@
     warning("`plugins` is currently ignored for service = 'gemini'.")
   }
 
-  parts <- list(list(text = prompt))
-  if (!is.null(add_img)) {
-    parts <- c(
-      list(list(
-        inline_data = list(
-          mime_type = .gemini_image_mime_type(add_img),
-          data = .encode_image(add_img)
-        )
-      )),
-      parts
-    )
-  }
+  parts <- c(.gen_text_image_parts(add_img, "gemini"), list(list(text=prompt)))
   body <- list(
     contents = list(list(role = "user", parts = parts)),
     generationConfig = list(temperature = temp_v)
@@ -1435,19 +1399,7 @@
     warning("`plugins` is currently ignored for service = 'anthropic'.")
   }
 
-  user_blocks <- list(
-    list(type = "text", text = prompt)
-  )
-  if (!is.null(add_img)) {
-    user_blocks[[length(user_blocks) + 1]] <- list(
-      type = "image",
-      source = list(
-        type = "base64",
-        media_type = .anthropic_media_type(add_img),
-        data = .encode_image(add_img)
-      )
-    )
-  }
+  user_blocks <- c(list(list(type="text", text=prompt)), .gen_text_image_parts(add_img, "anthropic"))
 
   body <- list(
     model = model,
@@ -1729,15 +1681,7 @@
   }
 
   message_payload <- list(role = "user", content = prompt)
-  if (!is.null(add_img)) {
-    encoded_img <- tryCatch(
-      .encode_image(add_img),
-      error = function(e) {
-        stop("Failed to encode `add_img` for Ollama: ", conditionMessage(e))
-      }
-    )
-    message_payload$images <- list(encoded_img)
-  }
+  if (length(add_img)) message_payload$images <- .gen_text_image_parts(add_img, "ollama")
 
   body <- list(
     model = model,
@@ -2002,14 +1946,7 @@
     warning("`plugins` is currently ignored for service = 'llamacpp'.")
   }
 
-  initial_message <- list(role = "user", content = if (!is.null(add_img)) {
-    list(
-      list(type = "text", text = prompt),
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    prompt
-  })
+  initial_message <- list(role = "user", content = .gen_text_user_content(prompt, add_img))
 
   body <- list(
     model = model,
@@ -2145,22 +2082,7 @@
     "Content-Type" = "application/json"
   )
 
-  # --- Body Construction ---
-  # Using OpenAI-compatible structure for TGI endpoint
-  # Check image support for TGI chat completions endpoint - might not be standard
-  # Note: TGI might support tools via OpenAI format.
-  if (!is.null(add_img)) {
-    # TGI chat completions endpoint might not support images this way.
-    # Image support often requires specific multimodal models and potentially different endpoints/formats.
-    warning("HuggingFace chat endpoint image support not standard. Sending image data, but it might be ignored or cause errors.")
-    user_content <- list(
-      list(type = "text", text = prompt),
-      # Original used 'image', OpenAI uses 'image_url'. Let's try 'image_url'.
-      list(type = "image_url", image_url = list(url = paste0("data:image/jpeg;base64,", .encode_image(add_img))))
-    )
-  } else {
-    user_content <- prompt
-  }
+  user_content <- .gen_text_user_content(prompt, add_img)
 
   max_t <- 4096 # A common default max_tokens
 
@@ -2406,6 +2328,8 @@ gen_txt.default <- function(
   withCallingHandlers({
   model_was_default <- missing(model)
   .gen_internal_validate("gen_txt", version = 2L)
+  add_img <- .gen_text_image_uris(add_img, timeout_api)
+  if (!length(add_img)) add_img <- NULL
   if (isTRUE(persist) && is.null(directory)) directory <- .genflow_default_dir("texts")
   service_lower <- service
   if (!is.null(max_output_tokens)) max_output_tokens <- as.integer(max_output_tokens)

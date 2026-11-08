@@ -36,11 +36,11 @@
 #' Contracts include argument schemas and defaults, typed ports, and optional
 #' presentation annotations. Reading them is offline and has no side effects.
 #' @param block Optional exact block identifier, for example `"gen_img"`.
-#' @param version Positive contract version. Defaults to version 1.
+#' @param version Exact supported contract version. NULL selects the current contract.
 #' @return A contract, or a named list of all installed contracts when `block`
 #'   is NULL. Names in the catalog have the form `block@version`.
 #' @export
-gen_block_contracts <- function(block = NULL, version = 1L) {
+gen_block_contracts <- function(block = NULL, version = NULL) {
   if (!exists("catalog", .gen_contract_cache, inherits = FALSE)) {
     directory <- system.file("contracts", package = "genflow")
     if (!nzchar(directory)) .gen_validation_stop(list(.gen_issue("contract_catalog_unavailable","")))
@@ -48,23 +48,24 @@ gen_block_contracts <- function(block = NULL, version = 1L) {
     catalog <- lapply(files, function(path) tryCatch(jsonlite::parse_json(paste(readLines(path, warn = FALSE), collapse = "\n"), simplifyVector = FALSE),
       error=function(e) .gen_validation_stop(list(.gen_issue("invalid_contract_catalog","")),basename(dirname(path)))))
     keys <- vapply(catalog, function(x) paste0(x$id, "@", x$version), character(1))
-    if (!length(keys) || anyDuplicated(keys)) .gen_validation_stop(list(.gen_issue("invalid_contract_catalog","")))
+    if (!length(keys) || anyDuplicated(vapply(catalog, `[[`, character(1), "id"))) .gen_validation_stop(list(.gen_issue("invalid_contract_catalog","")))
     for (entry in catalog) {
       checked <- gen_check_schema(entry$arguments)
       if (!checked$valid) .gen_validation_stop(checked$errors,entry$id)
     }
     .gen_contract_cache$catalog <- stats::setNames(catalog, keys)
+    .gen_contract_cache$current <- stats::setNames(catalog, vapply(catalog, `[[`, character(1), "id"))
   }
   if (is.null(block)) return(.gen_contract_cache$catalog)
-  if (!.gen_scalar(block) || !is.numeric(version) || length(version) != 1L ||
-      !is.finite(version) || version < 1 || version != floor(version))
+  if (!.gen_scalar(block) || !is.null(version) && (!is.numeric(version) || length(version) != 1L ||
+      !is.finite(version) || version < 1 || version != floor(version)))
     .gen_validation_stop(list(.gen_issue("invalid_contract_reference","/contract_version")))
-  result <- .gen_contract_cache$catalog[[paste0(block, "@", version)]]
-  if (is.null(result)) .gen_validation_stop(list(.gen_issue("unknown_contract","/contract_version")),block)
+  result <- .gen_contract_cache$current[[block]]
+  if (is.null(result) || !is.null(version) && result$version != version) .gen_validation_stop(list(.gen_issue("unknown_contract","/contract_version")),block)
   result
 }
 
-.gen_default <- function(block, argument, version = 1L) {
+.gen_default <- function(block, argument, version = NULL) {
   property <- gen_block_contracts(block, version)$arguments$properties[[argument]]
   if (!"default" %in% names(property)) .gen_validation_stop(list(.gen_issue("missing_default",.gen_pointer("/args",argument))),block)
   value <- property$default
@@ -204,14 +205,14 @@ gen_validate_schema <- function(value, schema) {
 #' @param block Exact block identifier.
 #' @param args Named list of explicit arguments. Omitted fields receive defaults;
 #'   explicit NULL values are retained and validated.
-#' @param version Contract version.
+#' @param version Exact supported version, or NULL for the current contract.
 #' @param bound Names of arguments supplied by upstream connections. They receive
 #'   no defaults and their concrete values must be validated at execution.
 #' @param check_capabilities Check known provider modality restrictions offline.
 #' @return `valid`, `errors`, prepared `args`, `defaulted`, `pending`, and the
 #'   selected `contract_version`. Invalid values are never silently repaired.
 #' @export
-gen_validate_call <- function(block, args = list(), version = 1L, bound = character(), check_capabilities = TRUE) {
+gen_validate_call <- function(block, args = list(), version = NULL, bound = character(), check_capabilities = TRUE) {
   .gen_prepare_call(block,args,version,bound,check_capabilities,portable=TRUE)
 }
 
@@ -231,9 +232,10 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   args
 }
 
-.gen_prepare_call <- function(block, args, version = 1L, bound = character(), check_capabilities = TRUE, portable = TRUE, bindings_known = TRUE) {
+.gen_prepare_call <- function(block, args, version = NULL, bound = character(), check_capabilities = TRUE, portable = TRUE, bindings_known = TRUE) {
   contract <- tryCatch(.gen_call_contract(block,version),error=function(e)e)
   if (inherits(contract,"error")) return(list(valid=FALSE,errors=list(.gen_issue("unknown_contract","",conditionMessage(contract))),args=args,defaulted=list(),pending=list()))
+  version <- contract$version
   schema <- contract$arguments
   if (!.gen_object(args)) return(list(valid=FALSE,errors=list(.gen_issue("invalid_arguments","/args",gen_error_message("invalid_arguments"))),args=args,defaulted=list(),pending=list()))
   if (!length(args)) args <- structure(list(),names=character())
@@ -247,6 +249,10 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   if (portable) {
     failure <- tryCatch({ .genflow_validate_portable(args); NULL },error=function(e)e)
     if (!is.null(failure)) errors <- c(errors,list(.gen_issue("nonportable_arguments","/args",conditionMessage(failure))))
+  }
+  if (block %in% c("content","transcribe","judge")) {
+    args <- gen_normalize_object(args,"ai")
+    if (.gen_object(args$ai)) args$ai <- gen_normalize_object(args$ai,c("parameters","fixture"))
   }
   supplied <- names(args)
   runtime_only <- names(Filter(function(p) isTRUE(p[["x-runtime-only"]]),schema$properties))
@@ -267,19 +273,25 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
     if (inherits(cap,"error")) add("service",conditionMessage(cap),"unsupported_provider") else
       if (!isTRUE(cap$modalities[[contract$modality]])) add("service",gen_error_message("unsupported_provider"),"unsupported_provider")
   }
-  if (identical(block,"gen_img") && version >= 2L) {
+  if (identical(block,"gen_txt") && check_capabilities && usable("add_img") && length(args$add_img) && usable("service")) {
+    cap <- tryCatch(gen_capabilities(args$service, args$model), error=function(e) NULL)
+    if (!isTRUE(unname(cap$adapter_features["vision"]))) add("add_img",gen_error_message("image_not_supported"),"image_not_supported")
+  }
+  if (identical(block,"gen_img")) {
     if (isTRUE(check_capabilities) && usable("add_img") && length(args$add_img) && usable("service") && usable("model")) {
       spec <- .gen_image_reference_spec(args$service,args$model)
       if (!isTRUE(spec$supported)) add("add_img",gen_error_message("image_references_unsupported"),"image_references_unsupported") else
         if (length(args$add_img) > spec$max_images) add("add_img",gen_error_message("image_reference_limit",list(limit=spec$max_images)),"image_reference_limit")
     }
     if (usable("replicate_input") && length(args$replicate_input)) {
+      if (usable("service") && args$service != "replicate")
+        add("replicate_input",gen_error_message("image_replicate_only"),"image_replicate_only")
       protected <- c("prompt","num_outputs","num_images","n","image","images","image_urls","input_image","input_images")
       if (length(intersect(names(args$replicate_input),protected))) add("replicate_input",gen_error_message("image_override_conflict"),"image_override_conflict")
     }
   }
   if (isTRUE(check_capabilities) || block == "gen_txt") .gen_validate_argument_rules(contract, args, usable, add, bound, bindings_known)
-  if (identical(block,"gen_tts")) .gen_tts_rules(args,usable,add,version,check_capabilities,if (bindings_known) bound else character())
+  if (identical(block,"gen_tts")) .gen_tts_rules(args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (block %in% c("gen_sfx","gen_music")) .gen_sound_rules(sub("^gen_","",block),args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (identical(block,"gen_txt")) {
     if (isTRUE(args$tools) && usable("my_tools") && is.null(args$my_tools)) add("my_tools",gen_error_message("required_tool_definitions"))
@@ -287,6 +299,10 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
   if (identical(block,"gen_vote") && identical(args$return_winner,"content") && usable("underlying_list") && is.null(args$underlying_list)) add("underlying_list",gen_error_message("required_underlying_list"))
   if (block %in% c("json.get","list.split") && usable("pointer") && .gen_scalar(args$pointer)) {
     if (nzchar(args$pointer) && (!startsWith(args$pointer,"/") || grepl("~([^01]|$)",args$pointer,perl=TRUE))) add("pointer",gen_error_message("invalid_pointer"))
+  }
+  if (!length(errors) && block %in% c("content","transcribe","judge","text.join")) {
+    piece <- .gen_piece_check(block,args,version,check_capabilities)
+    args <- piece$args; errors <- c(errors,piece$errors)
   }
   errors <- .gen_diagnostic_context(errors, block=block, version=contract$version)
   list(valid=!length(errors), errors=errors, args=args, defaulted=as.list(setdiff(names(args),supplied)),
@@ -302,7 +318,7 @@ gen_validate_call <- function(block, args = list(), version = 1L, bound = charac
 
 # Called at the start of each public execution boundary. Default expressions
 # read the same catalog as offline validation; missing values remain errors.
-.gen_internal_validate <- function(block, frame = parent.frame(), version = 1L) {
+.gen_internal_validate <- function(block, frame = parent.frame(), version = NULL) {
   contract <- gen_block_contracts(block,version)
   args <- list()
   for (key in names(contract$arguments$properties)) {

@@ -43,6 +43,7 @@
       "add_img": {
         "type": [
           "string",
+          "array",
           "null"
         ],
         "pattern": "\\S",
@@ -51,7 +52,13 @@
         "x-ui": {
           "hidden": true
         },
-        "x-owner": "runtime"
+        "x-owner": "runtime",
+        "items": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "maxItems": 32,
+        "description": "Imagens para análise, em ordem. Arquivo, URL ou data URI; depende do serviço/modelo."
       },
       "directory": {
         "type": [
@@ -161,7 +168,10 @@
         "type": "number",
         "exclusiveMinimum": 0,
         "default": 240,
-        "title": "Tempo máximo da chamada (s)"
+        "title": "Tempo máximo da chamada (s)",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "base_url": {
         "type": [
@@ -170,7 +180,10 @@
         ],
         "pattern": "\\S",
         "default": null,
-        "title": "Endereço do serviço local"
+        "title": "Endereço do serviço local",
+        "x-ui": {
+          "group": "infrastructure"
+        }
       },
       "null_repeat": {
         "type": "boolean",
@@ -262,7 +275,7 @@
   "modality": "text",
   "inputs": {
     "context": "asset:text|asset:json",
-    "add_img": "asset:image"
+    "add_img": "asset:image|list:image"
   },
   "outputs": {
     "content": "asset:text"
@@ -271,7 +284,7 @@
     "id": "text.generate",
     "inputs": {
       "text": "text|json",
-      "image": "image"
+      "image": "asset:image|list:image"
     },
     "output": "text",
     "execution": "inline",

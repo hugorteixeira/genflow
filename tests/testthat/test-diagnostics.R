@@ -48,23 +48,23 @@ test_that("schema mistakes are distinct from bad values", {
 
 test_that("original paths identify the right node and field in each scope", {
   body <- list(schema_version=1,nodes=list(
-    list(id="same",type="template",label="Primeira peça",config=list(template=123)),
-    list(id="same",type="template",label="Segunda peça",config=list(template=FALSE))))
+    list(id="same",type="content",label="Primeira peça",config=list(content_type="text",source="inline",text=123)),
+    list(id="same",type="content",label="Segunda peça",config=list(content_type="text",source="inline",text=FALSE))))
   bundle <- list(format="genflow-studio-definition",schema_version=1,
     root=list(kind="workflow",name="Root",body=body), resources=list(
       list(key="child",kind="workflow",name="Child",body=list(schema_version=1,nodes=list(
-        list(id="same",type="template",label="Peça filha",config=list(template=123)))))),assets=list())
+        list(id="same",type="content",label="Peça filha",config=list(content_type="text",source="inline",text=123)))))),assets=list())
   report <- gen_validate_structure(bundle,check_capabilities=FALSE)
   typed <- Filter(function(e)e$code=="invalid_type",report$errors)
   expect_length(typed,3)
   for (e in typed) {
     assert_diagnostic(e)
-    expect_identical(e$node_id,"same"); expect_identical(e$field,"Texto e variáveis")
-    expect_identical(e$schema_path,"/arguments/properties/template/type")
-    expect_identical(e$block,"template")
+    expect_identical(e$node_id,"same"); expect_identical(e$field,"Texto")
+    expect_identical(e$schema_path,"/arguments/properties/text/type")
+    expect_identical(e$block,"content")
   }
   expect_setequal(vapply(typed,`[[`,character(1),"node_label"),c("Primeira peça","Segunda peça","Peça filha"))
-  expect_true(any(vapply(typed,function(e)startsWith(e$path,"/resources/0/body/nodes/0/config/template"),logical(1))))
+  expect_true(any(vapply(typed,function(e)startsWith(e$path,"/resources/0/body/nodes/0/config/text"),logical(1))))
   expect_match(gen_error_summary(typed[[1]]),"Peça.*campo.*Esperado")
   broken <- gen_validate_structure('{"nodes":[}',check_capabilities=FALSE)
   expect_identical(broken$errors[[1]]$code,"invalid_json")

@@ -94,8 +94,8 @@ test_that("workflow validation reports independent errors without running a node
 })
 
 test_that("connections validate type, port, ordering, cycles and contract version", {
-  expect_equal(gen_block_ports("generate",list(source="provided",kind="text",artifact_ids=list("one")))$ports$asset,"asset:text")
-  expect_null(gen_block_ports("generate",list(source="manual",kind="text"))$ports$asset)
+  expect_equal(gen_block_ports("content",list(content_type="text",source="asset",asset_id="one"))$ports$asset,"asset:text")
+  expect_false(gen_validate_call("content",list(content_type="text",source="unknown"))$valid)
   document <- list(schema_version=1,nodes=list(
     list(id="text",block="gen_txt",args=list(context="Tell a story")),
     list(id="voice",block="gen_tts",inputs=list(text=list(node="text",port="content")))) ,
@@ -120,7 +120,7 @@ test_that("connections validate type, port, ordering, cycles and contract versio
 
 test_that("all declared subworkflows are checked and nested interfaces are inferred", {
   child <- list(schema_version=1,nodes=list(
-    list(id="brief",block="input",args=list(key="brief",kind="text")),
+    list(id="brief",block="input",contract_version=2L,args=list(key="brief",kind="text")),
     list(id="image",block="gen_img",inputs=list(prompt=list(node="brief",port="asset")))),
     outputs=list(image=list(node="image",port="content")))
   parent <- list(schema_version=1,workflows=list(scene=child),nodes=list(

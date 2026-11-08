@@ -1,0 +1,28 @@
+{
+  "id": "text.join",
+  "version": 2,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "parts": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "maxItems": 256,
+        "title": "Textos para unir"
+      },
+      "separator": {
+        "type": "string",
+        "default": "",
+        "title": "Separador"
+      }
+    },
+    "required": [
+      "parts"
+    ],
+    "additionalProperties": false
+  },
+  "port_rule": "text.join"
+}

@@ -1,6 +1,6 @@
 {
   "id": "vote",
-  "version": 1,
+  "version": 2,
   "kind": "workflow",
   "arguments": {
     "type": "object",
@@ -15,7 +15,13 @@
               "plurality"
             ],
             "default": "majority",
-            "title": "Regra da votação"
+            "title": "Regra da votação",
+            "x-ui": {
+              "enum_labels": {
+                "majority": "Maioria absoluta",
+                "plurality": "Mais votos"
+              }
+            }
           },
           "quorum": {
             "type": "integer",
@@ -27,7 +33,8 @@
         },
         "required": [],
         "additionalProperties": false,
-        "default": {}
+        "default": {},
+        "title": "Política de votação"
       }
     },
     "required": [],
