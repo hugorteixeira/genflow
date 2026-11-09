@@ -26,10 +26,7 @@
     do.call(if (method=="POST") httr::POST else httr::GET,args)
   },error=function(e) .gen_stop("sound_transport",stage=if (generation) "inference" else "download",
     retryable=!generation,outcome=if (generation) "unknown" else "not_started"))
-  status <- httr::status_code(response)
-  if (status<200L || status>=300L) .gen_stop("sound_http",params=list(status=status),stage=if (generation) "inference" else "download",
-    retryable=!generation && status %in% c(408L,429L,500L,502L,503L,504L),
-    outcome=if (generation && status>=500L) "unknown" else "failed")
+  .gen_provider_check(response,stage=if (generation) "inference" else if (route=="/query_result") "poll" else if (route=="/v1/models") "management" else "download")
   response
 }
 

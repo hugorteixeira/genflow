@@ -51,3 +51,35 @@ ainda emitem sentinelas internas, normalizadas na fronteira antes da tradução.
 As rotinas antigas de chunks STT mantêm suas regras de retomada. Texto gerado não
 é reinterpretado como erro. Falhas de terceiros ou bugs novos usam o diagnóstico
 genérico com referência, sem exigir uma lista impossível de todas as exceções.
+
+
+## Respostas dos serviços
+
+Os adaptadores HTTP compartilham o normalizador interno
+`R/provider_diagnostics.R`. A classificação usa status e códigos estruturados
+conhecidos; frases do provedor não decidem o resultado ou as tentativas.
+Corpos completos não entram no diagnóstico. `params$status_code` e, quando
+reconhecido, `params$provider_code` conservam os fatos auditáveis.
+
+| Resposta e etapa | Resultado | Repetição considerada |
+| --- | --- | --- |
+| 401/403, 402, saldo/cota esgotado, argumentos rejeitados | `failed` | Não |
+| 429 de limite temporário ao submeter | `failed` | Dentro da política explícita do chamador |
+| 408/5xx ou resposta malformada após submissão | `unknown` | Não repetir geração |
+| Falha ao consultar uma tarefa aceita | `unknown` | Não repetir geração |
+| Falha no download de conteúdo concluído | `succeeded` | Somente recuperação de download, quando transitória |
+| Falha de leitura do catálogo | `failed` | Não altera o catálogo anterior daquele serviço |
+
+Falhas de preparação usam `not_started`. Um HTTP 503 do Hugging Face só é
+tratado como modelo carregando quando a resposta informa `estimated_time`;
+o retry continua limitado pela política já existente. Respostas bem-sucedidas
+continuam sendo conteúdo, mesmo se seu texto parecer uma mensagem de erro.
+
+`gen_update_models()` expõe os diagnósticos no atributo `diagnostics`. Com
+`fail_on_error=TRUE`, uma falha preserva seu diagnóstico; múltiplas falhas são
+agrupadas em `catalog_update_failed`, com uma causa por serviço. O catálogo
+atualizado de um serviço bem-sucedido não é desfeito por falha em outro.
+
+O TTS do Replicate ainda não fornece recibo de recuperação. Se a síntese terminou
+mas o download falhou, `gen_tts()` conserva `outcome="succeeded"` e desativa a
+repetição automática: repetir essa função sintetizaria outra vez.

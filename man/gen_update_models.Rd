@@ -27,7 +27,7 @@ configured with \code{\link[=set_provider_openai_compat]{set_provider_openai_com
 \item{fail_on_error}{Logical. If TRUE, provider failures are collected and raised as an error after attempted updates.}
 }
 \value{
-Invisibly returns the model directory path with attributes describing updated and failed providers.
+Invisibly returns the model directory path with attributes describing updated and failed providers, including canonical \code{diagnostics} for failures.
 }
 \description{
 High-level convenience function to update model lists from one or several

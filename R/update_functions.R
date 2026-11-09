@@ -26,10 +26,7 @@
                        error = function(e) stop("Error connecting to the OpenRouter API: ", e$message))
 
   # --- 5. Check Response Status ---
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("OpenRouter API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
+  .gen_provider_check(response,expected=200L,stage="management")
 
   # --- 6. Process JSON ---
   if (verbose) message("Processing JSON response...")
@@ -198,10 +195,7 @@
                        error = function(e) stop("Error connecting to the OpenAI API: ", e$message))
 
   # --- 5. Check Response Status ---
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("OpenAI API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
+  .gen_provider_check(response,expected=200L,stage="management")
 
   # --- 6. Process JSON ---
   if (verbose) message("Processing JSON response...")
@@ -336,10 +330,7 @@
     error = function(e) stop("Error connecting to the Anthropic API: ", e$message)
   )
 
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop("Anthropic API Error (Status: ", httr::status_code(response), "): ", error_content)
-  }
+  .gen_provider_check(response,expected=200L,stage="management")
 
   if (verbose) message("Processing JSON response...")
   raw_content <- httr::content(response, "raw")
@@ -520,9 +511,9 @@
       response_try <- tryCatch({ httr::GET(url = api_url, config = headers, httr::timeout(60)) },
         error = function(e) NULL
       )
-      if (is.null(response_try) || httr::status_code(response_try) != 200) {
-        next
-      }
+      if (is.null(response_try)) next
+      if (httr::status_code(response_try) %in% c(404L,405L)) next
+      .gen_provider_check(response_try,expected=200L,stage="management")
 
       parsed_try <- tryCatch({
         raw_content <- httr::content(response_try, "raw")
@@ -540,7 +531,8 @@
   }
 
   if (is.null(parsed_content)) {
-    stop(provider_name, " API Error: unable to fetch models from candidate endpoints.")
+    if (exists("response_try") && !is.null(response_try)) .gen_provider_check(response_try,expected=200L,stage="management")
+    .gen_stop("provider_response_invalid",stage="management",outcome="failed")
   }
 
   if (verbose) message("Processing JSON response from ", api_url_used, " ...")
@@ -759,20 +751,7 @@
         )
       }
     )
-    if (httr::status_code(response) != 200L) {
-      error_content <- httr::content(response, "text", encoding = "UTF-8")
-      error_details <- tryCatch({
-        parsed <- jsonlite::fromJSON(error_content, simplifyVector = FALSE)
-        parsed$error$message %||% parsed$message %||% error_content
-      }, error = function(e) error_content)
-      stop(
-        "Gemini models API returned HTTP ",
-        httr::status_code(response),
-        ": ",
-        substr(as.character(error_details)[1], 1L, 1000L),
-        call. = FALSE
-      )
-    }
+    .gen_provider_check(response,expected=200L,stage="management")
 
     parsed <- tryCatch(
       httr::content(
@@ -894,8 +873,7 @@
   fetch_page <- function(page, size) {
     if (verbose) message("  Fetching page ", page)
     res <- httr::GET(api_url, headers, query = list(page = page, size = size), httr::timeout(60))
-    if (httr::status_code(res) != 200)
-      stop("Fal API returned status ", httr::status_code(res), " on page ", page)
+    .gen_provider_check(res,expected=200L,stage="management")
     jsonlite::fromJSON(rawToChar(httr::content(res, "raw")), simplifyVector = TRUE)
   }
 
@@ -992,13 +970,7 @@
     if (verbose) message("  Fetching collections page ", page_count_collections, ": ", current_collections_url)
     response_collections <- tryCatch({ httr::GET(url = current_collections_url, config = headers, httr::timeout(60)) },
                                      error = function(e) NULL)
-    if (is.null(response_collections) || httr::status_code(response_collections) != 200) {
-      error_content <- if (!is.null(response_collections)) httr::content(response_collections, "text", encoding = "UTF-8") else "Conn error"
-      warning("API Error (Status: ", if (!is.null(response_collections)) httr::status_code(response_collections) else "N/A",
-              ") fetching collections page ", page_count_collections, ". Stopping collection fetch. Error: ", substr(error_content, 1, 200))
-      current_collections_url <- NULL
-      next
-    }
+    .gen_provider_check(response_collections,expected=200L,stage="management")
     next_collections_page_url <- NULL
     tryCatch({
       collections_text <- httr::content(response_collections, as = "text", encoding = "UTF-8")
@@ -1037,13 +1009,7 @@
 
     response_detail <- tryCatch({ httr::GET(url = collection_detail_url, config = headers, httr::timeout(60)) },
                                 error = function(e) NULL)
-    if (is.null(response_detail) || httr::status_code(response_detail) != 200) {
-      error_content <- if (!is.null(response_detail)) httr::content(response_detail, "text", encoding = "UTF-8") else "Conn error"
-      warning("API Error (Status: ", if (!is.null(response_detail)) httr::status_code(response_detail) else "N/A",
-              ") fetching detail for collection '", slug, "'. Skipping. Error: ", substr(error_content, 1, 200))
-      if (delay > 0) Sys.sleep(delay)
-      next
-    }
+    .gen_provider_check(response_detail,expected=200L,stage="management")
 
     tryCatch({
       detail_text <- httr::content(response_detail, as = "text", encoding = "UTF-8")
@@ -1215,21 +1181,7 @@
     }
   )
 
-  status <- httr::status_code(response)
-  if (!identical(status, 200L)) {
-    error_content <- tryCatch(
-      httr::content(response, "text", encoding = "UTF-8"),
-      error = function(e) ""
-    )
-    error_content <- gsub("[\r\n]+", " ", as.character(error_content %||% ""))
-    stop(
-      "Hugging Face Hub API error (status ",
-      status,
-      "): ",
-      substr(error_content, 1, 500),
-      call. = FALSE
-    )
-  }
+  .gen_provider_check(response,expected=200L,stage="management")
 
   response_text <- httr::content(response, "text", encoding = "UTF-8")
   parsed <- tryCatch(
@@ -1595,6 +1547,7 @@
             verbose = verbose
           ),
           error = function(e) {
+            if (inherits(e,"genflow_error")) stop(e)
             failures[[query_label]] <<- conditionMessage(e)
             NULL
           }
@@ -1657,6 +1610,7 @@
         verbose = verbose
       ),
       error = function(e) {
+        if (inherits(e,"genflow_error")) stop(e)
         failures[[query_label]] <<- conditionMessage(e)
         NULL
       }
@@ -1753,15 +1707,7 @@
     }
   )
 
-  if (httr::status_code(response) != 200) {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    stop(
-      "Ollama API Error (Status: ",
-      httr::status_code(response),
-      "): ",
-      error_content
-    )
-  }
+  .gen_provider_check(response,expected=200L,stage="management")
 
   tryCatch(
     jsonlite::fromJSON(
@@ -1881,11 +1827,9 @@
 
   parsed_content <- NULL
   api_url_used <- ""
-  attempted_urls <- character()
   for (base_url in base_urls) {
     for (model_path in model_paths) {
       api_url <- paste0(base_url, model_path)
-      attempted_urls <- c(attempted_urls, api_url)
       if (verbose) message("Connecting to the llama-cpp API at ", api_url, " ...")
       response_try <- tryCatch(
         {
@@ -1893,9 +1837,9 @@
         },
         error = function(e) NULL
       )
-      if (is.null(response_try) || httr::status_code(response_try) != 200) {
-        next
-      }
+      if (is.null(response_try)) next
+      if (httr::status_code(response_try) %in% c(404L,405L)) next
+      .gen_provider_check(response_try,expected=200L,stage="management")
 
       parsed_try <- tryCatch(
         {
@@ -1918,8 +1862,8 @@
   }
 
   if (is.null(parsed_content)) {
-    attempted_txt <- paste(unique(attempted_urls), collapse = ", ")
-    stop("llama-cpp API Error: unable to fetch valid JSON from candidate endpoints. Tried: ", attempted_txt)
+    if (exists("response_try") && !is.null(response_try)) .gen_provider_check(response_try,expected=200L,stage="management")
+    .gen_stop("provider_response_invalid",stage="management",outcome="failed")
   }
 
   if (verbose) message("Processing JSON response from ", api_url_used, " ...")
@@ -2411,7 +2355,7 @@
 #' @param verbose Logical flag to print progress messages.
 #' @param fail_on_error Logical. If TRUE, provider failures are collected and raised as an error after attempted updates.
 #'
-#' @return Invisibly returns the model directory path with attributes describing updated and failed providers.
+#' @return Invisibly returns the model directory path with attributes describing updated and failed providers, including canonical `diagnostics` for failures.
 #' @examples
 #' # Update all providers to the default directory
 #' # gen_update_models()
@@ -2493,7 +2437,7 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
         )
         updated_providers <- c(updated_providers, prov)
       }, error = function(e) {
-        failures[[prov]] <<- e$message
+        failures[[prov]] <<- e
         if (verbose) warning("Failed to update ", update_info$name, ": ", e$message)
       })
       next
@@ -2512,7 +2456,7 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
       )
       updated_providers <- c(updated_providers, prov)
     }, error = function(e) {
-      failures[[prov]] <<- e$message
+      failures[[prov]] <<- e
       if (verbose) warning("Failed to update ", custom_name, ": ", e$message)
     })
   }
@@ -2536,10 +2480,17 @@ gen_update_models <- function(provider = NULL, directory = NULL, verbose = TRUE,
   result <- directory
   attr(result, "updated_providers") <- updated_providers
   attr(result, "failed_providers") <- names(failures)
-  attr(result, "failures") <- failures
+  attr(result, "failures") <- lapply(failures, conditionMessage)
+  diagnostics <- lapply(names(failures),function(service) {
+    e <- failures[[service]]
+    d <- gen_diagnostic(e,stage="management",log=TRUE)
+    d$params$service <- service
+    d
+  })
+  attr(result,"diagnostics") <- diagnostics
   if (length(failures) && isTRUE(fail_on_error)) {
-    failure_msg <- paste0(names(failures), ": ", unlist(failures, use.names = FALSE), collapse = "; ")
-    stop("Model update failed for ", failure_msg, call. = FALSE)
+    if (length(diagnostics)==1L) .gen_stop(diagnostics[[1L]])
+    .gen_stop(list(code="catalog_update_failed",causes=diagnostics),stage="management",outcome="failed")
   }
 
   invisible(result)

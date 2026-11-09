@@ -1454,9 +1454,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::timeout(timeout_secs)
   )
 
-  if (httr::status_code(response) != 200) {
-    stop("OpenAI STT error: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(response,expected=200L,stage="inference")
 
   result <- httr::content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
   text <- result$text %||% result$transcription
@@ -1487,9 +1485,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::timeout(timeout_secs)
   )
 
-  if (httr::status_code(response) != 200) {
-    stop("Groq STT error: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(response,expected=200L,stage="inference")
 
   result <- httr::content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
   text <- result$text %||% result$transcription
@@ -1509,9 +1505,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     body = httr::upload_file(audio_path),
     httr::timeout(timeout_secs)
   )
-  if (httr::status_code(upload_response) != 200) {
-    stop("AssemblyAI upload error: ", httr::content(upload_response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(upload_response,expected=200L,stage="preflight")
 
   upload_result <- httr::content(upload_response, as = "parsed", type = "application/json", encoding = "UTF-8")
   audio_url <- upload_result$upload_url
@@ -1527,9 +1521,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     encode = "json",
     httr::timeout(timeout_secs)
   )
-  if (httr::status_code(transcript_response) != 200) {
-    stop("AssemblyAI transcript error: ", httr::content(transcript_response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(transcript_response,expected=200L,stage="inference")
 
   transcript_result <- httr::content(transcript_response, as = "parsed", type = "application/json", encoding = "UTF-8")
   transcript_id <- transcript_result$id
@@ -1544,6 +1536,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       httr::add_headers(Authorization = api_key),
       httr::timeout(timeout_secs)
     )
+    .gen_provider_check(poll_response,expected=200L,stage="poll")
     poll_result <- httr::content(poll_response, as = "parsed", type = "application/json", encoding = "UTF-8")
     status <- poll_result$status
 
@@ -1553,7 +1546,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       return(text)
     }
     if (identical(status, "error")) {
-      stop("AssemblyAI transcription failed: ", poll_result$error %||% "unknown error")
+      .gen_stop("provider_task_failed",stage="poll",outcome="failed")
     }
 
     elapsed <- as.numeric(difftime(Sys.time(), started, units = "secs"))
@@ -1591,9 +1584,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::timeout(timeout_secs)
   )
 
-  if (httr::status_code(response) != 200) {
-    stop("Cloudflare STT error: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(response,expected=200L,stage="inference")
 
   result <- httr::content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
   text <- result$result$text %||% result$text
@@ -1643,9 +1634,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::timeout(timeout_secs)
   )
 
-  if (httr::status_code(response) != 202) {
-    stop("Voicegain STT error: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(response,expected=202L,stage="inference")
 
   init_response <- httr::content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
   poll_url <- init_response$sessions[[1]]$poll$url
@@ -1662,6 +1651,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
       ),
       httr::timeout(timeout_secs)
     )
+    .gen_provider_check(poll_response,expected=200L,stage="poll")
     poll_content <- httr::content(poll_response, as = "parsed", type = "application/json", encoding = "UTF-8")
     if (isTRUE(poll_content$result$final)) break
 
@@ -1679,10 +1669,11 @@ gen_stt.genflow_agent <- function(audio, ...) {
     ),
     httr::timeout(timeout_secs)
   )
+  .gen_provider_check(final_response,expected=200L,stage="poll")
   final_content <- httr::content(final_response, as = "parsed", type = "application/json", encoding = "UTF-8")
 
   if (!identical(final_content$result$status, "MATCH")) {
-    stop("Voicegain transcription failed with status: ", final_content$result$status)
+    .gen_stop("provider_task_failed",stage="poll",outcome="failed")
   }
   text <- final_content$result$transcript
   if (is.null(text) || !nzchar(text)) stop("Voicegain returned an empty transcript.")
@@ -1710,13 +1701,11 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::timeout(timeout_secs)
   )
 
-  if (httr::status_code(response) != 200) {
-    stop("Hugging Face STT error: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(response,expected=200L,stage="inference")
 
   result <- httr::content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
   if (is.list(result) && !is.null(result$error)) {
-    stop("Hugging Face STT error: ", result$error)
+    .gen_stop(.gen_provider_http_error(400L,result))
   }
 
   text <- result$text %||% result$transcription
@@ -3754,13 +3743,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
   )
   status <- as.integer(response$status)
   response_text <- as.character(response$text %||% "")[1]
-  if (status < 200L || status >= 300L) {
-    stop(
-      "Local OpenAI-compatible STT error (HTTP ", status, "): ",
-      response_text,
-      call. = FALSE
-    )
-  }
+  .gen_provider_check(response)
 
   payload <- tryCatch(
     jsonlite::fromJSON(response_text, simplifyVector = FALSE),
@@ -3931,11 +3914,9 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::timeout(timeout_secs)
   )
 
-  if (!(httr::status_code(response) %in% c(200, 201))) {
-    stop("Replicate STT error: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
+  .gen_provider_check(response,expected=c(200L,201L))
 
-  content <- httr::content(response, as = "parsed", simplifyVector = TRUE)
+  content <- .gen_provider_json(response)
   get_url <- content$urls$get
   prediction_id <- content$id
   if (is.null(get_url)) {
@@ -3956,20 +3937,15 @@ gen_stt.genflow_agent <- function(audio, ...) {
       httr::add_headers("Authorization" = paste("Token", replicate_token)),
       httr::timeout(timeout_secs)
     )
-    if (httr::status_code(poll_response) != 200) {
-      warning("Replicate polling returned status ", httr::status_code(poll_response), ". Retrying.")
-      next
-    }
-    poll_content <- httr::content(poll_response, as = "parsed", simplifyVector = TRUE)
+
+    .gen_provider_check(poll_response,expected=200L,stage="poll")
+    poll_content <- .gen_provider_json(poll_response,stage="poll")
     status <- poll_content$status
-    if (!is.null(poll_content$error)) {
-      stop("Replicate prediction failed (ID: ", prediction_id, "): ", poll_content$error)
-    }
+    if (!is.null(poll_content$error)) .gen_stop("provider_task_failed",stage="poll",outcome="failed")
   }
 
-  if (status != "succeeded") {
-    stop("Replicate prediction did not succeed. Final status: ", status)
-  }
+  if (status %in% c("failed","canceled")) .gen_stop(if (status=="failed") "provider_task_failed" else "provider_task_cancelled",stage="poll",outcome="failed")
+  if (!identical(status,"succeeded")) .gen_stop("provider_response_invalid",stage="poll",outcome="unknown")
 
   output <- poll_content$output
   text <- NULL
@@ -3994,10 +3970,8 @@ gen_stt.genflow_agent <- function(audio, ...) {
     httr::add_headers("Authorization" = paste("Token", token)),
     httr::timeout(timeout_secs)
   )
-  if (httr::status_code(response) != 200) {
-    stop("Failed to fetch Replicate model info: ", httr::content(response, "text", encoding = "UTF-8"))
-  }
-  info <- httr::content(response, as = "parsed", simplifyVector = TRUE)
+  .gen_provider_check(response,expected=200L,stage="preflight")
+  info <- .gen_provider_json(response)
   version_id <- info$latest_version$id
   schema <- info$latest_version$openapi_schema
   input_field <- .stt_replicate_pick_input_field(schema)

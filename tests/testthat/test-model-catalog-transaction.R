@@ -158,8 +158,7 @@ test_that("invalid or failing built-in updates preserve the previous catalog", {
       verbose = FALSE,
       fail_on_error = TRUE
     ),
-    "Model update failed for openai",
-    fixed = TRUE
+    "Ocorreu uma falha interna ao processar a operação.", class = "genflow_error", fixed = TRUE
   )
   expect_identical(
     readBin(final_path, "raw", n = file.info(final_path)$size),

@@ -212,6 +212,8 @@ gen_tts.default <- function(
   }, error = function(e) {
     error_message <<- conditionMessage(e)
     provider_error <<- .genflow_provider_failure(e)$error
+    # TTS has no download receipt: retrying this public call would synthesize again.
+    if (identical(provider_error$outcome,"succeeded")) provider_error$retryable <<- FALSE
     NULL
   })
 
@@ -341,53 +343,9 @@ gen_tts.genflow_agent <- function(text, ...) {
 
 #' @keywords internal
 #' @noRd
-.tts_http_status <- function(response) {
-  status <- tryCatch(
-    httr::status_code(response),
-    error = function(e) NA_integer_
-  )
-  status <- suppressWarnings(as.integer(status)[1])
-  if (is.na(status)) {
-    stop("TTS provider returned a malformed HTTP response without a status code.", call. = FALSE)
-  }
-  status
-}
-
-#' @keywords internal
-#' @noRd
-.tts_http_detail <- function(response) {
-  detail <- tryCatch(
-    httr::content(response, as = "text", encoding = "UTF-8"),
-    error = function(e) ""
-  )
-  if (is.list(detail)) {
-    detail <- tryCatch(
-      jsonlite::toJSON(detail, auto_unbox = TRUE, null = "null"),
-      error = function(e) ""
-    )
-  }
-  detail <- trimws(paste(as.character(detail %||% ""), collapse = " "))
-  if (nzchar(detail)) substr(detail, 1L, 500L) else ""
-}
-
-#' @keywords internal
-#' @noRd
-.tts_expect_http_status <- function(response, expected, action) {
-  status <- .tts_http_status(response)
-  if (!status %in% expected) {
-    detail <- .tts_http_detail(response)
-    detail_suffix <- if (nzchar(detail)) paste0(": ", detail) else ""
-    stop(
-      action,
-      " failed (HTTP ",
-      status,
-      ")",
-      detail_suffix,
-      ".",
-      call. = FALSE
-    )
-  }
-  invisible(status)
+.tts_expect_http_status <- function(response, expected, action, stage="inference") {
+  .gen_provider_check(response,expected=expected,stage=stage)
+  invisible(httr::status_code(response))
 }
 
 #' @keywords internal
@@ -617,10 +575,8 @@ gen_tts.genflow_agent <- function(text, ...) {
 
   .tts_expect_http_status(response, c(200L, 201L), "Replicate prediction creation")
 
-  content <- httr::content(response, as = "parsed", simplifyVector = TRUE)
-  if (!is.list(content)) {
-    stop("Replicate prediction creation returned malformed JSON.", call. = FALSE)
-  }
+  content <- .gen_provider_json(response)
+
   prediction_urls <- content$urls
   get_url <- if (is.list(prediction_urls)) {
     .gen_audio_scalar_text(prediction_urls$get)
@@ -641,15 +597,7 @@ gen_tts.genflow_agent <- function(text, ...) {
   }
   poll_content <- content
   prediction_error <- .gen_audio_scalar_text(poll_content$error)
-  if (nzchar(prediction_error)) {
-    stop(
-      "Replicate prediction failed (ID: ",
-      prediction_id,
-      "): ",
-      prediction_error,
-      call. = FALSE
-    )
-  }
+  if (nzchar(prediction_error)) .gen_stop("provider_task_failed",stage="poll",outcome="failed")
   started <- Sys.time()
   while (status %in% c("starting", "processing")) {
     elapsed <- as.numeric(difftime(Sys.time(), started, units = "secs"))
@@ -662,30 +610,19 @@ gen_tts.genflow_agent <- function(text, ...) {
       httr::add_headers("Authorization" = paste("Token", replicate_token)),
       httr::timeout(timeout_secs)
     )
-    .tts_expect_http_status(poll_response, 200L, "Replicate prediction polling")
-    poll_content <- httr::content(poll_response, as = "parsed", simplifyVector = TRUE)
-    if (!is.list(poll_content)) {
-      stop("Replicate prediction polling returned malformed JSON.", call. = FALSE)
-    }
+    .tts_expect_http_status(poll_response, 200L, "Replicate prediction polling",stage="poll")
+    poll_content <- .gen_provider_json(poll_response,stage="poll")
+
     status <- .gen_audio_scalar_text(poll_content$status)
     if (!nzchar(status)) {
       stop("Replicate prediction polling returned no status.", call. = FALSE)
     }
     prediction_error <- .gen_audio_scalar_text(poll_content$error)
-    if (nzchar(prediction_error)) {
-      stop(
-        "Replicate prediction failed (ID: ",
-        prediction_id,
-        "): ",
-        prediction_error,
-        call. = FALSE
-      )
-    }
+    if (nzchar(prediction_error)) .gen_stop("provider_task_failed",stage="poll",outcome="failed")
   }
 
-  if (status != "succeeded") {
-    stop("Replicate prediction did not succeed. Final status: ", status)
-  }
+  if (status %in% c("failed","canceled")) .gen_stop(if (status=="failed") "provider_task_failed" else "provider_task_cancelled",stage="poll",outcome="failed")
+  if (!identical(status,"succeeded")) .gen_stop("provider_response_invalid",stage="poll",outcome="unknown")
 
   output_ref <- .tts_replicate_extract_output(poll_content$output)
   if (is.null(output_ref) || !nzchar(output_ref)) {
@@ -722,11 +659,9 @@ gen_tts.genflow_agent <- function(text, ...) {
     httr::add_headers("Authorization" = paste("Token", token)),
     httr::timeout(timeout_secs)
   )
-  .tts_expect_http_status(response, 200L, "Replicate model metadata request")
-  info <- httr::content(response, as = "parsed", simplifyVector = TRUE)
-  if (!is.list(info)) {
-    stop("Replicate model metadata returned malformed JSON.", call. = FALSE)
-  }
+  .tts_expect_http_status(response, 200L, "Replicate model metadata request",stage="preflight")
+  info <- .gen_provider_json(response,stage="preflight")
+
   latest_version <- info$latest_version
   if (!is.list(latest_version)) {
     stop("Replicate model metadata has no latest version object.", call. = FALSE)
@@ -962,7 +897,7 @@ gen_tts.genflow_agent <- function(text, ...) {
     httr::write_disk(tmp, overwrite = TRUE),
     httr::timeout(timeout_secs)
   )
-  .tts_expect_http_status(resp, 200L, "Replicate audio download")
+  .tts_expect_http_status(resp, 200L, "Replicate audio download",stage="download")
   tagged_path <- .tts_tag_audio_path(
     tmp,
     content_type = .tts_response_content_type(resp),

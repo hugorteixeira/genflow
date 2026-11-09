@@ -158,33 +158,14 @@ gen_img.default <- function(
     encode = "json",
     httr::timeout(budget())
   )
-  # Process response & get binary
-  content_type <- tolower(
-    as.character(httr::headers(response)[["content-type"]] %||% "")[1]
-  )
-  img_binary <- NULL
-  if (httr::status_code(response) >= 200 && httr::status_code(response) < 300) {
-    if (grepl("^image/", content_type)) {
-      img_binary <- httr::content(response, as = "raw")
-    } else if (grepl("application/json", content_type)) {
-      content <- httr::content(response, as = "parsed", simplifyVector = TRUE)
-      if (!is.null(content$error)) stop(sprintf("Hugging Face JSON API error: %s", paste(content$error, collapse="; ")))
-      else stop("Unexpected JSON response (successful?) from Hugging Face API.")
-    } else {
-      warning("Unexpected content type: ", content_type)
-      img_binary <- httr::content(response, as = "raw") # Attempt
-    }
-  } else {
-    erro_text <- httr::content(response, "text", encoding = "UTF-8")
-    error_detail <- erro_text
-    if (grepl("application/json", content_type)) {
-      try({
-        content <- jsonlite::fromJSON(erro_text)
-        if (!is.null(content$error)) error_detail <- paste(content$error, collapse="; ")
-      }, silent = TRUE)
-    }
-    stop(sprintf("HuggingFace API error (%s): %s", httr::status_code(response), error_detail))
+  .gen_provider_check(response)
+  content_type <- tolower(as.character(httr::headers(response)[["content-type"]] %||% "")[1])
+  if (grepl("application/json",content_type)) {
+    body <- .gen_provider_body(response)
+    if (!is.null(body$error)) .gen_stop(.gen_provider_http_error(400L,body))
+    .gen_stop("provider_response_invalid",outcome="unknown",stage="inference")
   }
+  img_binary <- httr::content(response,as="raw")
 
   # Construct filename & path
   .gen_image_publish(.gen_image_receipt(list(.gen_image_source(img_binary)),service_name,model,h,y,
@@ -262,19 +243,11 @@ gen_img.genflow_agent <- function(prompt, ...) {
     body = body,
     timeout_secs = budget()
   )
-  response_status <- suppressWarnings(as.integer(response$status)[1])
-  if (is.na(response_status) ||
-      !(response_status %in% c(200L, 201L, 202L))) {
-    stop(sprintf(
-      "Initial FAL API error (%s): %s",
-      response$status %||% "unknown",
-      .gen_img_fal_error_detail(response)
-    ))
-  }
+  .gen_provider_check(response,expected=c(200L,201L,202L))
 
   content <- response$content
   if (!is.list(content)) {
-    stop("FAL returned an invalid queue submission response.", call. = FALSE)
+    .gen_stop("provider_response_invalid",stage="inference",outcome="unknown")
   }
   status_url <- as.character(content$status_url %||% "")[1]
   response_url <- as.character(content$response_url %||% "")[1]
@@ -304,40 +277,28 @@ gen_img.genflow_agent <- function(prompt, ...) {
       body = NULL,
       timeout_secs = budget()
     )
-    poll_status <- suppressWarnings(as.integer(status_response$status)[1])
-    if (is.na(poll_status) || !identical(poll_status, 200L)) {
-      stop(sprintf(
-        "FAL API status error (%s): %s",
-        status_response$status %||% "unknown",
-        .gen_img_fal_error_detail(status_response)
-      ))
-    }
+    .gen_provider_check(status_response,expected=200L,stage="poll")
     status_content <- status_response$content
     if (!is.list(status_content)) {
-      stop("FAL returned an invalid queue status response.", call. = FALSE)
-    }
+    .gen_stop("provider_response_invalid",stage="inference",outcome="unknown")
+  }
     status <- .gen_img_fal_status(status_content[["status"]])
   }
 
   if (status %in% c("FAILED", "CANCELLED", "CANCELED")) {
-    stop(
-      "FAL generation failed: ",
-      status_content$error %||% status_content$detail %||% status
-    )
+    .gen_stop(if (status=="FAILED") "provider_task_failed" else "provider_task_cancelled",stage="poll",outcome="failed")
   }
   if (!identical(status, "COMPLETED")) {
     stop("FAL generation did not complete. Final status: ", status)
   }
-  if (!is.null(status_content$error)) {
-    stop("FAL generation failed: ", status_content$error)
-  }
+  if (!is.null(status_content$error)) .gen_stop("provider_task_failed",stage="poll",outcome="failed")
 
   receipt <- .gen_image_receipt(list(),service_name,model,h,y,body$image_size)
   receipt$result_url <- response_url
   .gen_image_publish(receipt,directory,label_sanitized,budget,
     download=function(url,timeout) {
       response <- request("DOWNLOAD",url,token=NULL,body=NULL,timeout_secs=timeout)
-      if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE)
+      .gen_provider_check(response,expected=200L,stage="download")
       response$raw
     }, resolve=function(receipt,budget) .gen_img_resolve_image_receipt(receipt,budget,request))
 }
@@ -401,20 +362,6 @@ gen_img.genflow_agent <- function(prompt, ...) {
   toupper(trimws(as.character(status %||% "")[1]))
 }
 
-#' Extract a readable FAL API error
-#'
-#' @keywords internal
-#' @noRd
-.gen_img_fal_error_detail <- function(response) {
-  content <- response$content
-  if (is.list(content)) {
-    detail <- content$detail %||% content$error
-    if (!is.null(detail)) return(paste(as.character(detail), collapse = "; "))
-  }
-  text <- as.character(response$text %||% "")[1]
-  if (is.na(text) || !nzchar(text)) "unknown error" else text
-}
-
 #' Execute one FAL image HTTP request
 #'
 #' @keywords internal
@@ -451,7 +398,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
 
   list(
     status = httr::status_code(response),
-    content = httr::content(response, as = "parsed", simplifyVector = FALSE),
+    content = .gen_provider_body(response),
     text = httr::content(response, "text", encoding = "UTF-8")
   )
 }
@@ -493,9 +440,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
 
   status <- as.integer(response$status %||% 0L)
   resp_txt <- as.character(response$text %||% "")[1]
-  if (status < 200 || status >= 300) {
-    stop(sprintf("OpenAI API error (%s): %s", status, resp_txt))
-  }
+  .gen_provider_check(response)
 
   cont <- tryCatch(
     jsonlite::fromJSON(resp_txt, simplifyVector = FALSE),
@@ -503,14 +448,12 @@ gen_img.genflow_agent <- function(prompt, ...) {
       stop("OpenAI returned invalid JSON: ", conditionMessage(e), call. = FALSE)
     }
   )
-  if (!is.null(cont$error)) {
-    stop("OpenAI API error: ", cont$error$message %||% "unknown error")
-  }
+  if (!is.null(cont$error)) .gen_stop(.gen_provider_http_error(400L,cont))
 
   .gen_image_publish(.gen_image_receipt(lapply(cont$data %||% list(),.gen_image_source),"openai",model,h,y,size_str),
     directory,label_sanitized,budget,function(url,timeout) {
       response <- request("GET",url,api_key=NULL,body=NULL,timeout_secs=timeout)
-      if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE)
+      .gen_provider_check(response,expected=200L,stage="download")
       response$raw
     })
 }
@@ -640,19 +583,11 @@ gen_img.genflow_agent <- function(prompt, ...) {
     body = body_list,
     timeout_secs = budget()
   )
-  response_status <- suppressWarnings(as.integer(response$status)[1])
-  if (is.na(response_status) ||
-      !(response_status %in% c(200L, 201L))) {
-    stop(sprintf(
-      "Initial Replicate API error (%s): %s",
-      response$status %||% "unknown",
-      .gen_img_replicate_error_detail(response)
-    ))
-  }
+  .gen_provider_check(response,expected=c(200L,201L))
 
   poll_content <- response$content
   if (!is.list(poll_content)) {
-    stop("Replicate returned an invalid prediction object.", call. = FALSE)
+    .gen_stop("provider_response_invalid",stage="inference",outcome="unknown")
   }
   status <- .gen_img_replicate_status(poll_content$status)
   get_url <- poll_content$urls$get
@@ -679,37 +614,24 @@ gen_img.genflow_agent <- function(prompt, ...) {
       body = NULL,
       timeout_secs = budget()
     )
-    poll_status <- suppressWarnings(as.integer(poll_response$status)[1])
-    if (is.na(poll_status) || !identical(poll_status, 200L)) {
-      stop(sprintf(
-        "Replicate API status error (%s): %s",
-        poll_response$status %||% "unknown",
-        .gen_img_replicate_error_detail(poll_response)
-      ))
-    }
+    .gen_provider_check(poll_response,expected=200L,stage="poll")
     poll_content <- poll_response$content
     if (!is.list(poll_content)) {
-      stop("Replicate returned an invalid prediction object while polling.")
-    }
+    .gen_stop("provider_response_invalid",stage="inference",outcome="unknown")
+  }
     status <- .gen_img_replicate_status(poll_content$status)
   }
 
-  if (identical(status, "failed")) {
-    stop("Replicate prediction failed: ", poll_content$error %||% "unknown error")
-  }
-  if (identical(status, "canceled")) {
-    stop("Replicate prediction canceled.")
-  }
-  if (!identical(status, "succeeded")) {
-    stop("Replicate prediction did not succeed. Final status: ", status)
-  }
+  if (identical(status,"failed")) .gen_stop("provider_task_failed",stage="poll",outcome="failed")
+  if (identical(status,"canceled")) .gen_stop("provider_task_cancelled",stage="poll",outcome="failed")
+  if (!identical(status,"succeeded")) .gen_stop("provider_response_invalid",stage="poll",outcome="unknown")
 
   result <- poll_content$output %||% list()
   if (is.list(result) && !is.null(names(result))) result <- list(result)
   .gen_image_publish(.gen_image_receipt(lapply(result,.gen_image_source),service_name,model,h,y),
     directory,label_sanitized,budget,function(url,timeout) {
       response <- request("DOWNLOAD",url,token=NULL,body=NULL,timeout_secs=timeout)
-      if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE)
+      .gen_provider_check(response,expected=200L,stage="download")
       response$raw
     })
 }
@@ -837,20 +759,6 @@ gen_img.genflow_agent <- function(prompt, ...) {
   if (identical(value, "successful")) "succeeded" else value
 }
 
-#' Extract a readable Replicate API error
-#'
-#' @keywords internal
-#' @noRd
-.gen_img_replicate_error_detail <- function(response) {
-  content <- response$content
-  if (is.list(content)) {
-    detail <- content$detail %||% content$error
-    if (!is.null(detail)) return(paste(as.character(detail), collapse = "; "))
-  }
-  text <- as.character(response$text %||% "")[1]
-  if (is.na(text) || !nzchar(text)) "unknown error" else text
-}
-
 #' Execute one Replicate image HTTP request
 #'
 #' @keywords internal
@@ -874,7 +782,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     )
     return(list(
       status = httr::status_code(response),
-      content = httr::content(response, as = "parsed", simplifyVector = FALSE),
+      content = .gen_provider_body(response),
       text = httr::content(response, "text", encoding = "UTF-8")
     ))
   }
@@ -887,7 +795,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     )
     return(list(
       status = httr::status_code(response),
-      content = httr::content(response, as = "parsed", simplifyVector = FALSE),
+      content = .gen_provider_body(response),
       text = httr::content(response, "text", encoding = "UTF-8")
     ))
   }
@@ -905,7 +813,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
   if (!nzchar(key)) .gen_stop("missing_credential",params=list(credential="FAL_API_KEY"))
   response <- tryCatch(request("RESULT",receipt$result_url,token=key,body=NULL,timeout_secs=budget()),
     error=function(e) .gen_stop("image_download_failed",retryable=TRUE,stage="download"))
-  if (!identical(as.integer(response$status),200L)) .gen_stop("image_download_failed",retryable=TRUE,stage="download")
+  .gen_provider_check(response,expected=200L,stage="download")
   content <- response$content$data %||% response$content
   sources <- content$images %||% if (!is.null(content$image)) list(content$image) else list()
   receipt$sources <- lapply(sources,.gen_image_source)

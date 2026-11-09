@@ -68,8 +68,7 @@ test_that("OpenAI TTS normalizes HTTP errors and cleans provider temporaries", {
       instructions = NULL,
       timeout_secs = 30
     ),
-    "OpenAI TTS request failed (HTTP 429): rate limited.",
-    fixed = TRUE
+    "O serviço atingiu um limite de uso.", class = "genflow_error", fixed = TRUE
   )
   expect_false(is.null(temporary_path))
   expect_false(file.exists(temporary_path))
@@ -141,7 +140,7 @@ test_that("gen_tts reuses Replicate metadata and removes its source temporary", 
   )
   testthat::local_mocked_bindings(
     POST = function(...) {
-      list(status = 201L)
+      list(status = 201L, content=list(id="prediction-1",status="succeeded",urls=list(get="https://api.replicate.example/prediction-1"),output="https://files.example/audio.mp3"))
     },
     status_code = function(response) response$status,
     content = function(response, as, ...) {
@@ -299,8 +298,7 @@ test_that("Replicate download HTTP failures are normalized and cleaned", {
       format = "mp3",
       timeout_secs = 30
     ),
-    "Replicate audio download failed (HTTP 502): bad gateway.",
-    fixed = TRUE
+    "O serviço está indisponível ou apresentou uma falha.", class = "genflow_error", fixed = TRUE
   )
   expect_false(is.null(temporary_path))
   expect_false(file.exists(temporary_path))

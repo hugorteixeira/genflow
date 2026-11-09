@@ -34,13 +34,13 @@ test_that("real HTTP, credentials, agents and PSOCK sound batches use one submis
   # Unknown generation outcome is distinct from a rejected request and from
   # successful generation whose downloaded payload is invalid.
   failed <- gen_music("http503",persist=FALSE)
-  expect_identical(failed$error$code,"sound_http"); expect_identical(failed$error$outcome,"unknown")
+  expect_identical(failed$error$code,"provider_unavailable"); expect_identical(failed$error$outcome,"unknown")
   expect_null(failed$audio_receipt)
   invalid <- gen_sfx("html",persist=FALSE)
   expect_identical(invalid$inference_status,"SUCCESS"); expect_identical(invalid$error$code,"sound_invalid")
   expect_identical(gen_audio_recover(invalid,persist=FALSE)$error$code,"sound_invalid")
   redirect <- gen_sfx("redirect",persist=FALSE)
-  expect_identical(redirect$error$code,"sound_http")
+  expect_identical(redirect$error$code,"provider_request_rejected")
   rows <- lapply(readLines(log,warn=FALSE),jsonlite::fromJSON)
   expect_equal(sum(vapply(rows,function(r) r$path=="/release_task",logical(1))),1)
   expect_equal(sum(vapply(rows,function(r) startsWith(r$path,"/v1/music?"),logical(1))),3)

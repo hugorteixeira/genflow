@@ -18,7 +18,7 @@
   key <- if (is.null(status)) NULL else switch(as.character(status),
     `401`="provider_unauthorized", `403`="provider_forbidden", `404`="provider_not_found",
     `429`="provider_rate_limit", if (status >= 500) "provider_unavailable" else "provider_request_rejected")
-  .genflow_error(code, message, transient && stage == "inference", stage,
+  .genflow_error(code, message, transient && !unknown && stage == "inference", stage,
     if (stage == "persistence") "succeeded" else if (unknown) "unknown" else "failed",
     message_key=key, params=if (is.null(status)) list() else list(status_code=status))
 }
@@ -54,7 +54,7 @@
 }
 
 .genflow_provider_failure <- function(message, code = NULL, retryable = NULL, outcome = NULL) {
-  error <- if (inherits(message,"condition") && !is.null(message$diagnostic)) gen_diagnostic(message) else
+  error <- if (is.list(message) && (!is.null(message$diagnostic) || isTRUE(message$diagnostic_version==1L))) gen_diagnostic(message) else
     .genflow_error_from_message(if (inherits(message,"condition")) conditionMessage(message) else message)
   if (!is.null(code)) {
     error$code <- code; error$message_key <- NULL
@@ -91,6 +91,7 @@
 
 .genflow_chat_result <- function(result) {
   if (!is.list(result)) return(.genflow_provider_failure("API_RESPONSE_ERROR: Invalid chat response."))
+  if (!is.null(result$error)) return(.genflow_provider_failure(.gen_provider_http_error(400L,result)))
   metadata <- .genflow_response_metadata(result)
   choice <- if (is.list(result$choices) && length(result$choices)) result$choices[[1L]] else list()
   message <- choice$message %||% result$message %||% list()
@@ -112,7 +113,7 @@
   if (refused) {
     value <- .genflow_provider_failure("CONTENT_FILTERED: Response refused by provider.")
   } else if (!is.null(result$error) || identical(result$status, "failed")) {
-    value <- .genflow_provider_failure(paste0("API_RESPONSE_ERROR: ", result$error$message %||% "Response failed."))
+    value <- .genflow_provider_failure(.gen_provider_http_error(400L,result))
   } else {
     text <- result$output_text %||% result$response$output_text
     if (is.null(text)) text <- paste(vapply(blocks, function(item) item$text %||% "", character(1)), collapse = "\n")
@@ -140,6 +141,7 @@
 }
 
 .genflow_try_next_route <- function(value) {
+  if (inherits(value,"genflow_provider_result")) return(isTRUE(value$error$params$status_code %in% c(404L,405L)))
   if (!is.character(value) || length(value) != 1L) return(FALSE)
   grepl("HTTP (404|405)\\b|Could not resolve host|Couldn't connect|Failed to connect|Connection refused",
         value, ignore.case = TRUE)

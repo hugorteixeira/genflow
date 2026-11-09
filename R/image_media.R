@@ -22,7 +22,7 @@
   response <- tryCatch(httr::GET(url, httr::write_disk(path), httr::timeout(timeout),
     httr::config(maxfilesize=.gen_image_limit, protocols=3L, redir_protocols=3L)),
     error=function(e) .gen_stop("image_download_failed", stage="download", retryable=TRUE))
-  if (httr::status_code(response) != 200L) .gen_stop("image_download_failed", stage="download", retryable=TRUE)
+  .gen_provider_check(response,expected=200L,stage="download")
   .gen_image_read_file(path)
 }
 

@@ -195,15 +195,11 @@
   }
 
   # --- Response processing (if no httr error) ---
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_msg <- paste("OpenAI API error:", http_status(response)$reason, "-", error_content)
-    warning(error_msg)
-    error_details <- tryCatch(fromJSON(error_content)$error$message, error = function(e) error_content)
-    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details)) # Keep API error details
+  if (httr::http_status(response)$category != "Success") {
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
 
-  result <- content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
+  result <- .gen_provider_json(response)
   if (use_responses) .genflow_responses_result(result) else .genflow_chat_result(result)
 }
 #' Internal: OpenRouter chat completions call
@@ -307,14 +303,10 @@
 
   # --- Response processing (if no httr error) ---
   # ... (check http_status, content, result$choices, tool_calls, content_filter) ...
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_msg <- paste("OpenRouter API error:", http_status(response)$reason, "-", error_content)
-    warning(error_msg)
-    error_details <- tryCatch(fromJSON(error_content)$error$message, error = function(e) error_content)
-    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details)) # Keep API error details
+  if (httr::http_status(response)$category != "Success") {
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
-  result <- content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
+  result <- .gen_provider_json(response)
   .genflow_chat_result(result)
 }
 
@@ -654,31 +646,11 @@
     return(response)
   }
 
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
+  if (httr::http_status(response)$category != "Success") {
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
 
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse ", provider_label, " response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
-
-  if (is.null(result)) {
-    return(paste0("API_RESPONSE_ERRORR: Invalid JSON returned by ", provider_label, "."))
-  }
+  result <- .gen_provider_json(response)
 
   .genflow_chat_result(result)
 }
@@ -1140,31 +1112,10 @@
   }
 
   if (httr::http_status(response)$category != "Success") {
-    error_content <- httr::content(response, "text", encoding = "UTF-8")
-    error_detail <- tryCatch({
-      parsed <- jsonlite::fromJSON(error_content, simplifyVector = FALSE)
-      parsed$error$message %||% parsed$message %||% error_content
-    }, error = function(e) error_content)
-    return(paste(
-      "API_ERRORR:",
-      paste0("HTTP ", httr::status_code(response), " ", httr::http_status(response)$reason),
-      "-",
-      as.character(error_detail)[1]
-    ))
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
 
-  result <- tryCatch(
-    httr::content(
-      response,
-      as = "parsed",
-      type = "application/json",
-      encoding = "UTF-8"
-    ),
-    error = function(e) NULL
-  )
-  if (!is.list(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by Gemini.")
-  }
+  result <- .gen_provider_json(response)
 
   parts <- .gemini_response_parts(result)
   has_function_call <- any(vapply(parts, function(part) {
@@ -1464,31 +1415,11 @@
     return(response)
   }
 
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
+  if (httr::http_status(response)$category != "Success") {
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
 
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse Anthropic response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
-
-  if (is.null(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by Anthropic.")
-  }
+  result <- .gen_provider_json(response)
 
   blocks <- result$content
   if (is.null(blocks)) {
@@ -1717,35 +1648,13 @@
     return(response)
   }
 
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    error_details <- tryCatch(
-      {
-        parsed <- fromJSON(error_content)
-        parsed$error %||% parsed$message %||% error_content
-      },
-      error = function(e) error_content
-    )
-    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
+  if (httr::http_status(response)$category != "Success") {
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
 
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning("Failed to parse Ollama response JSON: ", conditionMessage(e))
-      NULL
-    }
-  )
+  result <- .gen_provider_json(response)
 
-  if (is.null(result)) {
-    return("API_RESPONSE_ERRORR: Invalid JSON returned by Ollama.")
-  }
-
-  if (!is.null(result$error) && nzchar(as.character(result$error))) {
-    return(paste("API_ERRORR:", as.character(result$error)))
-  }
+  if (!is.null(result$error)) return(.genflow_provider_failure(.gen_provider_http_error(400L,result)))
 
   message_content <- result$message$content %||% result$response
   if (!is.null(message_content) && nzchar(trimws(paste(message_content, collapse = "")))) {
@@ -2007,29 +1916,12 @@
       }
 
       if (http_status(response)$category != "Success") {
-        error_content <- content(response, "text", encoding = "UTF-8")
-        error_details <- tryCatch(
-          {
-            parsed <- fromJSON(error_content)
-            parsed$error$message %||% parsed$error %||% parsed$message %||% error_content
-          },
-          error = function(e) error_content
-        )
-        last_error <- paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details)
+        last_error <- .genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response)))
         if (!.genflow_try_next_route(last_error)) return(last_error)
         next
       }
 
-      result <- tryCatch(
-        {
-          content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-        },
-        error = function(e) NULL
-      )
-      if (is.null(result)) {
-        last_error <- "API_RESPONSE_ERRORR: Invalid JSON returned by llama-cpp server."
-        next
-      }
+      result <- .gen_provider_json(response)
 
       return(.genflow_chat_result(result))
     }
@@ -2168,50 +2060,16 @@
   }
 
   if (identical(httr::status_code(response), 503L)) {
-    loading_content <- tryCatch(
-      httr::content(response, "text", encoding = "UTF-8"),
-      error = function(e) ""
-    )
-    loading_detail <- if (nzchar(loading_content)) {
-      paste0(" ", substr(loading_content, 1L, 500L))
-    } else {
-      ""
-    }
-    return(paste0(
-      "HF_MODEL_LOADING: Hugging Face returned HTTP 503 while loading model `",
-      model,
-      "`.",
-      loading_detail
-    ))
+    loading <- .gen_provider_body(response)
+    if (is.numeric(loading$estimated_time) && length(loading$estimated_time)==1L && is.finite(loading$estimated_time))
+      return(.genflow_provider_failure("HF_MODEL_LOADING",code="HF_MODEL_LOADING",outcome="failed",retryable=TRUE))
   }
 
-  if (http_status(response)$category != "Success") {
-    error_content <- content(response, "text", encoding = "UTF-8")
-    # HF errors can be plain text or JSON { "error": "..." }
-    error_msg <- paste("HuggingFace API error:", http_status(response)$reason, "-", error_content)
-    warning(error_msg)
-    error_details <- tryCatch(fromJSON(error_content)$error, error = function(e) error_content)
-    # Sometimes error is in 'detail' field
-    if (is.null(error_details) || error_details == error_content) {
-      error_details <- tryCatch(fromJSON(error_content)$detail, error = function(e) error_content)
-    }
-    return(paste("API_ERRORR:", paste0("HTTP ", httr::status_code(response), " ", http_status(response)$reason), "-", error_details))
+  if (httr::http_status(response)$category != "Success") {
+    return(.genflow_provider_failure(.gen_provider_http_error(httr::status_code(response),.gen_provider_body(response))))
   }
 
-  result <- tryCatch(
-    {
-      content(response, as = "parsed", type = "application/json", encoding = "UTF-8")
-    },
-    error = function(e) {
-      warning(paste("Error parsing HuggingFace response JSON:", conditionMessage(e)))
-      return(NULL)
-    }
-  )
-
-  if (is.null(result)) {
-    raw_content <- content(response, "text", encoding = "UTF-8")
-    return(paste("API_RESPONSE_ERRORR: Failed to parse JSON response. Raw content:", substr(raw_content, 1, 500)))
-  }
+  result <- .gen_provider_json(response)
 
   .genflow_chat_result(result)
 }
