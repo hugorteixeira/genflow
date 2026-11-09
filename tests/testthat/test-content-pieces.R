@@ -3,6 +3,18 @@
 .content_workflow <- function(...) list(schema_version=1L,nodes=list(...))
 .content_ai <- function(...) c(list(service="openai",model="gpt-5-mini",contract_version=2L,content=list(list(text="Leia.")),parameters=structure(list(),names=character())),list(...))
 
+test_that("audio pieces have a fixed generator purpose and also accept existing files", {
+  catalog <- gen_block_contracts("content")
+  expect_false("audio" %in% names(catalog$pieces))
+  expect_false(gen_validate_call("content",list(content_type="audio",source="asset",asset_id="saved"))$valid)
+  for (kind in c("voice","music","sfx")) {
+    expect_setequal(unlist(catalog$pieces[[kind]]$sources),c("asset","ai"))
+    expect_identical(catalog$pieces[[kind]]$output,"audio")
+    expect_true(gen_validate_call("content",list(content_type=kind,source="asset",asset_id="saved"))$valid)
+    expect_true(is.function(getExportedValue("genflow",catalog$pieces[[kind]][["function"]])))
+  }
+})
+
 test_that("fixed purpose limits sources and returns exactly one typed asset", {
   catalog <- gen_block_contracts("content")
   for (kind in names(catalog$pieces)) for (source in c("inline","asset","ai")) {

@@ -6,7 +6,7 @@
   function_id <- if (block == "transcribe") "gen_stt" else if (block == "judge") "gen_txt" else NULL
   if (is.null(function_id)) return(NULL)
   contract <- gen_block_contracts(function_id)
-  list(label=if(block=="judge") "Avaliar alternativas" else "Transcrever \u00e1udio", output="text",
+  list(label=if(block=="judge") "Avaliar alternativas" else "Transcrever", output="text",
     sources=list("ai"), operation=contract$studio$id, function_version=contract$version,
     `function`=function_id, primary=if(block=="judge") "context" else "audio", roles=if(block=="judge") list("context_text","context_image") else list())
 }
@@ -23,7 +23,7 @@
   ai <- block %in% c("judge","transcribe") || block=="content" && identical(args$source,"ai")
   if (ai) {
     if (block=="transcribe") {
-      if (!is.null(args$audio)) push(args$audio,"/audio","asset:audio","audio")
+      if (!is.null(args$audio)) push(args$audio,"/audio",gen_block_contracts("gen_stt")$inputs$audio,"audio")
     } else if (.gen_object(args$ai)) for (i in seq_along(args$ai$content))
       push(args$ai$content[[i]],paste0("/ai/content/",i-1L),textual,spec$primary)
     roles <- gen_block_contracts("content")$roles

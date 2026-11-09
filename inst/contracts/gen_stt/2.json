@@ -8,7 +8,7 @@
       "audio": {
         "type": "string",
         "pattern": "\\S",
-        "x-content-kind": "audio",
+        "x-content-kind": "audio|video",
         "x-ui": {
           "hidden": true
         },
@@ -408,7 +408,7 @@
   "function": "gen_stt",
   "modality": "stt",
   "inputs": {
-    "audio": "asset:audio"
+    "audio": "asset:audio|asset:video"
   },
   "outputs": {
     "content": "asset:text"
@@ -416,7 +416,7 @@
   "studio": {
     "id": "audio.transcribe",
     "inputs": {
-      "audio": "audio"
+      "audio": "audio|video"
     },
     "output": "text",
     "execution": "inline",

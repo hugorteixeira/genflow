@@ -8,7 +8,8 @@
 #' file preserves readable speaker turns and a JSON sidecar preserves the
 #' structured metadata.
 #'
-#' @param audio Character path or URL to an audio file (e.g., .mp3, .ogg, .wav).
+#' @param audio Character path or URL to an audio or video file. Local videos
+#'   require ffmpeg and `convert = TRUE`; only the audio track is transcribed.
 #' @param service Provider identifier (e.g., "openai", "groq", "assemblyai",
 #'   "cloudflare", "voicegain", "hf", "replicate", `"local-native"`, or
 #'   `"local-openai"`).
@@ -301,7 +302,10 @@ gen_stt.default <- function(
     if (!is.null(downloaded$tmp)) {
       on.exit(try(unlink(downloaded$tmp), silent = TRUE), add = TRUE)
     }
-    prep <- downloaded
+    prep <- .stt_prepare_audio(downloaded$path, convert = convert)
+    if (!is.null(prep$tmp)) {
+      on.exit(try(unlink(prep$tmp), silent = TRUE), add = TRUE)
+    }
   }
 
   input_duration_seconds <- .stt_audio_duration_seconds(prep$path)
@@ -1391,7 +1395,7 @@ gen_stt.genflow_agent <- function(audio, ...) {
 
   audio <- normalizePath(audio, winslash = "/", mustWork = TRUE)
   ext <- tolower(tools::file_ext(audio))
-  supported <- c("mp3", "wav", "m4a", "ogg", "oga", "flac", "webm", "mp4", "mpga", "mpeg", "aac", "wma")
+  supported <- c("mp3", "wav", "m4a", "ogg", "oga", "flac", "mpga", "aac", "wma")
 
   if (nzchar(ext) && ext %in% supported) {
     return(list(path = audio, is_url = FALSE, tmp = NULL, ext = ext))
@@ -1401,21 +1405,12 @@ gen_stt.genflow_agent <- function(audio, ...) {
     stop("Unsupported audio format: .", ext, ". Set `convert = TRUE` to try ffmpeg.")
   }
 
-  ffmpeg <- Sys.which("ffmpeg")
-  if (!nzchar(ffmpeg)) {
-    stop("Unsupported audio format and ffmpeg not found in PATH.")
-  }
-
+  # Reuse the same extraction, quoting and atomic cleanup as STT chunking.
   tmp <- tempfile(fileext = ".wav")
-  args <- c("-y", "-i", audio, "-ac", "1", "-ar", "16000", tmp)
-  output <- suppressWarnings(system2(ffmpeg, args, stdout = TRUE, stderr = TRUE))
-  status <- attr(output, "status")
-  if (!is.null(status) && status != 0) {
-    stop("ffmpeg conversion failed: ", paste(output, collapse = "\n"))
-  }
-  if (!file.exists(tmp) || file.info(tmp)$size == 0) {
-    stop("ffmpeg conversion produced an empty file.")
-  }
+  tryCatch(.stt_chunk_prepare_media(audio, tmp, "wav"), error = function(e) {
+    diagnostic <- .gen_log_diagnostic(gen_diagnostic("stt_media_prepare", stage="preflight"), e)
+    .gen_stop(diagnostic)
+  })
 
   list(path = tmp, is_url = FALSE, tmp = tmp, ext = "wav")
 }

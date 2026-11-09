@@ -292,6 +292,7 @@ gen_stt_signature <- function(service = "openai",
     model = effective_model %||% "default",
     language = language,
     endpoint = .stt_signature_sanitize_endpoint(endpoint),
+    media_preparation = 2L,
     parameters = semantic,
     extras = extras,
     runtime = runtime

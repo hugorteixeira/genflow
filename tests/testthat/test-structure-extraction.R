@@ -50,7 +50,7 @@ test_that("typed collection boundaries retain JSON schemas and existing exports"
 })
 
 test_that("bundled extraction prunes unrelated resources and keeps shared components", {
-  child <- component_body(component_node("voice","content",list(content_type="audio",source="asset",asset_id="voice")),
+  child <- component_body(component_node("voice","content",list(content_type="voice",source="asset",asset_id="voice")),
     component_node("out","output",inputs=list(voice=component_ref("voice"))))
   d <- list(format="genflow-studio-definition",schema_version=1L,
     root=list(kind="workflow",name="Story",body=component_body(

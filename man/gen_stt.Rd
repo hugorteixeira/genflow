@@ -53,7 +53,8 @@ gen_stt(audio, ...)
 \method{gen_stt}{genflow_agent}(audio, ...)
 }
 \arguments{
-\item{audio}{Character path or URL to an audio file (e.g., .mp3, .ogg, .wav).}
+\item{audio}{Character path or URL to an audio or video file. Local videos
+require ffmpeg and \code{convert = TRUE}; only the audio track is transcribed.}
 
 \item{...}{Must be empty. Unknown or removed STT arguments fail explicitly.}
 
