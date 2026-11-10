@@ -254,6 +254,12 @@ voice; this adapter has no named `voice` catalog. See
 [service/model schemas](inst/doc/parameter-schemas.md#example-reusable-voice-descriptions)
 for free-form descriptions or registered choices.
 
+Voice content blocks expose direction through the `voice_instructions` role,
+separately from their spoken content. Its single value accepts inline text, a
+text/JSON asset, or a connection to another block, and binds to `instructions`.
+The model schema still controls accepted values. A literal agent parameter is
+allowed when this role is absent; specifying both sources is rejected.
+
 ### Music and sound effects
 
 ```r

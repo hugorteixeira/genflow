@@ -32,7 +32,7 @@ profile is supplied. FALSE uses only the supplied parameter configuration.}
 \item{directory}{Optional parameter registry directory, as in \code{\link[=gen_models]{gen_models()}}.}
 }
 \value{
-\code{arguments} for controls (including \code{x-ui.disabled} and \code{reason}), the
+\code{arguments} for controls (including \code{x-ui.unsupported}, \code{disabled} and \code{reason}), the
 selected \code{parameter_schema}, \code{valid}, and canonical \code{errors}. The projection
 is not a standalone validation schema: cross-field rules and multiple
 patterns remain enforced by the canonical validator. Complex values are

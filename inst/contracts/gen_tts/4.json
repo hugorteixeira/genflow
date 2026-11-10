@@ -286,7 +286,7 @@
         },
         "minimum": 0,
         "maximum": 2147483647,
-        "description": "Zero usa amostragem não determinística. O resultado também depende da versão do motor e do hardware."
+        "description": "No VoxCPM2, zero usa a semente padrão 42. O resultado também depende da versão do motor e do hardware."
       },
       "steps": {
         "type": [
@@ -335,6 +335,7 @@
   "modality": "tts",
   "inputs": {
     "text": "asset:text|asset:json",
+    "instructions": "asset:text|asset:json",
     "reference_audio": "asset:audio"
   },
   "outputs": {
@@ -344,12 +345,14 @@
     "id": "audio.speak",
     "inputs": {
       "text": "text|json",
+      "instructions": "text|json",
       "reference_audio": "audio"
     },
     "output": "audio",
     "execution": "inline",
     "available": true,
     "bindings": {
+      "instructions": "instructions",
       "reference_audio": "reference_audio"
     }
   }

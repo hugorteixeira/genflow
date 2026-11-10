@@ -87,7 +87,14 @@
     if (block=="transcribe") { if (is.null(args$audio)) add("required","/audio") }
     else if (!length(a$content) || all(vapply(a$content,function(v) .gen_object(v) && .gen_scalar(v$text) && !nzchar(trimws(v$text)),logical(1)))) add("required","/ai/content")
     # Piece content belongs to ordered values/adendos; function parameters are settings.
-    role_args <- unlist(lapply(gen_block_contracts("content")$roles[unlist(spec$roles)],`[[`,"argument"),use.names=FALSE)
+    role_specs <- gen_block_contracts("content")$roles[unlist(spec$roles)]
+    active_roles <- vapply(args$additions,function(x)
+      if (.gen_object(x) && .gen_scalar(x$role)) x$role else "",character(1))
+    # A declared optional content role may inherit an agent's literal setting.
+    # Supplying that role explicitly and a literal simultaneously is still invalid.
+    role_specs <- role_specs[!vapply(names(role_specs),function(key)
+      isTRUE(role_specs[[key]]$parameter_fallback) && !key %in% active_roles,logical(1))]
+    role_args <- unlist(lapply(role_specs,`[[`,"argument"),use.names=FALSE)
     supplied_bindings <- intersect(c(spec$primary,role_args),names(a$parameters))
     for (key in supplied_bindings) if (!is.null(a$parameters[[key]]))
       add("content_parameter_binding",paste0("/ai/parameters/",key))

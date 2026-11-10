@@ -32,7 +32,7 @@
 #' @param executable Optional CrispASR executable, overriding local configuration.
 #' @param native_device Local accelerator: auto, cpu, vulkan, cuda or metal.
 #' @param threads Optional native CPU threads (default 4).
-#' @param seed Optional native RNG seed (default 0, non-deterministic).
+#' @param seed Optional native RNG seed (0 uses VoxCPM2's default seed 42).
 #' @param steps Optional native diffusion steps (default 10).
 #' @param preview Logical; attempt to open audio after save if interactive.
 #' @param timeout_api Numeric; request timeout in seconds.

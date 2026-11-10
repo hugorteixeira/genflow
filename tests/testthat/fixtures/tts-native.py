@@ -9,7 +9,7 @@ if '--list-backends-json' in args:
 if '--version' in args: print('version : fixture\ngit sha : fixture');sys.exit(0)
 record=os.environ.get('GENFLOW_TEST_TTS_RECORD')
 if record:
-    with open(record,'w') as f: json.dump({'args':args,'cfg':os.environ.get('CRISPASR_VOXCPM2_CFG_VALUE'),'max_len':os.environ.get('CRISPASR_VOXCPM2_MAX_LEN')},f)
+    with open(record,'w') as f: json.dump({'args':args,'cfg':os.environ.get('CRISPASR_VOXCPM2_CFG_VALUE'),'steps':os.environ.get('CRISPASR_VOXCPM2_INFERENCE_STEPS'),'max_len':os.environ.get('CRISPASR_VOXCPM2_MAX_LEN')},f)
 if mode=='fail': sys.exit(7)
 if mode=='timeout':
     child=subprocess.Popen(['sleep','30'])

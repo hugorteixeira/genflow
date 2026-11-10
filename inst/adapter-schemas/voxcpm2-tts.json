@@ -1,6 +1,19 @@
 {
   "type": "object",
   "properties": {
+    "model_options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cfg": {
+          "type": "number",
+          "minimum": 0,
+          "default": 2,
+          "title": "CFG",
+          "description": "Força com que a geração segue o texto e a referência de voz. Valores maiores podem aumentar a aderência, mas também produzir artefatos. Não fixa a identidade da voz sozinho."
+        }
+      }
+    },
     "voice": {
       "type": [
         "string",
@@ -10,7 +23,8 @@
         null
       ],
       "x-ui": {
-        "disabled": true
+        "disabled": true,
+        "unsupported": true
       },
       "description": "O VoxCPM2 não oferece vozes por nome. Use Instruções para a voz para descrever uma voz ou conecte um áudio à entrada referência de voz para reutilizá-la."
     },
@@ -19,7 +33,7 @@
         "string",
         "null"
       ],
-      "description": "Descreva a voz e o jeito de falar, por exemplo: voz feminina, jovem, suave e alegre. A Genflow envia a descrição ao VoxCPM2 automaticamente. Escreva apenas a fala no Prompt. Para manter o timbre entre falas, use também um áudio de referência."
+      "description": "Descreva a voz e o jeito de falar, por exemplo: voz feminina, jovem, suave e alegre. Esta direção é separada do texto a falar e pode vir de outro bloco. Para manter o timbre entre falas, use também um áudio de referência."
     },
     "speed": {
       "type": [
@@ -31,7 +45,8 @@
         1
       ],
       "x-ui": {
-        "disabled": true
+        "disabled": true,
+        "unsupported": true
       }
     },
     "format": {
@@ -44,5 +59,6 @@
       ]
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "description": "O VoxCPM2 não oferece seleção de voz por nome e usa velocidade fixa em 1×. Use instruções ou um áudio de referência para orientar a voz."
 }

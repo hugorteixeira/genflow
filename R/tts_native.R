@@ -76,6 +76,7 @@
     if (decoded$status!=0L || !file.exists(reference)) .gen_stop("tts_reference_invalid",path="/args/reference_audio",stage="preflight")
   }
   engine_build <- .tts_native_probe(executable,budget)
+  cfg <- model_options$cfg %||% .gen_adapter_schema("voxcpm2-tts")$properties$model_options$properties$cfg$default
   output <- tempfile("genflow-native-voice-",fileext=paste0(".",format))
   keep_output <- FALSE
   candidates <- c(output,if (format %in% c("opus","aac")) paste0(tools::file_path_sans_ext(output),c(".mp4",".m4a")))
@@ -86,11 +87,13 @@
     "--speaker-identity",reference_identity,"--tts",.tts_native_text(text,instructions),"--tts-output",output)
   if (!is.null(reference)) args <- c(args,"--voice",reference,"--i-have-rights")
   if (!spoken_disclaimer) args <- c(args,"--no-spoken-disclaimer","--accept-marking-responsibility")
-  # The CLI CFG flag is ignored by this backend. Set the validated value
-  # only in the child process, retaining the historical default when omitted.
+  # Older VoxCPM2 CLI adapters ignore --tts-steps and --tts-cfg-scale.
+  # Send validated controls through their initialization environment as well,
+  # without letting unrelated inherited settings override this request.
   environment <- Sys.getenv()
   environment <- environment[setdiff(names(environment),"CRISPASR_VOXCPM2_MAX_LEN")]
-  environment["CRISPASR_VOXCPM2_CFG_VALUE"] <- as.character(model_options$cfg %||% 2)
+  environment["CRISPASR_VOXCPM2_CFG_VALUE"] <- as.character(cfg)
+  environment["CRISPASR_VOXCPM2_INFERENCE_STEPS"] <- as.character(steps %||% 10L)
   generated <- .tts_native_process(executable,args,budget,environment)
   log <- paste(generated$stdout,generated$stderr)
   fail <- function(code,stage="output_validation",path=NULL) {
@@ -123,7 +126,8 @@
   attr(result,"tts_native") <- list(engine="crispasr",backend="voxcpm2-tts",executable=executable,build=engine_build,model=path,
     device_requested=device,device=.stt_crispasr_runtime_device(log,device),
     threads=threads %||% 4L,seed=seed %||% 0L,steps=steps %||% 10L,
-    reference_used=!is.null(reference),cfg=model_options$cfg %||% 2,audio=metadata)
+    reference_used=!is.null(reference),cfg=cfg,
+    text_segments=sum(startsWith(trimws(strsplit(log,"\n",fixed=TRUE)[[1L]]),"voxcpm2: tokenized '")),audio=metadata)
   keep_output <- TRUE
   result
 }

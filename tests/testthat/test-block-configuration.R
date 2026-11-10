@@ -113,3 +113,30 @@ test_that("malformed snapshots and reserved fields remain diagnostics, not UI cr
   pending <- gen_validate_call("gen_music", list(service = "elevenlabs", instrumental = FALSE, seed = 3), 2, bound = c("prompt", "lyrics"))
   expect_true(pending$valid)
 })
+
+test_that("unsupported controls are annotated without changing validation or saved values", {
+  configuration_scope()
+  base <- gen_block_contracts() # Immutable contracts remain unchanged by projection.
+  form <- gen_block_configuration("gen_tts", "local-native", "mimi.gguf", 4)
+  for (key in c("voice", "speed")) expect_true(form$arguments$properties[[key]][["x-ui"]]$unsupported)
+  expect_match(form$arguments[["x-ui"]]$help, "VoxCPM2")
+  expect_identical(form$arguments$properties$voice$enum, list(NULL))
+  expect_identical(form$arguments$properties$speed$enum, list(NULL, 1L))
+  explicit <- list(voice = "old-voice", speed = 2)
+  bad <- gen_block_configuration("gen_tts", "local-native", "mimi.gguf", 4, explicit)
+  expect_identical(explicit, list(voice = "old-voice", speed = 2))
+  expect_setequal(vapply(bad$errors, `[[`, character(1), "path"), c("/args/voice", "/args/speed"))
+  expect_identical(gen_block_contracts(), base)
+  available <- gen_block_configuration("gen_tts", "local-native", "mimi.gguf", 4)$arguments$properties$model_options
+  expect_false(isTRUE(available[["x-ui"]]$disabled))
+  expect_equal(available$properties$cfg$default,2)
+  remote <- gen_block_configuration("gen_tts", "openai", version = 4)
+  expect_false(isTRUE(remote$arguments$properties$voice[["x-ui"]]$unsupported))
+  expect_true(remote$arguments$properties$reference_audio[["x-ui"]]$unsupported)
+  conditional <- gen_block_configuration("gen_music", "elevenlabs", version = 2)$arguments$properties$seed
+  expect_true(conditional[["x-ui"]]$disabled)
+  expect_false(isTRUE(conditional[["x-ui"]]$unsupported))
+
+  expect_true(.gen_form_property(list("x-ui"=list(unsupported=TRUE,group="creative")),
+    list("x-ui"=list(unsupported=FALSE)))[["x-ui"]]$unsupported)
+})

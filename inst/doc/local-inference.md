@@ -367,16 +367,26 @@ Missing/corrupt references and silent zero-shot fallback are errors. Temporary
 files and the CLI process tree are cleaned after failure, timeout or interruption.
 The timeout covers preparation, capability probing, generation and output checks.
 
-Supported local controls: `threads` (default 4), `seed` (default 0), `steps`
+Supported local controls: `threads` (default 4), `seed` (0 selects VoxCPM2 seed 42), `steps`
 (default 10), and device. Formats requested: WAV, MP3, Opus and AAC; speed must be 1 (or NULL).
 CrispASR may wrap Opus/AAC in MP4 to retain content credentials. Genflow validates
 the actual file and codec, reports `format = "m4a"` and `mime_type = "audio/mp4"`,
 and preserves `requested_format`. It does not disable the engine's remux policy.
 Named voice IDs and FLAC/raw PCM are rejected rather than ignored.
-The qualified VoxCPM2 adapter ignores `--tts-cfg-scale`; Genflow uses the engine's
-initialization environment instead. CFG defaults to 2; `gen_tts@3` accepts
-`model_options = list(cfg = 1)` with a registered or embedded
-[parameter schema](parameter-schemas.md). Version 2 retains its original contract.
+Older VoxCPM2 adapters ignore `--tts-steps` and `--tts-cfg-scale`; Genflow sends
+the validated steps and CFG through the child-process initialization environment.
+CFG is declared in the installed adapter schema with default 2 and is editable
+as `model_options = list(cfg = 1)`, without requiring a registered profile.
+Registered or embedded [parameter schemas](parameter-schemas.md) can further
+constrain it or supply a different default.
+
+The qualified local CrispASR build keeps a VoxCPM2 request in one synthesis,
+including its voice description and all sentences. This preserves generated
+context and prevents the description disappearing after the first sentence.
+The model's context/output limits and the call timeout still apply. This is an
+engine change as well as an adapter change; updating only the R package does
+not remove sentence splitting from an older CrispASR executable. The native
+result reports `text_segments` from the engine log to make splitting observable.
 The child process clears hidden output-length overrides and the parent
 environment is preserved. The combined text, added text and description prefix
 are limited to 4096 characters per call;

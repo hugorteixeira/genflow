@@ -182,7 +182,8 @@
         "ai"
       ],
       "roles": [
-        "reference_audio"
+        "reference_audio",
+        "voice_instructions"
       ],
       "function": "gen_tts",
       "function_version": 4,
@@ -233,6 +234,13 @@
     }
   },
   "roles": {
+    "voice_instructions": {
+      "label": "Instruções para a voz",
+      "argument": "instructions",
+      "type": "asset:text|asset:json",
+      "max": 1,
+      "parameter_fallback": true
+    },
     "context_text": {
       "label": "Texto de contexto",
       "argument": "add",

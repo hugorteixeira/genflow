@@ -15,17 +15,18 @@
 # supplied by users can narrow these limits, never enable an unsupported route.
 .gen_argument_rules <- function(contract, args, bound = character()) {
   rules <- list(); props <- contract$arguments$properties
-  put <- function(key, schema, code, disabled = FALSE, message = code) {
-    if (key %in% names(props)) rules[[key]] <<- list(schema = schema, code = code, message = message, disabled = disabled)
+  put <- function(key, schema, code, disabled = FALSE, message = code, unsupported = FALSE) {
+    if (key %in% names(props)) rules[[key]] <<- list(schema = schema, code = code, message = message, disabled = disabled, unsupported = unsupported)
   }
-  fixed <- function(key, values, code, message = code) put(key, list(enum = values), code, TRUE, message)
+  fixed <- function(key, values, code, message = code, unsupported = TRUE) put(key, list(enum = values), code, TRUE, message, unsupported = unsupported)
   service <- args$service; block <- contract$id
   if (!.gen_scalar(service)) return(rules)
   if (block == "gen_tts") {
     if (service == "local-native") {
       native <- .gen_adapter_schema("voxcpm2-tts")$properties
       for (key in names(native))
-        put(key, native[[key]], "tts_native_parameter", disabled = isTRUE(native[[key]][["x-ui"]]$disabled))
+        put(key, native[[key]], "tts_native_parameter", disabled = isTRUE(native[[key]][["x-ui"]]$disabled),
+          unsupported = isTRUE(native[[key]][["x-ui"]]$unsupported))
     } else {
       native <- c("reference_audio", names(Filter(function(p) "local-native" %in% unlist(p[["x-ui"]]$service), props)))
       for (key in native) {
@@ -49,7 +50,7 @@
       put("format", list(enum = as.list(if (block == "gen_sfx") c("mp3", "wav", "opus") else c("mp3", "opus"))), "sound_format_unsupported")
       if (block == "gen_music") {
         if (!is.null(args$lyrics)) put("duration_seconds", list(maximum = 120), "sound_duration_unsupported")
-        else if (!"lyrics" %in% bound || isTRUE(args$instrumental)) fixed("seed", list(NULL), "sound_seed_unsupported")
+        else if (!"lyrics" %in% bound || isTRUE(args$instrumental)) fixed("seed", list(NULL), "sound_seed_unsupported", unsupported = FALSE)
       }
     }
     if (service == "acestep") put("duration_seconds", list(minimum = 10), "sound_duration_unsupported")
@@ -72,6 +73,10 @@
   if (is.null(extra)) return(base)
   out <- .genflow_merge_fields(base, extra)
   for (key in c("x-owner", "x-runtime-only", "x-ui")) if (key %in% names(base)) out[key] <- base[key]
+  # Presentation metadata may hide an unsupported control, but a profile
+  # cannot turn an adapter restriction back into an available feature.
+  if (!is.null(base[["x-ui"]]$unsupported) || !is.null(extra[["x-ui"]]$unsupported))
+    out[["x-ui"]]$unsupported <- isTRUE(base[["x-ui"]]$unsupported) || isTRUE(extra[["x-ui"]]$unsupported)
   if (!is.null(base$type) && !is.null(extra$type)) {
     types <- intersect(unlist(base$type), unlist(extra$type))
     if ("integer" %in% unlist(base$type) && "number" %in% unlist(extra$type) ||
@@ -106,7 +111,7 @@
 #' @param resolve Look up the current service/model profile only when no frozen
 #'   profile is supplied. FALSE uses only the supplied parameter configuration.
 #' @param directory Optional parameter registry directory, as in [gen_models()].
-#' @return `arguments` for controls (including `x-ui.disabled` and `reason`), the
+#' @return `arguments` for controls (including `x-ui.unsupported`, `disabled` and `reason`), the
 #'   selected `parameter_schema`, `valid`, and canonical `errors`. The projection
 #'   is not a standalone validation schema: cross-field rules and multiple
 #'   patterns remain enforced by the canonical validator. Complex values are
@@ -138,9 +143,12 @@ gen_block_configuration <- function(block, service, model = NULL, version = NULL
   usable_profile <- tryCatch(!is.null(profile) && !length(.gen_parameter_snapshot_errors(profile,
     checked$args$service, checked$args$model, block, TRUE)), error = function(e) FALSE)
   schema <- contract$arguments
+  if (block == "gen_tts" && identical(checked$args$service, "local-native"))
+    schema[["x-ui"]]$help <- .gen_adapter_schema("voxcpm2-tts")$description
   rules <- .gen_argument_rules(contract, checked$args, unlist(checked$pending))
   for (key in names(rules)) {
     schema$properties[[key]] <- .gen_form_property(schema$properties[[key]], rules[[key]]$schema)
+    if (isTRUE(rules[[key]]$unsupported)) schema$properties[[key]][["x-ui"]]$unsupported <- TRUE
     if (rules[[key]]$disabled) {
       schema$properties[[key]][["x-ui"]]$disabled <- TRUE
       schema$properties[[key]][["x-ui"]]$reason <- gen_error_message(rules[[key]]$message)
@@ -155,12 +163,14 @@ gen_block_configuration <- function(block, service, model = NULL, version = NULL
     options <- schema$properties$model_options
     options[["x-ui"]]$hidden <- FALSE
     transport <- if (.gen_scalar(checked$args$service)) .gen_model_options_transport(block, checked$args$service) else "none"
-    if (transport == "none" || !usable_profile || is.null(profile$schema$properties$model_options)) {
+    if (transport == "none" || !is.null(profile) && !usable_profile ||
+        transport != "voxcpm2" && (!usable_profile || is.null(profile$schema$properties$model_options))) {
+      if (transport == "none") options[["x-ui"]]$unsupported <- TRUE
       options[["x-ui"]]$disabled <- TRUE
       options[["x-ui"]]$reason <- gen_error_message(if (transport == "none") "model_options_unsupported" else "parameter_schema_required")
     } else if (transport == "voxcpm2") for (key in names(options$properties)) {
       if (key == "cfg") options$properties[[key]] <- .gen_form_property(options$properties[[key]], list(type = "number", minimum = 0))
-      else options$properties[[key]][["x-ui"]] <- list(disabled = TRUE, reason = gen_error_message("model_options_unsupported"))
+      else options$properties[[key]][["x-ui"]] <- list(disabled = TRUE, unsupported = TRUE, reason = gen_error_message("model_options_unsupported"))
     }
     schema$properties$model_options <- options
   }

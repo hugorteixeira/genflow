@@ -97,7 +97,7 @@ disclaimer. Defaults to TRUE. Engine watermarking remains on.}
 
 \item{threads}{Optional native CPU threads (default 4).}
 
-\item{seed}{Optional native RNG seed (default 0, non-deterministic).}
+\item{seed}{Optional native RNG seed (0 uses VoxCPM2's default seed 42).}
 
 \item{steps}{Optional native diffusion steps (default 10).}
 
