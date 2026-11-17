@@ -93,6 +93,11 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = NUL
   } else if (block=="list.item") {
     only("list"); source <- need("list","list:*")
     if (!is.null(source)) ports <- list(asset=paste0("asset:",kind(source)))
+  } else if (block=="video.compose") {
+    only(c("image","audio")); need("image","asset:image"); need("audio","asset:audio")
+    ports <- list(asset="asset:video")
+  } else if (block=="video.join") {
+    only("list"); need("list","list:video"); ports <- list(asset="asset:video")
   } else if (block=="output") {
     if (!length(inputs)) add("",gen_error_message("output_input"),"required_input")
     for (key in names(inputs)) need(key,"asset:*|list:*")

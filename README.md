@@ -5,7 +5,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 > **Easy generative AI workflows for R.** Generate text, images, transcripts,
-> and speech with cloud APIs or local models — through one consistent interface.
+> speech and video with cloud APIs or local models — through one consistent interface.
 
 **genflow** connects R to OpenAI, OpenRouter, Gemini, Hugging Face, Replicate,
 FAL, Ollama, llama.cpp, native speech engines, and custom OpenAI-compatible
@@ -641,3 +641,10 @@ welcome.
 Project: [github.com/hugorteixeira/genflow](https://github.com/hugorteixeira/genflow)
 
 <p align="center">Flow into the future of AI with ❤️ and ☕ in R</p>
+
+### Video with your own audio
+
+`gen_video()` accepts a scene image and custom speech audio through qualified
+Fal and Replicate models. Its submit/poll/collect API supports durable recovery.
+`gen_video_compose()` creates narrated still-frame clips and `gen_video_join()`
+assembles an ordered MP4 locally. See [video contracts and examples](inst/doc/video.md).

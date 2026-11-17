@@ -1,0 +1,33 @@
+{
+  "id": "video.join",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "width": {
+        "type": "integer",
+        "enum": [
+          640,
+          1280,
+          1920
+        ],
+        "default": 1280,
+        "title": "Largura (16:9)"
+      },
+      "fps": {
+        "type": "integer",
+        "enum": [
+          24,
+          25,
+          30
+        ],
+        "default": 24,
+        "title": "Quadros por segundo"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "port_rule": "video.join"
+}

@@ -291,6 +291,7 @@ gen_validate_call <- function(block, args = list(), version = NULL, bound = char
     }
   }
   if (isTRUE(check_capabilities) || block == "gen_txt") .gen_validate_argument_rules(contract, args, usable, add, bound, bindings_known)
+  if (identical(block,"gen_video") && check_capabilities && usable("service") && usable("model") && is.null(.gen_video_profile(args$service,args$model))) add("model","Modelo de vídeo sem contrato de entradas qualificado.","unsupported_modality")
   if (identical(block,"gen_tts")) .gen_tts_rules(args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (block %in% c("gen_sfx","gen_music")) .gen_sound_rules(sub("^gen_","",block),args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (identical(block,"gen_txt")) {

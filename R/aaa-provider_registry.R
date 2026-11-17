@@ -40,7 +40,7 @@
     list(id = id, label = unname(.GENFLOW_PROVIDER_LABELS[[id]]), kind = "builtin",
          modalities = c(text = id %in% text, image = id %in% image, stt = id %in% stt,
                         tts = id %in% c("openai", "replicate", "local-native"), sfx = id == "elevenlabs",
-                        music = id %in% c("elevenlabs", "acestep"), video = FALSE),
+                        music = id %in% c("elevenlabs", "acestep"), video = id %in% c("fal", "replicate")),
          text_function = if (id %in% text) paste0(".gen_txt_", id) else NULL,
          model_resolver = if (id %in% setdiff(text, c("openai", "openrouter", "hf"))) paste0(".", id, "_resolve_model") else NULL,
          catalog_function = if (id %in% catalog) paste0(".update_models_", gsub("-", "_", id)) else NULL,
@@ -129,7 +129,7 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
   }
   if (id == "openai" && !is.null(reasoning)) features["tools"] <- FALSE
   list(schema_version = 1L, service = id, model = model,
-       modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, sfx = FALSE, music = FALSE, video = FALSE),
+       modalities = if (is.null(custom)) spec$modalities else c(text = TRUE, image = FALSE, stt = FALSE, tts = FALSE, sfx = FALSE, music = FALSE, video = id %in% c("fal", "replicate")),
        adapter_features = features, model_support = "unverified",
        model_options = stats::setNames(lapply(.gen_parameter_blocks, function(block)
          .gen_model_options_transport(block, id)), .gen_parameter_blocks),

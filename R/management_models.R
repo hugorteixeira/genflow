@@ -227,6 +227,7 @@ gen_model_favorites <- function(models = NULL, directory = NULL, catalog = NULL,
       df$type[[i]] <- .gen_native_model_type(if (nzchar(native_path)) native_path else df$model[[i]])
     }
     df$type <- as.character(df$type)
+    for (i in seq_len(nrow(df))) if (!is.null(.gen_video_profile(df$service[[i]],df$model[[i]]))) df$type[[i]] <- "Video"
 
     if (!"pricing" %in% names(df)) {
       df$pricing <- NA_character_

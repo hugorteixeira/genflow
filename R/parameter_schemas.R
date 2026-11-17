@@ -1,7 +1,7 @@
 # Parameter profiles extend the existing catalogs; they never replace providers,
 # credential storage or block contracts. Imported snapshots are data, not code.
 .gen_parameter_object <- function() structure(list(), names = character())
-.gen_parameter_blocks <- c("gen_txt", "gen_img", "gen_stt", "gen_tts", "gen_sfx", "gen_music")
+.gen_parameter_blocks <- c("gen_txt", "gen_img", "gen_stt", "gen_tts", "gen_sfx", "gen_music", "gen_video")
 
 .gen_parameter_path <- function(directory = NULL) {
   directory <- .gen_management_path(directory, "directory")

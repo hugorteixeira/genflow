@@ -228,9 +228,19 @@
       "label": "Vídeo",
       "output": "video",
       "sources": [
-        "asset"
+        "asset",
+        "ai"
       ],
-      "roles": []
+      "roles": [
+        "context_text",
+        "video_image",
+        "video_audio"
+      ],
+      "function": "gen_video",
+      "function_version": 1,
+      "operation": "video.generate",
+      "primary": "prompt",
+      "primary_label": "Descrição do movimento"
     }
   },
   "roles": {
@@ -266,6 +276,18 @@
       "label": "Letra",
       "argument": "lyrics",
       "type": "asset:text|asset:json",
+      "max": 1
+    },
+    "video_image": {
+      "label": "Imagem da cena",
+      "argument": "image",
+      "type": "asset:image",
+      "max": 1
+    },
+    "video_audio": {
+      "label": "Áudio da fala",
+      "argument": "audio",
+      "type": "asset:audio",
       "max": 1
     }
   },

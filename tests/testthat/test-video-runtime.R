@@ -1,0 +1,121 @@
+test_that('video contracts expose real typed inputs and reject unqualified endpoints', {
+  c <- gen_block_contracts('gen_video')
+  expect_identical(c$studio$execution,'remote')
+  expect_true(gen_capabilities('fal')$modalities[['video']])
+  expect_true(gen_capabilities('replicate')$modalities[['video']])
+  expect_false(gen_capabilities('openai')$modalities[['video']])
+  expect_false(gen_validate_call('gen_video',list(prompt='Move',image='x',audio='y',service='fal',model='unknown'))$valid)
+  expect_true(gen_validate_call('gen_video',list(prompt='Move',image='x',audio='y'))$valid)
+  expect_true('ai' %in% gen_block_contracts('content')$pieces$video$sources)
+})
+video_files <- function() {
+  d <- tempfile();dir.create(d)
+  image <- file.path(d,'scene.png'); audio <- file.path(d,'voice.wav'); video <- file.path(d,'clip.mp4')
+  processx::run('ffmpeg',c('-v','error','-f','lavfi','-i','color=blue:s=64x64','-frames:v','1','-threads','1',image))
+  processx::run('ffmpeg',c('-v','error','-f','lavfi','-i','sine=frequency=400:duration=1',audio))
+  processx::run('ffmpeg',c('-v','error','-loop','1','-i',image,'-i',audio,'-t','1','-c:v','libx264','-threads','1','-pix_fmt','yuv420p','-c:a','aac',video))
+  list(image=image,audio=audio,video=video)
+}
+test_that('Fal submits exact local media once and separates polling and collection', {
+  f <- video_files();calls <- list()
+  http <- function(service,method,url,body=NULL,timeout=60,...) {
+    calls[[length(calls)+1L]] <<- list(method=method,url=url,body=body)
+    if(method=='POST') return(list(request_id='task-1'))
+    if(endsWith(url,'/status')) return(list(status='COMPLETED'))
+    list(video=list(url='https://v3.fal.media/clip.mp4'))
+  }
+  r <- genflow:::.gen_video_submit('Mimi fala',f$image,f$audio,'fal','fal-ai/kling-video/ai-avatar/v2/standard',request=http)
+  expect_match(calls[[1]]$body$image_url,'^data:image/png;base64,')
+  expect_identical(openssl::base64_decode(sub('^data:[^,]+,','',calls[[1]]$body$audio_url)),readBin(f$audio,'raw',file.info(f$audio)$size))
+  expect_false(any(grepl('data:|token|Key ',unlist(r))))
+  expect_identical(genflow:::.gen_video_poll(r,request=http)$state,'ready')
+  download <- function(...) {p<-tempfile(fileext='.mp4');file.copy(f$video,p);p}
+  out <- genflow:::.gen_video_collect(r,persist=FALSE,request=http,download=download)
+  expect_identical(out$status_api,'SUCCESS');expect_true(out$video$has_audio)
+  expect_equal(sum(vapply(calls,function(x)x$method=='POST',logical(1))),1)
+  expect_error(genflow:::.gen_video_collect(r,persist=FALSE,request=http,download=function(...)stop('network')),'network')
+  expect_equal(sum(vapply(calls,function(x)x$method=='POST',logical(1))),1)
+})
+test_that('Replicate uploads media then uses the official prediction lifecycle', {
+  f<-video_files();calls<-list()
+  http<-function(service,method,url,body=NULL,timeout=60,file=NULL,mime=NULL) {
+    calls[[length(calls)+1L]] <<- list(method=method,url=url,body=body,file=file,mime=mime)
+    if(endsWith(url,'/files')) return(list(urls=list(get=paste0('https://api.replicate.com/v1/files/',length(calls)))))
+    if(method=='POST') return(list(id='abc123'))
+    list(status='processing')
+  }
+  r<-genflow:::.gen_video_submit('Mimi fala',f$image,f$audio,'replicate','wan-video/wan-2.2-s2v',request=http)
+  expect_identical(calls[[1]]$file,f$image);expect_identical(calls[[2]]$file,f$audio)
+  expect_identical(calls[[3]]$body$input$audio,'https://api.replicate.com/v1/files/2')
+  expect_identical(calls[[3]]$url,'https://api.replicate.com/v1/models/wan-video/wan-2.2-s2v/predictions')
+  expect_identical(genflow:::.gen_video_poll(r,request=http)$state,'pending')
+  expect_identical(calls[[4]]$url,'https://api.replicate.com/v1/predictions/abc123')
+  expect_error(genflow:::.gen_video_poll(modifyList(r,list(id='../other')),request=http),'Invalid')
+  expect_error(genflow:::.gen_video_download('https://localhost/private','fal',1),'outside')
+})
+test_that('local narrated clips and ordered assembly produce decodable media', {
+  f<-video_files()
+  composed<-gen_video_compose(f$image,f$audio,width=640L,persist=FALSE)
+  expect_identical(composed$status_api,'SUCCESS')
+  expect_equal(composed$video$duration_seconds,1,tolerance=.1)
+  joined<-gen_video_join(c(composed$response_value,f$video),width=640L,persist=FALSE)
+  expect_true(joined$video$has_audio)
+  expect_equal(joined$video$duration_seconds,2,tolerance=.15)
+  expect_identical(joined$video$width,640L)
+  expect_true(gen_block_ports('video.compose',inputs=list(image='asset:image',audio='asset:audio'))$valid)
+  expect_false(gen_block_ports('video.join',inputs=list(list='list:audio'))$valid)
+  expect_error(gen_video_join(character()),'one to 100')
+})
+test_that('collection verifies and restores the exact original audio input', {
+  f<-video_files()
+  receipt<-list(schema_version=1L,id='same-task',service='fal',model='fal-ai/kling-video/ai-avatar/v2/standard',audio_seconds=1,audio_sha256=genflow:::.genflow_persistence(f$audio,FALSE)$sha256)
+  request<-function(...)list(video=list(url='https://fal.media/clip.mp4'))
+  download<-function(...) {p<-tempfile(fileext='.mp4');file.copy(f$video,p);p}
+  result<-genflow:::.gen_video_collect(receipt,persist=FALSE,request=request,download=download,audio=f$audio)
+  expect_true(result$video$original_audio_preserved)
+  expect_equal(result$video$duration_seconds,1,tolerance=.1)
+  expect_error(genflow:::.gen_video_collect(modifyList(receipt,list(audio_sha256='wrong')),persist=FALSE,request=request,download=download,audio=f$audio),'does not match')
+})
+test_that('direct, agent and batch calls share the video transport', {
+  f<-video_files(); submitted<-list()
+  testthat::local_mocked_bindings(
+    gen_video_submit=function(prompt,image,audio,service,model,add,timeout) {submitted[[length(submitted)+1L]]<<-list(prompt=prompt,image=image,audio=audio);list(id='one')},
+    gen_video_poll=function(...)list(state='ready',receipt=list(id='one')),
+    gen_video_collect=function(...)list(status_api='SUCCESS',inference_status='SUCCESS',response_value=f$video),.package='genflow')
+  cfg<-list(type='Video',service='fal',model='fal-ai/kling-video/ai-avatar/v2/standard',prompt='Move gently',image=f$image,audio=f$audio)
+  expect_identical(do.call(gen_video,cfg[setdiff(names(cfg),'type')])$status_api,'SUCCESS')
+  expect_identical(gen_video(structure(cfg,class='genflow_agent'))$status_api,'SUCCESS')
+  batch<-genflow:::.execute_agent_task(1,NULL,NULL,NULL,NULL,NULL,NULL,'video','numeric',list(instructions='replace',add='replace'),agent=cfg,persist=FALSE)
+  expect_null(batch$diagnostic);expect_identical(batch$response$status_api,'SUCCESS')
+  expect_length(submitted,3);expect_true(all(vapply(submitted,function(x)identical(x$audio,f$audio),logical(1))))
+})
+test_that('qualified video choices and defaults come from the contract', {
+  contract<-gen_block_contracts('gen_video')
+  expect_length(contract$studio$models,3)
+  call<-gen_validate_call('gen_video',list(prompt='Move',image='scene.png',audio='voice.wav',service='replicate'))
+  expect_true(call$valid);expect_identical(call$args$model,'wan-video/wan-2.2-s2v')
+  d<-tempfile();dir.create(d)
+  write.csv(data.frame(service='fal',model='fal-ai/kling-video/ai-avatar/v2/standard',type='Image'),file.path(d,'fal.csv'),row.names=FALSE)
+  expect_identical(gen_models('fal',d)$type,'Video')
+})
+test_that('joining normalizes mixed clips while preserving their order', {
+  f<-video_files();red<-tempfile(fileext='.png')
+  processx::run('ffmpeg',c('-v','error','-f','lavfi','-i','color=red:s=80x64','-frames:v','1','-threads','1',red))
+  second<-gen_video_compose(red,f$audio,width=640L,persist=FALSE)
+  result<-gen_video_join(c(f$video,second$response_value),width=640L,persist=FALSE)
+  pixel<-function(t) {
+    p<-tempfile();on.exit(unlink(p))
+    processx::run('ffmpeg',c('-v','error','-ss',as.character(t),'-i',result$response_value,'-frames:v','1','-vf','scale=1:1','-pix_fmt','rgb24','-f','rawvideo','-threads','1',p))
+    as.integer(readBin(p,'raw',3))
+  }
+  first<-pixel(.25);last<-pixel(1.25)
+  expect_gt(first[3],first[1]);expect_gt(last[1],last[3])
+})
+test_that('failed video publication retains successful media and its receipt', {
+  f<-video_files();receipt<-list(schema_version=1L,id='paid-task',service='fal',model='fal-ai/kling-video/ai-avatar/v2/standard',audio_seconds=1)
+  download<-function(...) {p<-tempfile(fileext='.mp4');file.copy(f$video,p);p}
+  testthat::local_mocked_bindings(.genflow_copy_artifact=function(...)stop('disk unavailable'),.package='genflow')
+  result<-genflow:::.gen_video_collect(receipt,request=function(...)list(video=list(url='https://fal.media/clip.mp4')),download=download)
+  expect_identical(result$status_api,'ERROR');expect_identical(result$inference_status,'SUCCESS')
+  expect_identical(result$persistence$status,'failed');expect_true(file.exists(result$response_value));expect_identical(result$video_receipt$id,'paid-task')
+})

@@ -901,7 +901,7 @@
     combined <- paste(tolower(row$id %||% ""), tolower(row$category %||% ""), tolower(row$shortDescription %||% ""), sep = " ")
 
     model_type <- dplyr::case_when(
-      grepl("image-to-video|text-to-video", combined) ~ "Video",
+      grepl("image-to-video|text-to-video|speech-to-video|audio-to-video|ai-avatar", combined) ~ "Video",
       grepl("image-to-image|text-to-image", combined) ~ "Image",
       grepl("stable-diffusion|sdxl|ideogram|kandinsky|hidream|recraft|photomaker|image|video", combined, perl = TRUE) ~ "Image",
       grepl("llava", combined)    ~ "Vision",

@@ -635,7 +635,7 @@ test_that("batch tasks reject unknown modalities and unsupported files", {
         agent = list(
           service = "mock",
           model = "mock",
-          type = "video",
+          type = "unimplemented-3d",
           context = "test"
         )
       )
