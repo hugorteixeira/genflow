@@ -216,7 +216,7 @@ test_that("Gemini catalog follows pagination and does not put keys in URLs", {
   result <- genflow:::.update_models_gemini(directory, verbose = FALSE)
 
   expect_equal(nrow(result), 2L)
-  expect_setequal(result$type, c("Chat", "Embedding"))
+  expect_setequal(result$type, c("Unknown", "Embedding"))
   expect_identical(length(calls), 2L)
   expect_false(any(grepl("google-key|gemini-key", vapply(
     calls,

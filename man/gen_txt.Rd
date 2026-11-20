@@ -31,6 +31,9 @@ gen_txt(context, ...)
   max_output_tokens = .gen_default("gen_txt", "max_output_tokens", 2L),
   model_options = .gen_default("gen_txt", "model_options", 2L),
   parameter_schema = .gen_default("gen_txt", "parameter_schema", 2L),
+  context_video = NULL,
+  context_audio = NULL,
+  pdf = NULL,
   ...
 )
 

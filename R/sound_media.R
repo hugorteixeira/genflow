@@ -71,7 +71,7 @@ gen_audio_recover <- function(result,directory=NULL,persist=TRUE,timeout=600) {
     r <- result$audio_receipt
     text <- list(type="string",pattern="\\S")
     schema <- list(type="object",required=as.list(c("schema_version","service","kind","model","base_url","state","poll_interval")),
-      properties=list(schema_version=list(type="integer",enum=list(1L)),service=list(type="string",enum=list("elevenlabs","acestep")),
+      properties=list(schema_version=list(type="integer",enum=list(1L)),service=list(type="string",enum=list("elevenlabs","acestep","gemini","openrouter")),
         kind=list(type="string",enum=list("music","sfx")),model=text,base_url=text,
         state=list(type="string",enum=list("pending","generated")),task_id=text,
         poll_interval=list(type="number",exclusiveMinimum=0,maximum=30),source=list(type="object",required=list("kind","value"),

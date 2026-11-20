@@ -264,6 +264,48 @@
         "x-ui": {
           "hidden": true
         }
+      },
+      "context_video": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "pattern": "\\S",
+        "title": "Vídeo para analisar",
+        "x-content-kind": "video",
+        "x-owner": "runtime",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "context_audio": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "pattern": "\\S",
+        "title": "Áudio para analisar",
+        "x-content-kind": "audio",
+        "x-owner": "runtime",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "pdf": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "pattern": "\\S",
+        "title": "Documento PDF",
+        "x-content-kind": "pdf",
+        "x-owner": "runtime",
+        "x-ui": {
+          "hidden": true
+        }
       }
     },
     "required": [
@@ -275,7 +317,10 @@
   "modality": "text",
   "inputs": {
     "context": "asset:text|asset:json",
-    "add_img": "asset:image|list:image"
+    "add_img": "asset:image|list:image",
+    "context_video": "asset:video",
+    "context_audio": "asset:audio",
+    "pdf": "asset:pdf"
   },
   "outputs": {
     "content": "asset:text"
@@ -284,7 +329,10 @@
     "id": "text.generate",
     "inputs": {
       "text": "text|json",
-      "image": "asset:image|list:image"
+      "image": "asset:image|list:image",
+      "context_video": "video",
+      "context_audio": "audio",
+      "pdf": "pdf"
     },
     "output": "text",
     "execution": "inline",

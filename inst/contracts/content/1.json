@@ -149,7 +149,10 @@
       ],
       "roles": [
         "context_text",
-        "context_image"
+        "context_image",
+        "context_audio",
+        "context_video",
+        "pdf"
       ],
       "function": "gen_txt",
       "function_version": 2,
@@ -234,7 +237,10 @@
       "roles": [
         "context_text",
         "video_image",
-        "video_audio"
+        "video_audio",
+        "source_video",
+        "reference_clip",
+        "reference_sound"
       ],
       "function": "gen_video",
       "function_version": 1,
@@ -287,6 +293,42 @@
     "video_audio": {
       "label": "Áudio da fala",
       "argument": "audio",
+      "type": "asset:audio",
+      "max": 1
+    },
+    "source_video": {
+      "label": "Vídeo para editar",
+      "argument": "source_video",
+      "type": "asset:video",
+      "max": 1
+    },
+    "context_audio": {
+      "label": "Áudio para analisar",
+      "argument": "context_audio",
+      "type": "asset:audio",
+      "max": 1
+    },
+    "context_video": {
+      "label": "Vídeo para analisar",
+      "argument": "context_video",
+      "type": "asset:video",
+      "max": 1
+    },
+    "pdf": {
+      "label": "Documento PDF",
+      "argument": "pdf",
+      "type": "asset:pdf",
+      "max": 1
+    },
+    "reference_clip": {
+      "label": "Vídeo de referência",
+      "argument": "reference_clip",
+      "type": "asset:video",
+      "max": 1
+    },
+    "reference_sound": {
+      "label": "Áudio de referência para vídeo",
+      "argument": "reference_sound",
       "type": "asset:audio",
       "max": 1
     }

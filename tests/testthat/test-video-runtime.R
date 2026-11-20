@@ -9,6 +9,7 @@ test_that('video contracts expose real typed inputs and reject unqualified endpo
   expect_true('ai' %in% gen_block_contracts('content')$pieces$video$sources)
 })
 video_files <- function() {
+  withr::local_options(list(genflow.models_dir=tempfile()),.local_envir=parent.frame())
   d <- tempfile();dir.create(d)
   image <- file.path(d,'scene.png'); audio <- file.path(d,'voice.wav'); video <- file.path(d,'clip.mp4')
   processx::run('ffmpeg',c('-v','error','-f','lavfi','-i','color=blue:s=64x64','-frames:v','1','-threads','1',image))
@@ -79,7 +80,7 @@ test_that('collection verifies and restores the exact original audio input', {
 test_that('direct, agent and batch calls share the video transport', {
   f<-video_files(); submitted<-list()
   testthat::local_mocked_bindings(
-    gen_video_submit=function(prompt,image,audio,service,model,add,timeout) {submitted[[length(submitted)+1L]]<<-list(prompt=prompt,image=image,audio=audio);list(id='one')},
+    gen_video_submit=function(prompt,image,audio,service,model,add,timeout,...) {submitted[[length(submitted)+1L]]<<-list(prompt=prompt,image=image,audio=audio);list(id='one')},
     gen_video_poll=function(...)list(state='ready',receipt=list(id='one')),
     gen_video_collect=function(...)list(status_api='SUCCESS',inference_status='SUCCESS',response_value=f$video),.package='genflow')
   cfg<-list(type='Video',service='fal',model='fal-ai/kling-video/ai-avatar/v2/standard',prompt='Move gently',image=f$image,audio=f$audio)

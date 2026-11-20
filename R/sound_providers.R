@@ -1,4 +1,5 @@
 .gen_sound_base_url <- function(service,base_url=NULL) {
+  if(service %in% c("gemini","openrouter")) return(.gen_media_origin(service))
   value <- base_url %||% .genflow_first_env(paste0(toupper(service),"_BASE_URL"),
     if (service=="elevenlabs") "https://api.elevenlabs.io" else "http://127.0.0.1:8001")
   if (!.gen_sound_url_valid(value)) .gen_stop("sound_base_url_invalid",stage="preflight")
@@ -6,6 +7,7 @@
 }
 
 .gen_sound_headers <- function(service) {
+  if(service %in% c("gemini","openrouter")) return(.gen_media_headers(service))
   env <- paste0(toupper(service),"_API_KEY"); key <- Sys.getenv(env,"")
   if (service=="elevenlabs" && !nzchar(key)) .gen_stop("missing_credential",params=list(credential=env),stage="preflight")
   if (!nzchar(key)) return(httr::add_headers())
@@ -42,6 +44,12 @@
   receipt <- list(schema_version=1L,service=a$service,model=a$model,kind=a$kind,
     base_url=a$base_url,state="pending",duration_seconds=a$duration_seconds,format=a$format,
     poll_interval=a$poll_interval %||% 2)
+  if (a$service %in% c("openrouter","gemini")) {
+    receipt$source <- list(kind="base64",value=.gen_media_music(a,budget))
+    receipt$state <- "generated"
+    record(receipt)
+    return(receipt)
+  }
   if (a$service=="acestep") {
     body <- list(prompt=a$prompt,lyrics=if (a$instrumental) "[Instrumental]" else a$lyrics,
       model=a$model,audio_duration=a$duration_seconds,audio_format=a$format,

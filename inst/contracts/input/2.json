@@ -19,6 +19,7 @@
           "image",
           "audio",
           "video",
+          "pdf",
           "ballot"
         ],
         "default": "text",
@@ -30,7 +31,8 @@
             "image": "Imagem",
             "audio": "Áudio",
             "video": "Vídeo",
-            "ballot": "Recibo de voto"
+            "ballot": "Recibo de voto",
+            "pdf": "PDF"
           }
         }
       },

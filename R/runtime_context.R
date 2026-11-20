@@ -27,7 +27,7 @@
 
 .genflow_runtime_context <- function(fingerprint = FALSE) {
   keys <- c("genflow.providers_path", "genflow.providers_dir", "genflow.local_config_path",
-            "genflow.local_config_dir", "genflow.models_dir", "genflow.output_dir",
+            "genflow.local_config_dir", "genflow.models_dir", "genflow.model_routes", "genflow.output_dir",
             "genflow.cache_dir", "genflow.log_dir", "genflow.runtime_snapshot", "genflow.temporary_media_dir")
   values <- lapply(keys, getOption)
   names(values) <- keys

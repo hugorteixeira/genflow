@@ -191,6 +191,7 @@ gen_tts.default <- function(
       "local-native" = .tts_local_native(text, model, reference_audio, format,
         speed, timeout_api, executable, native_device, threads, seed, steps,
         reference_consent, reference_identity, spoken_disclaimer, marking_responsibility, model_options = model_options, instructions = instructions),
+      "gemini" = , "openrouter" = .gen_media_speech(service,model,text,voice,format,instructions,timeout_api),
       "openai" = .tts_openai(text, model, voice %||% "alloy", format, speed, instructions, timeout_api),
       "replicate" = {
         if (!is.null(replicate_model_info_error)) {
@@ -979,6 +980,10 @@ gen_tts_voices <- function(service = "replicate", model = NULL, timeout_api = 30
   service <- tolower(as.character(service)[1])
   model <- if (!is.null(model)) as.character(model)[1] else NULL
 
+  if (service %in% c("gemini","openrouter")) {
+    routes <- Filter(function(r) identical(r$operation,"audio.speak"),gen_model_routes(service,model))
+    return(if(length(routes)) unlist(routes[[1]]$limits$voices,use.names=FALSE) else character())
+  }
   if (service == "local-native") return(character())
 
   if (service == "openai") {

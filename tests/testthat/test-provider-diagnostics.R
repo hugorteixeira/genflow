@@ -116,7 +116,7 @@ for (service in c("openai","openrouter","anthropic","gemini","groq","fal","repli
 test_that("catalog batches retain each structured cause", {
   root<-pd_setup()
   request<-function(...)pd_response(401L,"invalid_api_key")
-  local_mocked_bindings(GET=request,.package="httr")
+  local_mocked_bindings(GET=request,RETRY=request,.package="httr")
   e<-pd_capture(gen_update_models(c("openai","openrouter"),directory=root,verbose=FALSE,fail_on_error=TRUE))
   expect_s3_class(e,"genflow_error");d<-gen_diagnostic(e)
   expect_identical(d$code,"catalog_update_failed");expect_length(d$causes,2L)

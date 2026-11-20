@@ -126,6 +126,7 @@
   if (is.null(add_img) || !length(add_img)) return(list())
   spec <- .gen_image_reference_spec(service, model)
   if (!isTRUE(spec$supported)) .gen_stop("image_references_unsupported", path="/args/add_img", stage="preflight")
+  if (length(add_img) < (spec$min_images %||% 0L)) .gen_stop("unsupported_model_inputs",path="/args/add_img",stage="preflight")
   if (length(add_img) > spec$max_images) .gen_stop("image_reference_limit", params=list(limit=spec$max_images), path="/args/add_img", stage="preflight")
   lapply(seq_along(add_img), function(i) tryCatch({
     image <- .gen_image_inspect(.gen_image_bytes(.gen_image_source(add_img[[i]]), budget(), allow_file=TRUE), budget())

@@ -6,28 +6,37 @@
 \usage{
 gen_video_submit(
   prompt,
-  image,
-  audio,
+  image = NULL,
+  audio = NULL,
   service = "fal",
   model = NULL,
   add = NULL,
-  timeout = 120
+  timeout = 120,
+  source_video = NULL,
+  reference_clip = NULL,
+  reference_sound = NULL
 )
 }
 \arguments{
 \item{prompt}{Movement description, or a genflow_agent.}
 
-\item{image}{Local scene image. Exactly one composed frame is required.}
+\item{image}{Optional local scene or first-frame image, as supported by the model.}
 
 \item{audio}{Local speech audio, including custom TTS output.}
 
-\item{service}{fal or replicate.}
+\item{service}{fal, replicate, gemini or openrouter.}
 
 \item{model}{Qualified endpoint returned by the video contract.}
 
 \item{add}{Additional textual instructions.}
 
 \item{timeout}{Submission time budget in seconds.}
+
+\item{source_video}{Optional local MP4 for an editing route.}
+
+\item{reference_clip}{Optional visual reference clip for video generation.}
+
+\item{reference_sound}{Optional audio reference accompanying a reference clip.}
 }
 \value{
 A portable receipt without credentials or input media.

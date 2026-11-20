@@ -241,6 +241,7 @@ gen_model_favorites <- function(models = NULL, directory = NULL, catalog = NULL,
       df$description <- as.character(df$description)
     }
 
+    if ("routes" %in% names(df)) df <- df[!duplicated(df[c("service","model")]),,drop=FALSE]
     df$source_file <- basename(path)
     df[, c(
       "service",

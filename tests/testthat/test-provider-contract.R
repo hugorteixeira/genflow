@@ -129,7 +129,7 @@ test_that("capability and credential descriptions derive from executable adapter
       expect_true(exists(fn, ns, inherits = FALSE), info = fn)
     }
     caps <- genflow:::gen_capabilities(spec$id)
-    expect_identical(caps$modalities[["video"]], spec$id %in% c("fal", "replicate"))
+    expect_identical(caps$modalities[["video"]], spec$id %in% c("fal", "replicate", "gemini", "openrouter"))
     expect_identical(caps$model_support, "unverified")
   }
   expect_false(genflow:::gen_capabilities("ollama")$adapter_features[["tools"]])

@@ -226,7 +226,7 @@
                                 my_tools = NULL,
                                 plugins = NULL,
                                 timeout_secs = 80,
-                              model_options = list()) {
+                              model_options = list(),attachments=list()) {
   # ... (initial code: default model, API key, URL, headers, initial_message, body) ...
   if (is.null(model)) {
     model <- "mistralai/mistral-7b-instruct"
@@ -241,6 +241,7 @@
   headers <- add_headers("Content-Type" = "application/json", "Authorization" = paste("Bearer", api_key_openrouter), "HTTP-Referer" = your_app_url, "X-Title" = your_app_name)
   # Build the user message, including an inline image when requested.
   initial_message <- list(role = "user", content = .gen_text_user_content(prompt, add_img))
+  if(length(attachments)) initial_message$content <- c(list(list(type="text",text=prompt)),.gen_text_image_parts(add_img),attachments)
   # Build the request body and optional tool definitions.
   body <- list(
     model = model,
@@ -273,6 +274,12 @@
   # --- API call with httr::timeout() and tryCatch ---
   body <- .gen_model_payload(body, model_options)
 
+  if(length(attachments)) {
+    body$provider$require_parameters <- TRUE
+    if(any(vapply(attachments,function(x) x$type=="file",logical(1)))) {
+      body$plugins <- c(Filter(function(p) !identical(p$id,"file-parser"),body$plugins),list(list(id="file-parser",pdf=list(engine="native"))))
+    }
+  }
   response <- tryCatch(
     {
       httr::POST(
@@ -1056,7 +1063,7 @@
                             tools = FALSE,
                             my_tools = NULL,
                             plugins = NULL,
-                            timeout_secs = 80) {
+                            timeout_secs = 80,attachments=list()) {
   api_key <- .gemini_api_key()
   if (!nzchar(api_key)) {
     .gen_stop("missing_credential",params=list(credential="GOOGLE_API_KEY ou GEMINI_API_KEY"),stage="preflight")
@@ -1070,7 +1077,7 @@
     warning("`plugins` is currently ignored for service = 'gemini'.")
   }
 
-  parts <- c(.gen_text_image_parts(add_img, "gemini"), list(list(text=prompt)))
+  parts <- c(.gen_text_image_parts(add_img, "gemini"),attachments, list(list(text=prompt)))
   body <- list(
     contents = list(list(role = "user", parts = parts)),
     generationConfig = list(temperature = temp_v)
@@ -2181,11 +2188,14 @@ gen_txt.default <- function(
   max_output_tokens = .gen_default("gen_txt", "max_output_tokens", 2L),
   model_options = .gen_default("gen_txt", "model_options", 2L),
   parameter_schema = .gen_default("gen_txt", "parameter_schema", 2L),
+  context_video = NULL, context_audio = NULL, pdf = NULL,
   ...
 ) {
   withCallingHandlers({
   model_was_default <- missing(model)
   .gen_internal_validate("gen_txt", version = 2L)
+  paths <- Filter(Negate(is.null),list(context_video=context_video,context_audio=context_audio,pdf=pdf))
+  attachments <- list()
   add_img <- .gen_text_image_uris(add_img, timeout_api)
   if (!length(add_img)) add_img <- NULL
   if (isTRUE(persist) && is.null(directory)) directory <- .genflow_default_dir("texts")
@@ -2206,6 +2216,11 @@ gen_txt.default <- function(
       (isTRUE(model_was_default) || model_is_empty ||
        identical(as.character(model[[1]]), "gpt-5-mini"))) {
     model <- .gemini_resolve_model(NULL)
+  }
+  if(length(paths)) {
+    match <- gen_model_match(service,model,"text.generate",names(paths))
+    if(!match$compatible) stop(match$reason,call.=FALSE)
+    attachments <- .gen_text_attachments(paths,service,timeout_api)
   }
   if (!is.null(custom_provider_cfg)) {
     model <- .custom_openai_provider_resolve_model(custom_provider_cfg, model, timeout_secs = timeout_api)
@@ -2290,6 +2305,7 @@ gen_txt.default <- function(
                  plugins = plugins, timeout_secs = timeout_api)
     if (service %in% c("ollama", "llamacpp")) args["base_url"] <- list(base_url)
     if (!is.null(max_output_tokens)) args$max_output_tokens <- max_output_tokens
+    if (length(attachments)) args$attachments <- attachments
     if (length(model_options)) args$model_options <- model_options
     do.call(get(spec$text_function, envir = asNamespace("genflow")), args)
 

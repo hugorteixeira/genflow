@@ -194,7 +194,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
       ok <- .gen_object(value$interface %||% list()) && .gen_object(value$exports %||% list())
       for (port in c(value$interface %||% list(),value$exports %||% list())) {
         type <- if (is.list(port)) port$type else port
-        ok <- ok && .gen_scalar(type) && grepl("^(asset|list|candidates|round):(text|json|image|audio|video|ballot)$",type)
+        ok <- ok && .gen_scalar(type) && grepl("^(asset|list|candidates|round):(text|json|image|audio|video|pdf|ballot)$",type)
       }
       report <- list(valid=ok,errors=if(ok) list() else list(.gen_issue("invalid_interface","",gen_error_message("invalid_interface"))),document=value)
       if (ok) interfaces[[key]] <<- value

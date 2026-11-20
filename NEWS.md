@@ -1,3 +1,7 @@
+# genflow 0.0.32
+
+- Added model discovery by operation and input role, multimodal text attachments, and Gemini and OpenRouter media adapters.
+
 # genflow 0.0.25
 
 - Fixed-purpose `content` pieces use one active origin (inline, asset or AI).

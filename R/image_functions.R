@@ -87,10 +87,14 @@ gen_img.default <- function(
     label_processed <- substr(label %||% paste(head(strsplit(final_prompt,"[[:space:]]+")[[1]],5),collapse="_"),1,36)
     common <- list(prompt=final_prompt,model=model,temp=temp,steps=steps,h=h,y=y,
       directory=directory,label_sanitized=.sanitize_filename(label_processed),budget=budget)
-    if (service %in% c("openai","fal")) common$references <- references
+    if (length(references) || service %in% c("openai","fal","openrouter","gemini")) common$references <- references
     if (service %in% c("fal","replicate")) common <- c(common,list(poll_interval=poll_interval,max_poll_seconds=max_poll_seconds))
     if (service == "replicate") common <- c(common,list(model_version=model_version,replicate_input=replicate_input))
-    result <- .gen_img_result(function() do.call(get(paste0(".gen_img_",service),envir=environment(gen_img.default)),common),
+    adapter <- if (service %in% c("gemini","openrouter")) {
+      common$service <- service
+      .gen_img_media
+    } else get(paste0(".gen_img_",service),envir=environment(gen_img.default))
+    result <- .gen_img_result(function() do.call(adapter,common),
       list(label=label,label_cat=label_processed,service=service,model=model,temp=temp,steps=steps,
         prompt_usado=final_prompt,content_type="image"),persist)
     if (persist && Sys.getenv("genflow_SKIP_PERSIST_LOG","0") != "1") try(.persist_stats_row(list(
@@ -232,9 +236,17 @@ gen_img.genflow_agent <- function(prompt, ...) {
   }
 
   model_path <- .gen_img_fal_model_path(model)
-  url <- sprintf("https://queue.fal.run/fal-ai/%s", model_path)
+  routes <- Filter(function(r) r$operation=="image.generate",gen_model_routes("fal",model))
+  endpoint <- if(length(routes) && identical(routes[[1L]]$source,model)) model else paste0("fal-ai/",model_path)
+  url <- paste0("https://queue.fal.run/",endpoint)
   body <- .gen_img_fal_input(model_path, prompt, temp, steps, h, y)
-  if (length(references)) { body$image_urls <- references; body$num_images <- 1L }
+  limits <- if(length(routes)) routes[[1L]]$limits
+  if(length(limits$properties)) body <- body[intersect(names(body),unlist(limits$properties))]
+  if (length(references)) {
+    field <- limits$reference_field %||% "image_urls"
+    body[[field]] <- if(identical(limits$multiple,FALSE)) references[[1L]] else references
+    if(is.null(limits$properties) || "num_images" %in% unlist(limits$properties)) body$num_images <- 1L
+  }
 
   response <- request(
     method = "POST",
@@ -540,6 +552,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
                                replicate_input = NULL,
                                poll_interval = 3,
                                max_poll_seconds = 600,
+                               references = list(),
                                request = .gen_img_replicate_request,
                                sleep = Sys.sleep,
                                clock = Sys.time,
@@ -558,7 +571,9 @@ gen_img.genflow_agent <- function(prompt, ...) {
     stop("`max_poll_seconds` must be a positive number.", call. = FALSE)
   }
 
-  model_ref <- .gen_img_replicate_model_ref(model, model_version)
+  routes <- Filter(function(r) r$operation=="image.generate",gen_model_routes("replicate",model))
+  route <- if(length(routes)) routes[[1L]]
+  model_ref <- .gen_img_replicate_model_ref(model, model_version %||% route$revision)
   model_path <- model_ref$model
 
   input_params <- .gen_img_replicate_input(
@@ -570,6 +585,7 @@ gen_img.genflow_agent <- function(prompt, ...) {
     y = y,
     overrides = replicate_input
   )
+  if(length(references)) input_params[[route$limits$reference_field]] <- if(isTRUE(route$limits$multiple)) references else references[[1L]]
   url <- "https://api.replicate.com/v1/predictions"
   body_list <- list(
     version = model_ref$reference,

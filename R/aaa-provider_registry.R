@@ -33,14 +33,14 @@
 
 .genflow_provider_registry <- function() {
   text <- c("openai", "openrouter", "anthropic", names(.GENFLOW_COMPAT_SPECS), "gemini", "hf", "ollama", "llamacpp")
-  image <- c("hf", "fal", "openai", "replicate")
+  image <- c("hf", "fal", "openai", "replicate", "gemini", "openrouter")
   stt <- c("openai", "groq", "assemblyai", "cloudflare", "voicegain", "hf", "replicate", "local-native", "local-openai")
   catalog <- setdiff(names(.GENFLOW_PROVIDER_LABELS), c("local-openai", "assemblyai", "cloudflare", "voicegain"))
   out <- lapply(names(.GENFLOW_PROVIDER_LABELS), function(id) {
     list(id = id, label = unname(.GENFLOW_PROVIDER_LABELS[[id]]), kind = "builtin",
          modalities = c(text = id %in% text, image = id %in% image, stt = id %in% stt,
-                        tts = id %in% c("openai", "replicate", "local-native"), sfx = id == "elevenlabs",
-                        music = id %in% c("elevenlabs", "acestep"), video = id %in% c("fal", "replicate")),
+                        tts = id %in% c("openai", "replicate", "local-native","gemini","openrouter"), sfx = id == "elevenlabs",
+                        music = id %in% c("elevenlabs", "acestep","gemini","openrouter"), video = id %in% c("fal", "replicate","gemini","openrouter")),
          text_function = if (id %in% text) paste0(".gen_txt_", id) else NULL,
          model_resolver = if (id %in% setdiff(text, c("openai", "openrouter", "hf"))) paste0(".", id, "_resolve_model") else NULL,
          catalog_function = if (id %in% catalog) paste0(".update_models_", gsub("-", "_", id)) else NULL,
@@ -122,6 +122,10 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
                 reasoning = id %in% c("openai", "openrouter", "hf"), plugins = id == "openrouter",
                 structured_output = FALSE, streaming = FALSE, durable_jobs = FALSE,
                 max_output_tokens = id == "openai")
+  if (id %in% c("gemini","openrouter") && .gen_scalar(model)) {
+    routes <- gen_model_routes(id,model)
+    features["vision"] <- any(vapply(routes,function(r) r$operation=="text.generate" && "add_img" %in% unlist(r$inputs),logical(1)))
+  }
   if (!is.null(custom)) {
     features[c("vision", "tools", "reasoning", "plugins")] <- vapply(
       c("supports_vision", "supports_tools", "supports_reasoning", "supports_plugins"),
@@ -139,10 +143,15 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
 
 # Explicit model/task mappings. An unlisted model is not guessed from its name.
 .gen_image_reference_spec <- function(service, model=NULL) {
-  model <- tolower(model %||% "")
+  model <- model %||% ""
+  if(service %in% c("gemini","openrouter","fal","replicate")) {
+    routes <- Filter(function(r) r$operation=="image.generate" && !is.null(r$transport),gen_model_routes(service,model))
+    n <- if(length(routes)) routes[[1]]$limits$max_images %||% 0L else 0L
+    return(list(supported=n>0,min_images=if(length(routes)) routes[[1]]$limits$min_images %||% 0L else 0L,max_images=n,max_data_uri=4*ceiling(.gen_image_limit/3)+100,qualification=if(length(routes)) "documented" else "unmapped"))
+  }
+  model <- tolower(model)
   openai <- service == "openai" && grepl("^gpt-image-(1[.]5|1-mini|2|2[.]5-(sunburst|flare))(-[0-9]{4}-[0-9]{2}-[0-9]{2})?$",model)
-  fal <- service == "fal" && sub("^fal-ai/","",model) == "flux-2/edit"
-  list(supported=openai || fal, max_images=if (openai) 16L else if (fal) 4L else 0L,
-    max_data_uri=if (openai) 20971520 else 4 * ceiling(.gen_image_limit/3) + 100,
-    qualification=if (openai || fal) "documented" else "unmapped")
+  list(supported=openai, max_images=if(openai) 16L else 0L,
+    max_data_uri=if(openai) 20971520 else 4*ceiling(.gen_image_limit/3)+100,
+    qualification=if(openai) "documented" else "unmapped")
 }

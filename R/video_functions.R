@@ -10,13 +10,20 @@
   if (!is.list(receipt) || !is.numeric(receipt$schema_version) || length(receipt$schema_version)!=1L || is.na(receipt$schema_version) || receipt$schema_version!=1L ||
       !.gen_scalar(receipt$id) || !grepl('^[A-Za-z0-9_-]{1,200}$',receipt$id) ||
       !.gen_scalar(receipt$service) || !.gen_scalar(receipt$model) ||
-      is.null(.gen_video_profile(receipt$service,receipt$model))) stop('Invalid video receipt.',call.=FALSE)
+      !receipt$service %in% c("fal","replicate","gemini","openrouter") ||
+      !grepl("^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$",receipt$model) || any(strsplit(receipt$model,"/",fixed=TRUE)[[1]] %in% c(".",".."))) stop('Invalid video receipt.',call.=FALSE)
   receipt
 }
 .gen_video_url <- function(receipt, status=FALSE) {
   r <- .gen_video_check_receipt(receipt)
   if (r$service=='replicate') return(paste0('https://api.replicate.com/v1/predictions/',r$id))
   # Fal queue lifecycle addresses use the application id, not its subpath.
+  if(!is.null(r$queue_url)) {
+    expected <- paste0("/requests/",r$id)
+    if(!.gen_scalar(r$queue_url) || !grepl("^https://queue[.]fal[.]run/([A-Za-z0-9_.-]+/)+requests/[A-Za-z0-9_-]+$",r$queue_url) ||
+       !endsWith(r$queue_url,expected)) stop("Invalid fal queue receipt.")
+    return(paste0(r$queue_url,if(status) "/status" else ""))
+  }
   app <- paste(head(strsplit(r$model,'/',fixed=TRUE)[[1]],2),collapse='/')
   paste0('https://queue.fal.run/',app,'/requests/',r$id,if(status) '/status' else '')
 }
@@ -51,8 +58,11 @@
     fmt <- .gen_audio_magic_format(path)
     if(is.null(fmt)) stop('Unsupported audio format.')
     mime <- .gen_audio_format_content_type(fmt)
-  } else mime <- 'video/mp4'
-  list(duration_seconds=if(length(duration)) duration else NULL,width=streams[[1]]$width,height=streams[[1]]$height,mime=mime,bytes=unname(info$size),has_audio=any(vapply(data$streams,function(s) identical(s$codec_type,'audio'),logical(1))))
+  } else {
+    if(!grepl('mp4',data$format$format_name,fixed=TRUE)) stop('Use an MP4 video.')
+    mime <- 'video/mp4'
+  }
+  list(duration_seconds=if(length(duration)) duration else NULL,width=streams[[1]]$width,height=streams[[1]]$height,mime=mime,container=data$format$format_name,bytes=unname(info$size),has_audio=any(vapply(data$streams,function(s) identical(s$codec_type,'audio'),logical(1))))
 }
 .gen_video_upload <- function(path, meta, service, timeout, request=.gen_video_http) {
   if(service=='replicate') {
@@ -66,9 +76,12 @@
 
 #' Generate video from an approved scene image and custom audio
 #' @param prompt Movement description, or a genflow_agent.
-#' @param image Local scene image. Exactly one composed frame is required.
+#' @param image Optional local scene or first-frame image, as supported by the model.
+#' @param source_video Optional local MP4 for an editing route.
+#' @param reference_clip Optional visual reference clip for video generation.
+#' @param reference_sound Optional audio reference accompanying a reference clip.
 #' @param audio Local speech audio, including custom TTS output.
-#' @param service fal or replicate.
+#' @param service fal, replicate, gemini or openrouter.
 #' @param model Qualified endpoint returned by the video contract.
 #' @param add Additional textual instructions.
 #' @param directory Output directory.
@@ -82,12 +95,12 @@
 gen_video <- function(prompt, ...) { if(missing(prompt)) return(gen_video.default(...)); UseMethod('gen_video') }
 #' @rdname gen_video
 #' @export
-gen_video.default <- function(prompt,image,audio,service='fal',model=NULL,add=NULL,directory=NULL,label=NULL,timeout_api=1800,poll_interval=3,persist=TRUE,...) {
+gen_video.default <- function(prompt,image=NULL,audio=NULL,service='fal',model=NULL,add=NULL,directory=NULL,label=NULL,timeout_api=1800,poll_interval=3,persist=TRUE,source_video=NULL,reference_clip=NULL,reference_sound=NULL,...) {
   withCallingHandlers({
     .gen_internal_validate('gen_video',version=1L)
     started <- Sys.time(); receipt <- NULL; completed <- FALSE
     result <- tryCatch({
-      receipt <- gen_video_submit(prompt,image,audio,service,model,add,timeout=min(120,timeout_api))
+      receipt <- gen_video_submit(prompt,image,audio,service,model,add,timeout=min(120,timeout_api),source_video=source_video,reference_clip=reference_clip,reference_sound=reference_sound)
       repeat {
         left <- timeout_api-as.numeric(difftime(Sys.time(),started,units='secs'))
         if(left<=0) stop('Video deadline reached; resume using the retained receipt.')
@@ -113,25 +126,40 @@ gen_video.genflow_agent <- function(prompt,...) {
 #' @param timeout Submission time budget in seconds.
 #' @return A portable receipt without credentials or input media.
 #' @export
-gen_video_submit <- function(prompt,image,audio,service='fal',model=NULL,add=NULL,timeout=120) {
-  .gen_video_submit(prompt,image,audio,service,model,add,timeout)
+gen_video_submit <- function(prompt,image=NULL,audio=NULL,service='fal',model=NULL,add=NULL,timeout=120,source_video=NULL,reference_clip=NULL,reference_sound=NULL) {
+  .gen_video_submit(prompt,image,audio,service,model,add,timeout,source_video=source_video,reference_clip=reference_clip,reference_sound=reference_sound)
 }
-.gen_video_submit <- function(prompt,image,audio,service,model,add=NULL,timeout=120,request=.gen_video_http) {
-  checked <- gen_validate_call('gen_video',list(prompt=prompt,image=image,audio=audio,service=service,model=model,add=add),1L)
+.gen_video_submit <- function(prompt,image,audio,service,model,add=NULL,timeout=120,request=.gen_video_http,source_video=NULL,reference_clip=NULL,reference_sound=NULL) {
+  checked <- gen_validate_call('gen_video',list(prompt=prompt,image=image,audio=audio,source_video=source_video,reference_clip=reference_clip,reference_sound=reference_sound,service=service,model=model,add=add),1L)
   if(!checked$valid) .gen_validation_stop(checked$errors,'gen_video')
   service <- checked$args$service; model <- checked$args$model
   .gen_sound_tools(); budget <- .gen_image_budget(timeout)
-  im <- .gen_video_probe(image,'image',budget()); au <- .gen_video_probe(audio,'audio',budget())
-  profile <- .gen_video_profile(service,model)
-  if(au$duration_seconds>profile$max_seconds) stop('Audio exceeds the qualified clip duration; split the scene explicitly.')
-  input <- list(prompt=.genflow_prepare_prompt(prompt,add))
-  input[[profile$image]] <- .gen_video_upload(image,im,service,budget(),request)
-  input[[profile$audio]] <- .gen_video_upload(audio,au,service,budget(),request)
+  prompt <- .genflow_prepare_prompt(prompt,add)
+  if(service %in% c("openrouter","gemini")) return(.gen_remote_video_submit(service,model,prompt,image,source_video,budget,reference_clip,reference_sound))
+  files <- Filter(Negate(is.null),list(image=image,audio=audio,source_video=source_video,reference_clip=reference_clip,reference_sound=reference_sound))
+  routes <- gen_model_routes(service,model)
+  eligible <- Filter(function(r) .gen_match_routes(list(r),"video.generate",names(files),TRUE)$compatible,routes)
+  if(!length(eligible)) stop("Unsupported video inputs.")
+  route <- eligible[[1L]]; profile <- .gen_video_profile(service,model)
+  wire <- route$limits$wire %||% profile %||% list()
+  info <- lapply(names(files),function(role) .gen_video_probe(files[[role]],if(role=="source_video") "video" else role,budget()))
+  names(info) <- names(files); au <- info$audio
+  if(!is.null(au) && au$duration_seconds > (route$limits$max_seconds %||% Inf)) stop("Speech input exceeds the model limit.")
+  input <- list(prompt=prompt)
+  for(role in names(files)) {
+    field <- wire[[role]]
+    if(is.null(field)) stop("No wire mapping for the supplied media.")
+    input[[field]] <- .gen_video_upload(files[[role]],info[[role]],service,budget(),request)
+  }
   body <- if(service=='fal') input else list(input=input)
   url <- if(service=='fal') paste0('https://queue.fal.run/',model) else paste0('https://api.replicate.com/v1/models/',model,'/predictions')
+  if(service=="replicate" && !is.null(route$revision)) {
+    body$version <- route$revision
+    url <- "https://api.replicate.com/v1/predictions"
+  }
   reply <- request(service,'POST',url,body=body,timeout=budget())
   id <- if(service=='fal') reply$request_id else reply$id
-  .gen_video_check_receipt(list(schema_version=1L,service=service,model=model,id=id,audio_seconds=au$duration_seconds,audio_sha256=.genflow_persistence(audio,FALSE)$sha256))
+  .gen_video_check_receipt(list(schema_version=1L,service=service,model=model,id=id,queue_url=if(service=="fal") reply$response_url,audio_seconds=au$duration_seconds,audio_sha256=if(!is.null(audio)) .genflow_persistence(audio,FALSE)$sha256))
 }
 
 #' Poll an existing video task without submitting another
@@ -142,6 +170,7 @@ gen_video_submit <- function(prompt,image,audio,service='fal',model=NULL,add=NUL
 gen_video_poll <- function(receipt,timeout=60) .gen_video_poll(receipt,timeout)
 .gen_video_poll <- function(receipt,timeout=60,request=.gen_video_http) {
   r <- .gen_video_check_receipt(receipt)
+  if(r$service %in% c("gemini","openrouter")) return(.gen_remote_video_poll(r,timeout))
   body <- request(r$service,'GET',.gen_video_url(r,TRUE),timeout=timeout)
   status <- body$status
   pending <- if(r$service=='fal') c('IN_QUEUE','IN_PROGRESS') else c('starting','processing')
@@ -162,13 +191,16 @@ gen_video_poll <- function(receipt,timeout=60) .gen_video_poll(receipt,timeout)
 gen_video_collect <- function(receipt,directory=NULL,label=NULL,persist=TRUE,timeout=300,audio=NULL) .gen_video_collect(receipt,directory,label,persist,timeout,audio=audio)
 .gen_video_collect <- function(receipt,directory=NULL,label=NULL,persist=TRUE,timeout=300,request=.gen_video_http,download=.gen_video_download,audio=NULL) {
   r <- .gen_video_check_receipt(receipt); budget <- .gen_image_budget(timeout); retained <- NULL
-  body <- request(r$service,'GET',.gen_video_url(r),timeout=budget())
-  if(r$service=='replicate' && !identical(body$status,'succeeded')) stop('Video is not ready.')
-  url <- if(r$service=='fal') body$video$url else body$output
-  if(is.list(url) && length(url)==1L) url <- url[[1L]]
-  path <- download(url,r$service,budget()); downloaded <- path; on.exit(if(!identical(retained,downloaded)) unlink(downloaded),add=TRUE)
+  if(r$service %in% c("openrouter","gemini")) path <- .gen_remote_video_file(r,budget) else {
+    body <- request(r$service,'GET',.gen_video_url(r),timeout=budget())
+    if(r$service=='replicate' && !identical(body$status,'succeeded')) stop('Video is not ready.')
+    url <- if(r$service=='fal') body$video$url else body$output
+    if(is.list(url) && length(url)==1L) url <- url[[1L]]
+    path <- download(url,r$service,budget())
+  }
+  downloaded <- path; on.exit(if(!identical(retained,downloaded)) unlink(downloaded),add=TRUE)
   meta <- .gen_video_probe(path,'video',budget())
-  if(!meta$has_audio && is.null(audio)) stop('The returned video has no custom audio stream.')
+  if(!is.null(r$audio_seconds) && !meta$has_audio && is.null(audio)) stop('The returned video has no custom audio stream.')
   if(!is.null(r$audio_seconds) && abs(meta$duration_seconds-r$audio_seconds)>max(1,r$audio_seconds*.1)) stop('Returned video duration does not match the supplied speech; output was not accepted.')
   decoded <- processx::run('ffmpeg',c('-v','error','-xerror','-threads','1','-i',path,'-map','0:v:0','-map','0:a:0?','-f','null','-'),timeout=budget(),error_on_status=FALSE)
   if(decoded$status!=0L || nzchar(decoded$stderr)) stop('Generated video could not be fully decoded.')

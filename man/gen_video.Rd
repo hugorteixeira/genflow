@@ -10,8 +10,8 @@ gen_video(prompt, ...)
 
 \method{gen_video}{default}(
   prompt,
-  image,
-  audio,
+  image = NULL,
+  audio = NULL,
   service = "fal",
   model = NULL,
   add = NULL,
@@ -20,6 +20,9 @@ gen_video(prompt, ...)
   timeout_api = 1800,
   poll_interval = 3,
   persist = TRUE,
+  source_video = NULL,
+  reference_clip = NULL,
+  reference_sound = NULL,
   ...
 )
 
@@ -30,11 +33,11 @@ gen_video(prompt, ...)
 
 \item{...}{Named agent overrides.}
 
-\item{image}{Local scene image. Exactly one composed frame is required.}
+\item{image}{Optional local scene or first-frame image, as supported by the model.}
 
 \item{audio}{Local speech audio, including custom TTS output.}
 
-\item{service}{fal or replicate.}
+\item{service}{fal, replicate, gemini or openrouter.}
 
 \item{model}{Qualified endpoint returned by the video contract.}
 
@@ -49,6 +52,12 @@ gen_video(prompt, ...)
 \item{poll_interval}{Poll interval in seconds.}
 
 \item{persist}{Save the output in the requested directory.}
+
+\item{source_video}{Optional local MP4 for an editing route.}
+
+\item{reference_clip}{Optional visual reference clip for video generation.}
+
+\item{reference_sound}{Optional audio reference accompanying a reference clip.}
 }
 \value{
 A common Genflow result. A video_receipt permits recovery without submission.

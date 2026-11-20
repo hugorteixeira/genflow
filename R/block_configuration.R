@@ -22,6 +22,7 @@
   service <- args$service; block <- contract$id
   if (!.gen_scalar(service)) return(rules)
   if (block == "gen_tts") {
+    if(service %in% c("gemini","openrouter")) fixed("speed",list(1),"invalid_combination")
     if (service == "local-native") {
       native <- .gen_adapter_schema("voxcpm2-tts")$properties
       for (key in names(native))
@@ -52,6 +53,12 @@
         if (!is.null(args$lyrics)) put("duration_seconds", list(maximum = 120), "sound_duration_unsupported")
         else if (!"lyrics" %in% bound || isTRUE(args$instrumental)) fixed("seed", list(NULL), "sound_seed_unsupported", unsupported = FALSE)
       }
+    }
+    if(service %in% c("gemini","openrouter")) {
+      fixed("format",list("mp3"),"sound_format_unsupported")
+      fixed("seed",list(NULL),"sound_seed_unsupported")
+      fixed("base_url",list(NULL),"sound_base_url_invalid")
+      if(grepl("lyria-3-clip", args$model %||% "",fixed=TRUE)) fixed("duration_seconds",list(30),"sound_duration_unsupported")
     }
     if (service == "acestep") put("duration_seconds", list(minimum = 10), "sound_duration_unsupported")
   }

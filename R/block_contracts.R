@@ -291,7 +291,17 @@ gen_validate_call <- function(block, args = list(), version = NULL, bound = char
     }
   }
   if (isTRUE(check_capabilities) || block == "gen_txt") .gen_validate_argument_rules(contract, args, usable, add, bound, bindings_known)
-  if (identical(block,"gen_video") && check_capabilities && usable("service") && usable("model") && is.null(.gen_video_profile(args$service,args$model))) add("model","Modelo de vídeo sem contrato de entradas qualificado.","unsupported_modality")
+  if (check_capabilities && usable("service") && usable("model") && .gen_scalar(args$model)) {
+    keys <- intersect(names(schema$properties),c("add_img","source_video","reference_clip","reference_sound","context_video","context_audio","pdf",if(block=="gen_tts") c("instructions","reference_audio"),if(block=="gen_music") "lyrics",if(block=="gen_stt") "audio",if(block=="gen_video") c("audio","image")))
+    roles <- union(if(bindings_known) intersect(bound,keys),keys[vapply(args[keys],length,integer(1))>0])
+    routes <- gen_model_routes(args$service,args$model)
+    strict <- block=="gen_video" || (length(routes) && args$service %in% c("fal","replicate") && block %in% c("gen_img","gen_tts","gen_stt")) || any(roles %in% c("context_video","context_audio","pdf")) ||
+      (args$service %in% c("openrouter","gemini") && (block %in% c("gen_music","gen_img","gen_tts") || length(routes) && block=="gen_txt"))
+    if(strict) {
+      match <- gen_model_match(args$service,args$model,contract$studio$id,roles,complete=bindings_known)
+      if(!match$compatible) add("model",match$reason,"unsupported_model_inputs")
+    }
+  }
   if (identical(block,"gen_tts")) .gen_tts_rules(args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (block %in% c("gen_sfx","gen_music")) .gen_sound_rules(sub("^gen_","",block),args,usable,add,check_capabilities,if (bindings_known) bound else character())
   if (identical(block,"gen_txt")) {

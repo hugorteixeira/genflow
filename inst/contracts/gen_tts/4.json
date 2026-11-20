@@ -80,7 +80,9 @@
           "values": {
             "openai": "gpt-4o-mini-tts",
             "replicate": "qwen/qwen3-tts",
-            "local-native": "auto"
+            "local-native": "auto",
+            "gemini": "gemini-3.8-flash-tts",
+            "openrouter": "mistralai/voxtral-mini-tts-2603"
           }
         },
         "x-owner": "runtime",

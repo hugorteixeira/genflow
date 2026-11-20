@@ -145,6 +145,7 @@
     "content_parameter_binding": {"message": "Este conteúdo deve ser informado nos trechos ou adendos da peça.", "hint": "Remova o conteúdo dos ajustes do modelo e use o campo correspondente da peça.", "category": "validation", "stage": "validation"},
     "image_override_conflict": {"message": "Os parâmetros específicos não podem substituir o prompt, as referências ou a quantidade de imagens.", "category": "validation"},
     "unsupported_input_file": {"message": "Este formato de arquivo não é aceito como texto de entrada. Use .txt ou .csv.", "category": "validation"},
+    "unsupported_model_inputs": {"message": "O modelo não aceita a operação ou as entradas desta peça.", "category": "validation"},
     "unsupported_modality": {"message": "Este tipo de agente não é suportado pelo executor de lotes.", "category": "validation"},
     "vote_trigger": {"message": "O marcador de voto não contém caracteres reconhecíveis.", "hint": "Use um marcador como opção ou alternativa.", "category": "validation"},
     "vote_tie": {"message": "A votação terminou empatada.", "hint": "Confira os votos ou altere a regra de desempate.", "category": "workflow"},

@@ -642,6 +642,14 @@ Project: [github.com/hugorteixeira/genflow](https://github.com/hugorteixeira/gen
 
 <p align="center">Flow into the future of AI with ❤️ and ☕ in R</p>
 
+### Model capabilities
+
+Use `gen_model_choices("openrouter", "video.generate", inputs = "source_video")`
+to browse a catalog for a piece. `gen_model_routes()` returns the roles,
+required inputs, adapter and evidence for each operation. `gen_model_match()`
+checks the complete set before execution. Refresh catalogs with `gen_update_models()`.
+Use `gen_refresh_model_schema()` to re-inspect a fal or Replicate model.
+
 ### Video with your own audio
 
 `gen_video()` accepts a scene image and custom speech audio through qualified

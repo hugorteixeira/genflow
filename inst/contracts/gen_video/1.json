@@ -9,7 +9,7 @@
         "type": "string",
         "pattern": "\\S",
         "x-content-kind": "text",
-        "title": "Descri\u00e7\u00e3o do movimento",
+        "title": "Descrição do movimento",
         "x-ui": {
           "hidden": true
         },
@@ -53,7 +53,7 @@
         "type": "string",
         "pattern": "\\S",
         "default": "fal",
-        "title": "Servi\u00e7o",
+        "title": "Serviço",
         "x-ui": {
           "hidden": true
         },
@@ -77,13 +77,15 @@
           "field": "service",
           "values": {
             "fal": "fal-ai/kling-video/ai-avatar/v2/standard",
-            "replicate": "wan-video/wan-2.2-s2v"
+            "replicate": "wan-video/wan-2.2-s2v",
+            "openrouter": "google/veo-3.1",
+            "gemini": "gemini-omni-1.2-flash"
           }
         }
       },
       "timeout_api": {
         "type": "number",
-        "title": "Tempo m\u00e1ximo total (s)",
+        "title": "Tempo máximo total (s)",
         "default": 1800,
         "exclusiveMinimum": 0,
         "x-ui": {
@@ -99,24 +101,32 @@
         "x-owner": "runtime"
       },
       "image": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "pattern": "\\S",
         "title": "Imagem da cena",
         "x-content-kind": "image",
         "x-owner": "runtime",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "default": null
       },
       "audio": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "pattern": "\\S",
-        "title": "\u00c1udio da fala",
+        "title": "Áudio da fala",
         "x-content-kind": "audio",
         "x-owner": "runtime",
         "x-ui": {
           "hidden": true
-        }
+        },
+        "default": null
       },
       "poll_interval": {
         "type": "number",
@@ -124,12 +134,52 @@
         "minimum": 1,
         "maximum": 30,
         "title": "Intervalo de consulta (s)"
+      },
+      "source_video": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "pattern": "\\S",
+        "title": "Vídeo para editar",
+        "x-content-kind": "video",
+        "x-owner": "runtime",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "reference_clip": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "pattern": "\\S",
+        "title": "Vídeo de referência",
+        "x-content-kind": "video",
+        "x-owner": "runtime",
+        "x-ui": {
+          "hidden": true
+        }
+      },
+      "reference_sound": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null,
+        "pattern": "\\S",
+        "title": "Áudio de referência para vídeo",
+        "x-content-kind": "audio",
+        "x-owner": "runtime",
+        "x-ui": {
+          "hidden": true
+        }
       }
     },
     "required": [
-      "prompt",
-      "image",
-      "audio"
+      "prompt"
     ],
     "additionalProperties": false
   },
@@ -138,7 +188,10 @@
   "inputs": {
     "prompt": "asset:text|asset:json",
     "image": "asset:image",
-    "audio": "asset:audio"
+    "audio": "asset:audio",
+    "source_video": "asset:video",
+    "reference_clip": "asset:video",
+    "reference_sound": "asset:audio"
   },
   "outputs": {
     "content": "asset:video"
@@ -148,14 +201,20 @@
     "inputs": {
       "text": "text|json",
       "image": "image",
-      "audio": "audio"
+      "audio": "audio",
+      "source_video": "video",
+      "reference_clip": "video",
+      "reference_sound": "audio"
     },
     "output": "video",
     "execution": "remote",
     "available": true,
     "bindings": {
       "image": "image",
-      "audio": "audio"
+      "audio": "audio",
+      "source_video": "source_video",
+      "reference_clip": "reference_clip",
+      "reference_sound": "reference_sound"
     },
     "models": [
       {

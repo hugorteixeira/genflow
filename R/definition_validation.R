@@ -280,7 +280,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE, purpo
   for (i in seq_along(manifest)) {
     a <- manifest[[i]]; path <- paste0("/assets/",i-1L)
     collect(.gen_definition_shape(a,list(key=list(type="string",pattern="\\S",maxLength=100),
-      kind=list(type="string",enum=as.list(c("text","json","image","audio","video"))),
+      kind=list(type="string",enum=as.list(c("text","json","image","audio","video","pdf"))),
       sha256=list(type="string",pattern="^[a-f0-9]{64}$")),c("key","kind","sha256")),path)
     if (.gen_object(a) && .gen_scalar(a$key)) {
       if (!is.null(assets[[a$key]])) add("duplicate_asset",paste0(path,"/key"),gen_error_message("duplicate_asset"))

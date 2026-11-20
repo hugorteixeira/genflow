@@ -79,7 +79,9 @@
           ],
           "values": {
             "elevenlabs": "music_v2_5",
-            "acestep": "acestep-v15-turbo"
+            "acestep": "acestep-v15-turbo",
+            "gemini": "lyria-3.5",
+            "openrouter": "google/lyria-3-clip-preview"
           }
         },
         "x-owner": "runtime"
