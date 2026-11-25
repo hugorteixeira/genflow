@@ -93,6 +93,21 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = NUL
   } else if (block=="list.item") {
     only("list"); source <- need("list","list:*")
     if (!is.null(source)) ports <- list(asset=paste0("asset:",kind(source)))
+  } else if (block=="scene") {
+    if (!is.null(args$document)) {
+      invalid <- .gen_scene_errors(args$document,"/args/document")
+      if (length(invalid)) return(list(valid=FALSE,errors=invalid,ports=ports,inputs=wanted))
+    }
+    for (key in names(inputs)) need(key,"asset:text|asset:image|asset:audio|asset:video")
+    for (part in args$document$parts) for (element in part$elements) {
+      if (!is.null(element$input)) {
+        role <- element$role
+        expected <- switch(role, character="image", voice="audio", music="audio", sound="audio",
+          title="text", caption="text", role)
+        need(element$input,paste0("asset:",expected))
+      }
+    }
+    ports <- list(asset="asset:json")
   } else if (block=="video.compose") {
     only(c("image","audio")); need("image","asset:image"); need("audio","asset:audio")
     ports <- list(asset="asset:video")
@@ -114,7 +129,11 @@ gen_block_ports <- function(block, args = list(), inputs = list(), version = NUL
         if (!startsWith(exported[[key]],"asset:")) add(key,gen_error_message("child_artifact_output"))
         exported[[key]] <- sub("^asset:","list:",exported[[key]])
       }
-    } else only(names(expected))
+    } else {
+      only(names(expected))
+      if (!is.null(args$scene_edit) && !identical(exported[["cena"]],"asset:json"))
+        add("cena",gen_error_message("scene_export"))
+    }
     for (key in names(expected)) need(key,expected[[key]])
     ports <- exported
   }
@@ -217,6 +236,7 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
           ref <- report$document$outputs[[port]]; outgoing[[port]] <- list(type=report$ports[[ref$node]][[ref$port]])
         }
         interfaces[[key]] <<- list(interface=incoming,exports=outgoing)
+        interfaces[[key]]$scene_inputs <<- .gen_scene_interface(report$document$nodes,report$ports)
         # Preserve the source definitions, never replace them with inferred ports.
         report$document$workflows <- definitions[[key]]$workflows
       }
@@ -366,6 +386,18 @@ gen_validate_structure <- function(document, require_output = .gen_default("gen_
           }
         }
         checked <- gen_block_ports(n$block,n$args,input_types,n$contract_version,child$interface %||% list(),child$exports %||% list())
+        if (n$block=="subworkflow" && !is.null(n$args$scene_edit)) {
+          if (is.null(child$scene_inputs)) {
+            checked$errors <- c(checked$errors,list(.gen_issue("scene_export","/args/scene_edit")))
+          } else {
+            edit <- gen_block_ports("scene",list(document=n$args$scene_edit),child$scene_inputs)
+            for (e in edit$errors) {
+              e$path <- paste0("/args/scene_edit",e$path)
+              checked$errors[[length(checked$errors)+1L]] <- e
+            }
+          }
+          checked$valid <- !length(checked$errors)
+        }
         if (.gen_authoring(purpose)) {
           missing_input <- vapply(checked$errors,function(e) e$code=="required_input",logical(1))
           for (e in checked$errors[missing_input]) { e$path <- paste0(path,e$path); e$node_id <- id; requirements[[length(requirements)+1L]] <- e }

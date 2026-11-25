@@ -5,6 +5,11 @@
   "arguments": {
     "type": "object",
     "properties": {
+      "scene_edit": {
+        "type": "object",
+        "title": "Edição desta ocorrência",
+        "x-ui": { "hidden": true }
+      },
       "workflow_id": {
         "type": "string",
         "pattern": "\\S",

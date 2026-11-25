@@ -185,6 +185,8 @@
     "candidate_set_mismatch": {"message": "A seleção e a votação precisam usar o mesmo conjunto de candidatos.", "category": "workflow"},
     "child_artifact_output": {"message": "Cada saída de uma repetição deve ser um conteúdo individual.", "category": "workflow"},
     "child_item_input": {"message": "Esta entrada de item não existe no subworkflow.", "category": "workflow"},
+    "scene_document": {"message": "Confira os planos, elementos e tempos do documento da cena.", "category": "workflow"},
+    "scene_export": {"message": "A edição desta ocorrência requer uma saída de cena em JSON.", "category": "workflow"},
     "compact_node_count": {"message": "Informe uma lista de 1 a 10000 peças no grafo compacto.", "category": "workflow"},
     "contract_catalog_unavailable": {"message": "O catálogo de contratos não foi encontrado na instalação da Genflow.", "category": "schema", "hint": "Confira a instalação e os contratos da biblioteca."},
     "cycle": {"message": "Existe um ciclo de dependências que impede ordenar esta peça.", "category": "workflow"},

@@ -175,6 +175,18 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE, purpo
     n <- report$document$nodes[[i]]; path <- paste0("/nodes/",i-1L)
     if (!.gen_object(n) || !.gen_scalar(n$id) || !nzchar(n$id) || !.gen_scalar(n$block) || !.gen_object(n$args)) next
     types <- lapply(n$inputs,function(ref) if (.gen_object(ref) && .gen_scalar(ref$node) && .gen_scalar(ref$port)) report$ports[[ref$node]][[ref$port]] else NULL)
+    edit_field <- switch(n$block,scene="document",subworkflow="scene_edit")
+    if (!is.null(edit_field) && .gen_object(n$args[[edit_field]]) && !length(.gen_scene_errors(n$args[[edit_field]],""))) {
+      parts <- n$args[[edit_field]]$parts
+      for (j in seq_along(parts)) for (k in seq_along(parts[[j]]$elements)) {
+        layer <- parts[[j]]$elements[[k]]
+        if (is.null(layer$asset_id)) next
+        asset <- assets[[layer$asset_id]]
+        expected <- switch(layer$role,character="image",voice="audio",music="audio",sound="audio",title="text",caption="text",layer$role)
+        if (!is.null(asset) && !identical(asset$kind,expected))
+          add("asset_kind",paste0(path,"/config/",edit_field,"/parts/",j-1L,"/elements/",k-1L,"/asset_id"),gen_error_message("asset_kind"),n$id)
+      }
+    }
     if (n$block %in% c("content","transcribe","text.join","judge")) {
       spec <- .gen_content_spec(n$block,n$args)
       if (!is.null(spec)) {
@@ -349,6 +361,7 @@ gen_validate_agent_definition <- function(body, check_capabilities = TRUE, purpo
       if (nzchar(keys[[i]])) plans[[keys[[i]]]] <- checked[c("order","ports","schemas","interface","exports","height","derived","input_ports")]
       if (checked$valid && nzchar(keys[[i]])) {
         interfaces[[keys[[i]]]] <- list(interface=checked$interface,exports=checked$exports)
+        interfaces[[keys[[i]]]]$scene_inputs <- .gen_scene_interface(e$body$nodes,checked$ports)
       }
     }
     if (i>1L && length(errors)>before) bundle_errors <- c(bundle_errors,errors[seq.int(before+1L,length(errors))])

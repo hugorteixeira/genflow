@@ -311,6 +311,11 @@ gen_validate_call <- function(block, args = list(), version = NULL, bound = char
   if (block %in% c("json.get","list.split") && usable("pointer") && .gen_scalar(args$pointer)) {
     if (nzchar(args$pointer) && (!startsWith(args$pointer,"/") || grepl("~([^01]|$)",args$pointer,perl=TRUE))) add("pointer",gen_error_message("invalid_pointer"))
   }
+  if (!length(errors) && block %in% c("scene","subworkflow")) {
+    field <- if (block=="scene") "document" else "scene_edit"
+    doc <- args[[field]]
+    if (!is.null(doc)) errors <- c(errors,.gen_scene_errors(doc,paste0("/args/",field)))
+  }
   if (!length(errors) && block %in% c("content","transcribe","judge","text.join")) {
     piece <- .gen_piece_check(block,args,version,check_capabilities)
     args <- piece$args; errors <- c(errors,piece$errors)

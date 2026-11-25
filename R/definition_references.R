@@ -12,6 +12,19 @@
       n$config$workflow_id <- visit(n$config$workflow_id,"workflow",paste0(path,"workflow_id"),n)
     if (identical(n$type,"content") && !is.null(n$config$asset_id))
       n$config$asset_id <- visit(n$config$asset_id,"asset",paste0(path,"asset_id"),n)
+    field <- if (identical(n$type,"scene")) "document" else if (identical(n$type,"subworkflow")) "scene_edit"
+    if (!is.null(field) && .gen_object(n$config[[field]])) {
+      doc <- n$config[[field]]
+      for (p in seq_along(doc$parts)) if (.gen_object(doc$parts[[p]])) {
+        for (j in seq_along(doc$parts[[p]]$elements)) {
+          layer <- doc$parts[[p]]$elements[[j]]
+          if (.gen_object(layer) && !is.null(layer$asset_id))
+            doc$parts[[p]]$elements[[j]]$asset_id <- visit(layer$asset_id,"asset",
+              paste0(path,field,"/parts/",p-1L,"/elements/",j-1L,"/asset_id"),n)
+        }
+      }
+      n$config[[field]] <- doc
+    }
     value <- function(v,at) {
       if (.gen_object(v) && !is.null(v$asset)) v$asset <- visit(v$asset,"asset",paste0(path,at,"/asset"),n)
       v

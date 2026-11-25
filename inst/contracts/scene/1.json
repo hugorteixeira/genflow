@@ -1,0 +1,13 @@
+{
+  "id": "scene",
+  "version": 1,
+  "kind": "workflow",
+  "arguments": {
+    "type": "object",
+    "properties": {
+      "document": { "type": "object", "title": "Planos da cena", "x-ui": { "hidden": true } }
+    },
+    "additionalProperties": false
+  },
+  "port_rule": "scene"
+}
