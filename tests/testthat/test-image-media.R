@@ -2,6 +2,11 @@ test_that("the current image contract validates ordered references and rejects r
   args <- list(prompt="Garden",service="openai",model="gpt-image-2",add_img=list("one.png","two.png"))
   expect_false(gen_validate_call("gen_img",args,1)$valid)
   expect_true(gen_validate_call("gen_img", args, 3)$valid)
+  for (model in c("gpt-image-2.6-sunburst", "gpt-image-2.6-flare")) {
+    expect_true(gen_capabilities("openai",model)$image_references$supported)
+    expect_true(gen_validate_call("gen_img",utils::modifyList(args,list(model=model)),3)$valid)
+  }
+  expect_false(gen_capabilities("openai","gpt-image-2.6-other")$image_references$supported)
   expect_identical(gen_block_contracts("gen_img", 3)$inputs$add_img,"asset:image|list:image")
   expect_true(gen_validate_call("gen_img", list(prompt="Garden"), 3)$valid)
   for (value in list(NA_character_, " ", list("ok",2), list("ok",""))) {
@@ -28,7 +33,9 @@ test_that("OpenAI edits preserve reference order and accept all supported output
   },.package="genflow")
   for (format in c("png","jpeg","webp")) {
     payload <- list(b64_json=openssl::base64_encode(.image_fixture(format)))
-    result <- gen_img("one then two",service="openai",add_img=unname(files),persist=FALSE)
+    model <- switch(format,png="gpt-image-2.6-sunburst",jpeg="gpt-image-2.6-flare",webp="gpt-image-2")
+    result <- gen_img("one then two",service="openai",model=model,add_img=unname(files),persist=FALSE)
+    expect_identical(calls[[length(calls)]]$body$model,model)
     expect_identical(result$status_api,"SUCCESS")
     expect_identical(result$image$format,format)
     expect_identical(result$dimensoes,"32x24")

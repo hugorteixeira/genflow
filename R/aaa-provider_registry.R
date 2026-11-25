@@ -150,7 +150,9 @@ gen_capabilities <- function(service, model = NULL, reasoning = NULL) {
     return(list(supported=n>0,min_images=if(length(routes)) routes[[1]]$limits$min_images %||% 0L else 0L,max_images=n,max_data_uri=4*ceiling(.gen_image_limit/3)+100,qualification=if(length(routes)) "documented" else "unmapped"))
   }
   model <- tolower(model)
-  openai <- service == "openai" && grepl("^gpt-image-(1[.]5|1-mini|2|2[.]5-(sunburst|flare))(-[0-9]{4}-[0-9]{2}-[0-9]{2})?$",model)
+  openai <- service == "openai" && (
+    model %in% c("gpt-image-2.6-sunburst", "gpt-image-2.6-flare") ||
+    grepl("^gpt-image-(1[.]5|1-mini|2|2[.]5-(sunburst|flare))(-[0-9]{4}-[0-9]{2}-[0-9]{2})?$",model))
   list(supported=openai, max_images=if(openai) 16L else 0L,
     max_data_uri=if(openai) 20971520 else 4*ceiling(.gen_image_limit/3)+100,
     qualification=if(openai) "documented" else "unmapped")
